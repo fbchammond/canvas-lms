@@ -1,7 +1,6 @@
 .rvmrc
 .rdebug_hist
 .DS_Store
-Gemfile.lock
 log/*.log
 log/*.pid
 log/**/*
