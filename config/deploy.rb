@@ -20,10 +20,14 @@ after "deploy:update_code" do
     run "ln -s #{shared_path}/#{f}.yml #{release_path}/config/#{f}.yml"
   end
   
+  run "chown canvas:canvas #{release_path}/config/environment.rb"
   run "chown canvas:canvas #{release_path}/db"
   run "chown canvas:canvas #{release_path}/tmp"
   
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compile_assets"
+  
+  # restart worker
+  run "service canvas_init restart"
 end
 
 namespace :deploy do
