@@ -16,7 +16,14 @@ role :app, "root@bean.hylesanderson.edu" # This may be the same as your `Web` se
 set :use_sudo, false
 
 after "deploy:update_code" do
-  run "ln -s #{shared_path}/database.yml #{release_path}/config/database.yml"
+  %w{ amazon_s3 database delayed_jobs domain file_store outgoing_mail security }.each do |f|
+    run "ln -s #{shared_path}/#{f}.yml #{release_path}/config/#{f}.yml"
+  end
+  
+  run "chown canvas:canvas #{release_path}/db"
+  run "chown canvas:canvas #{release_path}/tmp"
+  
+  run "RAILS_ENV=assets bundle exec rake canvas:compile_assets"
 end
 
 namespace :deploy do

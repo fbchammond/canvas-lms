@@ -113,3 +113,9 @@ end
 Dir[File.join(File.dirname(__FILE__),'vendor/plugins/*/Gemfile')].each do |g|
   eval(File.read(g))
 end
+
+group :assets do
+  gem 'coffee-script', '2.2.0'
+  gem 'coffee-script-source', '1.1.2'
+end
+
