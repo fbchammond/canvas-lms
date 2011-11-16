@@ -23,7 +23,7 @@ after "deploy:update_code" do
   run "chown canvas:canvas #{release_path}/db"
   run "chown canvas:canvas #{release_path}/tmp"
   
-  run "RAILS_ENV=assets bundle exec rake canvas:compile_assets"
+  run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compile_assets"
 end
 
 namespace :deploy do

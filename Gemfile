@@ -117,5 +117,6 @@ end
 group :assets do
   gem 'coffee-script', '2.2.0'
   gem 'coffee-script-source', '1.1.2'
+  gem 'yard', '0.7.2'
 end
 
