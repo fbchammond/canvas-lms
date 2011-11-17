@@ -20,6 +20,8 @@ after "deploy:update_code" do
     run "ln -s #{shared_path}/#{f}.yml #{release_path}/config/#{f}.yml"
   end
   
+  run "ln -s #{shared_path}/files #{release_path}/tmp/files"
+  
   run "chown canvas:canvas #{release_path}/config/environment.rb"
   run "chown canvas:canvas #{release_path}/db"
   run "chown canvas:canvas #{release_path}/tmp"
