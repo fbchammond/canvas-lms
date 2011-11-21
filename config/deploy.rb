@@ -22,6 +22,8 @@ after "deploy:update_code" do
   
   run "ln -s #{shared_path}/files #{release_path}/tmp/files"
   
+  run "ln -s #{shared_path}/google2248bfbba38f2b28.html #{release_path}/public/google2248bfbba38f2b28.html"
+  
   run "chown canvas:canvas #{release_path}/config/environment.rb"
   run "chown canvas:canvas #{release_path}/db"
   run "chown canvas:canvas #{release_path}/tmp"
