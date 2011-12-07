@@ -16,7 +16,7 @@ role :app, "root@bean.hylesanderson.edu" # This may be the same as your `Web` se
 set :use_sudo, false
 
 after "deploy:update_code" do
-  %w{ amazon_s3 database delayed_jobs domain file_store outgoing_mail security }.each do |f|
+  %w{ amazon_s3 cache_store database delayed_jobs domain file_store outgoing_mail security }.each do |f|
     run "ln -s #{shared_path}/#{f}.yml #{release_path}/config/#{f}.yml"
   end
   
