@@ -53,7 +53,7 @@
               <td><%= f.blabel :name, :en => "Account Name" %></td>
               <td><%= f.text_field :name %></td>
             </tr>
-            <% if (@context.sis_source_id || can_do(@context.root_account || @context, @current_user, :manage_sis)) && !@account.site_admin? %>
+            <% if !@account.root_account? && (@context.sis_source_id || can_do(@context.root_account || @context, @current_user, :manage_sis)) %>
               <tr>
                 <td><%= f.blabel :sis_source_id, :en => "SIS ID" %></td>
                 <td>
@@ -180,14 +180,16 @@
                     <%= settings.check_box :enable_alerts, :checked => @account.settings[:enable_alerts] %>
                     <%= settings.label :enable_alerts, :en => "Alerts" %>
                   </div>
-                  <div>
-                    <%= settings.check_box :open_registration, :checked => @account.open_registration? %>
-                    <%= settings.label :open_registration, :en => "Open Registration" %>
-                  </div>
                 <% end %>
                 <div>
                   <%= settings.check_box :global_includes, :checked => @account.settings[:global_includes] %>
                   <%= settings.label :global_includes, :en => "Global CSS/JavaScript includes" %>
+                </div>
+              <% end %>
+              <% unless @account.delegated_authentication? %>
+                <div>
+                  <%= settings.check_box :open_registration, :checked => @account.open_registration? %>
+                  <%= settings.label :open_registration, :en => "Open Registration" %>
                 </div>
               <% end %>
               <div>

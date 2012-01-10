@@ -32,7 +32,7 @@ class InfoController < ApplicationController
   
   def avatar_image_url
     cancel_cache_buster
-    url = Rails.cache.fetch(['avatar_img', params[:user_id]].cache_key, :expires_in => 30.minutes) do
+    url = Rails.cache.fetch(Cacher.avatar_cache_key(params[:user_id])) do
       user = User.find_by_id(params[:user_id]) if params[:user_id].present?
       if user && service_enabled?(:avatars)
         url = user.avatar_url(nil, @domain_root_account && @domain_root_account.settings[:avatars], params[:fallback])
@@ -109,7 +109,7 @@ class InfoController < ApplicationController
 
   def health_check
     # This action should perform checks on various subsystems, and raise an exception on failure.
-    Account.connection.select_value("SELECT now();")
+    Account.connection.select_value("SELECT 1")
 
     respond_to do |format|
       format.html { render :text => 'canvas ok' }

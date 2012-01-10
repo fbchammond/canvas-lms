@@ -20,7 +20,7 @@
 module ApplicationHelper
   include TextHelper
   include LocaleSelection
-  
+
   # Admins of the given context can see the User.name attribute,
   # but everyone else sees the User.short_name attribute.
   def context_user_name(context, user, last_name_first=false)
@@ -37,7 +37,7 @@ module ApplicationHelper
       res
     end
   end
-  
+
   def keyboard_navigation(keys)
     content = "<ul class='navigation_list' tabindex='-1'>\n"
     keys.each do |hash|
@@ -50,7 +50,7 @@ module ApplicationHelper
     content += "</ul>"
     content_for(:keyboard_navigation) { raw(content) }
   end
-  
+
   def context_prefix(code)
     return "/{{ context_type_pluralized }}/{{ context_id }}" unless code
     split = code.split(/_/)
@@ -58,7 +58,7 @@ module ApplicationHelper
     type = split.join('_')
     "/#{type.pluralize}/#{id}"
   end
-  
+
   def cached_context_short_name(code)
     return nil unless code
     @cached_context_names ||= {}
@@ -154,17 +154,17 @@ module ApplicationHelper
       image_tag(avatar_image_url(user_id || 0), :style => "height: #{height}px;", :alt => '')
     end
   end
-  
+
   def avatar(user_id, context_code, height=50)
     if service_enabled?(:avatars)
       link_to(avatar_image(user_id, height), "#{context_prefix(context_code)}/users/#{user_id}", :style => 'z-index: 2; position: relative;')
     end
   end
-  
+
   def slugify(text="")
     text.gsub(/[^\w]/, "_").downcase
   end
-  
+
   def count_if_any(count=nil)
     if count && count > 0
       "(#{count})"
@@ -203,11 +203,9 @@ module ApplicationHelper
   end
 
   def message_user_path(user)
-    params = {:user_id => user.id, :user_name => user.short_name}
-    params[:can_add_notes] = true if user.grants_right?(@current_user, :create_user_notes) && user.associated_accounts.any?{|a| a.enable_user_notes }
-    conversations_path + "#/conversations?" + params.to_query.gsub('+', '%20')
+    conversations_path + "#/conversations?user_id=#{user.id}"
   end
-  
+
   def hidden(include_style=false)
     include_style ? "style='display:none;'" : "display: none;"
   end
@@ -252,7 +250,7 @@ module ApplicationHelper
     end
     res
   end
-  
+
   # Loads up the lists of files needed for the wiki_sidebar.  Called from
   # within the cached code so won't be loaded unless needed.
   def load_wiki_sidebar
@@ -265,8 +263,8 @@ module ApplicationHelper
     @wiki_sidebar_data[:root_folders] = Folder.root_folders(@context)
     @wiki_sidebar_data
   end
-  
-  # js_block captures the content of what you pass it and render_js_blocks will 
+
+  # js_block captures the content of what you pass it and render_js_blocks will
   # render all of the blocks that were captured by js_block inside of a <script> tag
   # if you are in the development environment it will also print out a javascript // comment
   # that shows the file and line number of where this block of javascript came from.
@@ -330,23 +328,23 @@ var I18n = I18n || {};
 
   def jammit_js_bundles; @jammit_js_bundles ||= []; end
   def jammit_js(*args)
-    Array(args).flatten.each do |bundle| 
+    Array(args).flatten.each do |bundle|
       jammit_js_bundles << bundle unless jammit_js_bundles.include? bundle
     end
   end
-    
+
   def jammit_css_bundles; @jammit_css_bundles ||= []; end
   def jammit_css(*args)
-    Array(args).flatten.each do |bundle| 
+    Array(args).flatten.each do |bundle|
       jammit_css_bundles << bundle unless jammit_css_bundles.include? bundle
     end
   end
 
   def section_tabs
     @section_tabs ||= begin
-      if @context 
+      if @context
         Rails.cache.fetch([@context, @current_user, "section_tabs", I18n.locale].cache_key) do
-          if @context.respond_to?(:tabs_available) && !(tabs = @context.tabs_available(@current_user, :session => session)).empty?
+          if @context.respond_to?(:tabs_available) && !(tabs = @context.tabs_available(@current_user, :session => session, :root_account => @domain_root_account)).empty?
             html = []
             html << '<nav role="navigation"><ul id="section-tabs">'
             tabs = tabs.select do |tab|
@@ -361,8 +359,15 @@ var I18n = I18n || {};
               end
             end
             tabs.each do |tab|
-              path = tab[:no_args] ? send(tab[:href]) : send(tab[:href], @context)
-              html << "<li class='section #{"hidden" if tab[:hidden] || tab[:hidden_unused] }'>" + link_to(tab[:label], path, :class => tab[:css_class].to_css_class) + "</li>" if tab[:href]
+              path = nil
+              if tab[:args]
+                path = send(tab[:href], *tab[:args])
+              elsif tab[:no_args]
+                path = send(tab[:href])
+              else
+                path = send(tab[:href], @context)
+              end
+              html << "<li class='section #{"selected" if tab[:id] == @active_tab} #{"hidden" if tab[:hidden] || tab[:hidden_unused] }'>" + link_to(tab[:label], path, :class => tab[:css_class].to_css_class) + "</li>" if tab[:href]
             end
             html << "</ul></nav>"
             html.join("")
@@ -372,10 +377,10 @@ var I18n = I18n || {};
     end
     raw(@section_tabs)
   end
-  
+
   def sortable_tabs
-    tabs = @context.tabs_available(@current_user, :for_reordering => true)
-    tabs.select do |tab| 
+    tabs = @context.tabs_available(@current_user, :for_reordering => true, :root_account => @domain_root_account)
+    tabs.select do |tab|
       if (tab[:id] == @context.class::TAB_CHAT rescue false)
         feature_enabled?(:tinychat)
       elsif (tab[:id] == @context.class::TAB_COLLABORATIONS rescue false)
@@ -387,12 +392,12 @@ var I18n = I18n || {};
       end
     end
   end
-  
+
   def license_help_link
     @include_license_dialog = true
     link_to(image_tag('help.png'), '#', :class => 'license_help_link no-hover', :title => "Help with content licensing")
   end
-  
+
   def equella_enabled?
     @equella_settings ||= @context.equella_settings if @context.respond_to?(:equella_settings)
     @equella_settings ||= @domain_root_account.try(:equella_settings)
@@ -416,7 +421,7 @@ var I18n = I18n || {};
       default
     end
   end
-  
+
   def safe_cache_key(*args)
     key = args.cache_key
     if key.length > 200
@@ -424,24 +429,47 @@ var I18n = I18n || {};
     end
     key
   end
-  
+
   def inst_env
     global_inst_object = { :environment =>  Rails.env }
     {
-      :allowMediaComments     => Kaltura::ClientV3.config && @context.try_rescue(:allow_media_comments?),
-      :kalturaSettings        => Kaltura::ClientV3.config.try(:slice, 'domain', 'resource_domain', 'rtmp_domain', 'partner_id', 'subpartner_id', 'player_ui_conf', 'player_cache_st', 'kcw_ui_conf', 'upload_ui_conf', 'max_file_size_bytes'),
-      :equellaEnabled         => !!equella_enabled?,
-      :googleAnalyticsAccount => Setting.get_cached('google_analytics_key', nil),
-      :http_status            => @status,
-      :error_id               => @error && @error.id,
-      :disableGooglePreviews  => !service_enabled?(:google_docs_previews), 
-      :disableScribdPreviews  => !feature_enabled?(:scribd),
-      :logPageViews           => !@body_class_no_headers,
+      :allowMediaComments       => Kaltura::ClientV3.config && @context.try_rescue(:allow_media_comments?),
+      :kalturaSettings          => Kaltura::ClientV3.config.try(:slice, 'domain', 'resource_domain', 'rtmp_domain', 'partner_id', 'subpartner_id', 'player_ui_conf', 'player_cache_st', 'kcw_ui_conf', 'upload_ui_conf', 'max_file_size_bytes'),
+      :equellaEnabled           => !!equella_enabled?,
+      :googleAnalyticsAccount   => Setting.get_cached('google_analytics_key', nil),
+      :http_status              => @status,
+      :error_id                 => @error && @error.id,
+      :disableGooglePreviews    => !service_enabled?(:google_docs_previews),
+      :disableScribdPreviews    => !feature_enabled?(:scribd),
+      :logPageViews             => !@body_class_no_headers,
+      :maxVisibleEditorButtons  => 3,
+      :editorButtons            => editor_buttons,
     }.each do |key,value|
       # dont worry about keys that are nil or false because in javascript: if (INST.featureThatIsUndefined ) { //won't happen }
       global_inst_object[key] = value if value
     end
     global_inst_object
+  end
+
+  def editor_buttons
+    tools = []
+    contexts = []
+    contexts << @context if @context && @context.respond_to?(:context_external_tools)
+    contexts += @context.account_chain if @context.respond_to?(:account_chain)
+    contexts << @domain_root_account if @domain_root_account
+    Rails.cache.fetch((['editor_buttons_for'] + contexts.uniq).cache_key) do
+      tools = ContextExternalTool.active.having_setting('editor_button').scoped(:conditions => contexts.map{|context| "(context_type='#{context.class.base_class.to_s}' AND context_id=#{context.id})"}.join(" OR "))
+      tools.sort_by(&:id).map do |tool|
+        {
+          :name => tool.label_for(:editor_button, nil),
+          :id => tool.id,
+          :url => tool.settings[:editor_button][:url],
+          :icon_url => tool.settings[:editor_button][:icon_url],
+          :width => tool.settings[:editor_button][:selection_width],
+          :height => tool.settings[:editor_button][:selection_height]
+        }
+      end
+    end
   end
 
   def nbsp
@@ -468,7 +496,7 @@ var I18n = I18n || {};
   def tomorrow_at_midnight
     1.day.from_now.midnight
   end
-  
+
   # you should supply :all_folders to avoid a db lookup on every iteration
   def folders_as_options(folders, opts = {})
     opts[:indent_width] ||= 3
@@ -527,7 +555,7 @@ var I18n = I18n || {};
       {
         :longName => "#{course.name} - #{course.short_name}",
         :shortName => course.name,
-        :href => course_path(course),
+        :href => course_path(course, :invitation => course.read_attribute(:invitation)),
         :term => term || nil,
         :subtitle => subtitle,
         :id => course.id
@@ -539,8 +567,9 @@ var I18n = I18n || {};
 
   def menu_courses_locals
     courses = @current_user.menu_courses
-    all_courses_count = @current_user.courses.count
+    all_courses_count = @current_user.courses_with_primary_enrollment.size
     too_many_courses = all_courses_count > courses.length
+    customizable = too_many_courses || @current_user.favorite_courses.first.present?
 
     {
       :collection             => map_courses_for_menu(courses),
@@ -549,7 +578,7 @@ var I18n = I18n || {};
       :title                  => t('#menu.my_courses', "My Courses"),
       :link_text              => raw(t('#layouts.menu.view_all_enrollments', 'View all courses')),
       :too_many_courses       => too_many_courses,
-      :edit                   => t("#menu.customize", "Customize")
+      :edit                   => customizable && t("#menu.customize", "Customize")
     }
   end
 
@@ -580,7 +609,7 @@ var I18n = I18n || {};
   def show_home_menu?
     @current_user.set_menu_data(session[:enrollment_uuid])
     [
-      @current_user.menu_data[:enrollments],
+      @current_user.menu_courses(session[:enrollment_uuid]),
       @current_user.accounts,
       @current_user.cached_current_group_memberships,
       @current_user.enrollments.ended

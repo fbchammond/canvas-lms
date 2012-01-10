@@ -128,6 +128,7 @@ class Account < ActiveRecord::Base
   
   # these settings either are or could be easily added to
   # the account settings page
+  add_setting :global_includes, :root_only => true, :boolean => true, :default => false
   add_setting :global_javascript, :condition => :global_includes, :root_only => true
   add_setting :global_stylesheet, :condition => :global_includes, :root_only => true
   add_setting :error_reporting, :hash => true, :values => [:action, :email, :url, :subject_param, :body_param], :root_only => true
@@ -143,14 +144,14 @@ class Account < ActiveRecord::Base
   add_setting :enable_alerts, :boolean => true, :root_only => true
   add_setting :enable_eportfolios, :boolean => true, :root_only => true
   add_setting :users_can_edit_name, :boolean => true, :root_only => true
-  add_setting :open_registration, :boolean => true, :root_only => true, :default => false
-  
+  add_setting :open_registration, :boolean => true, :root_only => true, :default => false, :condition => :non_delegated_authentication
+
   def settings=(hash)
     if hash.is_a?(Hash)
       hash.each do |key, val|
         if account_settings_options && account_settings_options[key.to_sym]
           opts = account_settings_options[key.to_sym]
-          if (opts[:root_only] && root_account_id) || (opts[:condition] && !settings[opts[:condition].to_sym])
+          if (opts[:root_only] && root_account_id) || (opts[:condition] && !self.send("#{opts[:condition]}?".to_sym))
             settings.delete key.to_sym
           elsif opts[:boolean]
             settings[key.to_sym] = (val == true || val == 'true' || val == '1' || val == 'on')
@@ -198,15 +199,16 @@ class Account < ActiveRecord::Base
   
   def verify_unique_sis_source_id
     return true unless self.sis_source_id
-    root = self.root_account || self
+    if self.root_account?
+      self.errors.add(:sis_source_id, t('#account.root_account_cant_have_sis_id', "SIS IDs cannot be set on root accounts"))
+      return false
+    end
+
+    root = self.root_account
     existing_account = Account.find_by_root_account_id_and_sis_source_id(root.id, self.sis_source_id)
     
-    if self.root_account?
-      return true if !existing_account
-    elsif root.sis_source_id != self.sis_source_id
-      return true if !existing_account || existing_account.id == self.id
-    end
-    
+    return true if !existing_account || existing_account.id == self.id
+
     self.errors.add(:sis_source_id, t('#account.sis_id_in_use', "SIS ID \"%{sis_id}\" is already in use", :sis_id => self.sis_source_id))
     false
   end
@@ -296,17 +298,26 @@ class Account < ActiveRecord::Base
     @cached_fast_all_users ||= {}
     @cached_fast_all_users[limit] ||= self.all_users(limit).active.order_by_sortable_name.scoped(:select => "users.id, users.name, users.sortable_name")
   end
+
+  def users_not_in_groups_sql(groups, opts={})
+    ["SELECT u.id, u.name
+        FROM users u
+       INNER JOIN user_account_associations uaa on uaa.user_id = u.id
+       WHERE uaa.account_id = ? AND u.workflow_state != 'deleted'
+             #{"AND NOT EXISTS (SELECT *
+                                  FROM group_memberships gm
+                                 WHERE gm.user_id = u.id AND
+                                       gm.group_id IN (#{groups.map(&:id).join ','}))" unless groups.empty?}
+       #{"ORDER BY #{opts[:order_by]}" if opts[:order_by].present?}", self.id]
+  end
+
+  def users_not_in_groups(groups)
+    User.find_by_sql(users_not_in_groups_sql(groups))
+  end
   
   def paginate_users_not_in_groups(groups, page, per_page = 15)
-    User.paginate_by_sql(["SELECT u.id, u.name 
-                             FROM users u
-                            INNER JOIN user_account_associations uaa on uaa.user_id = u.id
-                            WHERE uaa.account_id = ? AND u.workflow_state != 'deleted'
-                                  #{"AND NOT EXISTS (SELECT *
-                                                       FROM group_memberships gm
-                                                      WHERE gm.user_id = u.id AND
-                                                            gm.group_id IN (#{groups.map(&:id).join ','}))" unless groups.empty?}
-                            ORDER BY #{User.sortable_name_order_by_clause('u')} ASC", self.id], :page => page, :per_page => per_page)
+    User.paginate_by_sql(users_not_in_groups_sql(groups, :order_by => "#{User.sortable_name_order_by_clause('u')} ASC"),
+                         :page => page, :per_page => per_page)
   end
 
   def courses_name_like(query="", opts={})
@@ -322,15 +333,6 @@ class Account < ActiveRecord::Base
   
   def self.account_lookup_cache_key(id)
     ['_account_lookup2', id].cache_key
-  end
-  
-  def find_user_by_unique_id(unique_id)
-    self.pseudonyms.find_by_unique_id(unique_id_or_email).user rescue nil
-  end
-  
-  def clear_cache_keys!
-    Rails.cache.delete(self.id)
-    true
   end
   
   def self.invalidate_cache(id)
@@ -642,7 +644,11 @@ class Account < ActiveRecord::Base
   def delegated_authentication?
     !!(self.account_authorization_config && self.account_authorization_config.delegated_authentication?)
   end
-  
+
+  def non_delegated_authentication?
+    !delegated_authentication?
+  end
+
   def forgot_password_external_url
     account_authorization_config.try(:change_password_url)
   end
@@ -659,10 +665,6 @@ class Account < ActiveRecord::Base
     !!(self.account_authorization_config && self.account_authorization_config.saml_authentication?)
   end
   
-  def require_account_pseudonym?
-    false
-  end
-  
   # When a user is invited to a course, do we let them see a preview of the
   # course even without registering?  This is part of the free-for-teacher
   # account perks, since anyone can invite anyone to join any course, and it'd
@@ -670,10 +672,6 @@ class Account < ActiveRecord::Base
   # invitation.
   def allow_invitation_previews?
     self == Account.default
-  end
-  
-  def pseudonym_session_scope
-    self.require_account_pseudonym? ? self.pseudonym_sessions : PseudonymSession
   end
   
   def find_courses(string)
@@ -837,11 +835,26 @@ class Account < ActiveRecord::Base
   TAB_GRADING_STANDARDS = 12
   TAB_QUESTION_BANKS = 13
 
+  def external_tool_tabs(opts)
+    tools = ContextExternalTool.find_all_for(self, :account_navigation)
+    tools.sort_by(&:id).map do |tool|
+     {
+        :id => tool.asset_string,
+        :label => tool.label_for(:account_navigation, opts[:language]),
+        :css_class => tool.asset_string,
+        :href => :account_external_tool_path,
+        :external => true,
+        :args => [self.id, tool.id]
+     }
+    end
+  end
+  
   def tabs_available(user=nil, opts={})
     manage_settings = user && self.grants_right?(user, nil, :manage_account_settings)
     if site_admin?
       tabs = []
       tabs << { :id => TAB_PERMISSIONS, :label => t('#account.tab_permissions', "Permissions"), :css_class => 'permissions', :href => :account_permissions_path } if user && self.grants_right?(user, nil, :manage_role_overrides)
+      tabs << { :id => TAB_AUTHENTICATION, :label => t('#account.tab_authentication', "Authentication"), :css_class => 'authentication', :href => :account_account_authorization_configs_path } if manage_settings
     else
       tabs = []
       tabs << { :id => TAB_COURSES, :label => t('#account.tab_courses', "Courses"), :css_class => 'courses', :href => :account_path } if user && self.grants_right?(user, nil, :read_course_list)
@@ -856,10 +869,11 @@ class Account < ActiveRecord::Base
       tabs << { :id => TAB_QUESTION_BANKS, :label => t('#account.tab_question_banks', "Question Banks"), :css_class => 'question_banks', :href => :account_question_banks_path } if user && self.grants_right?(user, nil, :manage_grades)
       tabs << { :id => TAB_SUB_ACCOUNTS, :label => t('#account.tab_sub_accounts', "Sub-Accounts"), :css_class => 'sub_accounts', :href => :account_sub_accounts_path } if manage_settings
       tabs << { :id => TAB_FACULTY_JOURNAL, :label => t('#account.tab_faculty_journal', "Faculty Journal"), :css_class => 'faculty_journal', :href => :account_user_notes_path} if self.enable_user_notes && user && self.grants_right?(user, nil, :manage_user_notes)
-      tabs << { :id => TAB_TERMS, :label => t('#account.tab_terms', "Terms"), :css_class => 'terms', :href => :account_terms_path } if !self.root_account_id && manage_settings
-      tabs << { :id => TAB_AUTHENTICATION, :label => t('#account.tab_authentication', "Authentication"), :css_class => 'authentication', :href => :account_account_authorization_configs_path } if self.parent_account_id.nil? && manage_settings
+      tabs << { :id => TAB_TERMS, :label => t('#account.tab_terms', "Terms"), :css_class => 'terms', :href => :account_terms_path } if self.root_account? && manage_settings
+      tabs << { :id => TAB_AUTHENTICATION, :label => t('#account.tab_authentication', "Authentication"), :css_class => 'authentication', :href => :account_account_authorization_configs_path } if self.root_account? && manage_settings
       tabs << { :id => TAB_SIS_IMPORT, :label => t('#account.tab_sis_import', "SIS Import"), :css_class => 'sis_import', :href => :account_sis_import_path } if self.root_account? && self.allow_sis_import && user && self.grants_right?(user, nil, :manage_sis)
     end
+    tabs += external_tool_tabs(opts)
     tabs << { :id => TAB_SETTINGS, :label => t('#account.tab_settings', "Settings"), :css_class => 'settings', :href => :account_settings_path }
     tabs
   end
@@ -1030,6 +1044,12 @@ class Account < ActiveRecord::Base
 
   def manually_created_courses_account
     (self.root_account || self).sub_accounts.find_or_create_by_name(t('#account.manually_created_courses', "Manually-Created Courses"))
+  end
+
+  def open_registration_for?(user, session = nil)
+    root_account = self.root_account || self
+    return true if root_account.open_registration?
+    root_account.grants_right?(user, session, :manage_user_logins)
   end
 
   named_scope :sis_sub_accounts, lambda{|account, *sub_account_source_ids|

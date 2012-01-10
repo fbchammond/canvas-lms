@@ -196,7 +196,7 @@ class WikiPage < ActiveRecord::Base
   def locked_for?(context, user, opts={})
     return false unless self.could_be_locked
     @locks ||= {}
-    @locks[user ? user.id : 0] ||= Rails.cache.fetch(['_locked_for', self, context, user].cache_key, :expires_in => 1.minute) do
+    @locks[user ? user.id : 0] ||= Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
       m = context_module_tag_for(context, user).context_module rescue nil
       locked = false
       if (m && !m.available_for?(user))
@@ -274,15 +274,8 @@ class WikiPage < ActiveRecord::Base
     context_roles = namespace.context.default_wiki_editing_roles rescue nil
     (self.editing_roles || context_roles || default_roles).split(",")
   end
-  
+
   set_broadcast_policy do |p|
-    p.dispatch :new_wiki_page
-    p.to { participants }
-    p.whenever { |record| 
-      record.active? && 
-      record.just_created
-    }
-    
     p.dispatch :updated_wiki_page
     p.to { participants }
     p.whenever { |record| 
@@ -294,9 +287,8 @@ class WikiPage < ActiveRecord::Base
           record.changed_state(:active)
         ))
     }
-    
   end
-  
+
   def context(user=nil)
     (@context_for_user ||= {})[user] ||= (find_namespace_for_user(user).context rescue nil)
   end

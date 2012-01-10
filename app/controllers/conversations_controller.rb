@@ -468,6 +468,8 @@ class ConversationsController < ApplicationController
   #   user ids or course/group ids prefixed with "course_" or "group_"
   #   respectively, e.g. [1, 2, "course_3"].
   # @argument type ["user"|"context"] Limit the search just to users or contexts (groups/courses).
+  # @argument user_id [Integer] Search for a specific user id. This ignores the other above parameters, and will never return more than one result.
+  # @argument from_conversation_id [Integer] When searching by user_id, only users that could be normally messaged by this user will be returned. This parameter allows you to specify a conversation that will be referenced for a shared context -- if both the current user and the searched user are in the conversation, the user will be returned. This is used to start new side conversations.
   #
   # @example_response
   #   [
@@ -501,7 +503,9 @@ class ConversationsController < ApplicationController
     exclude = params[:exclude] || []
 
     recipients = []
-    if (params[:context] || params[:search]) && ['user', 'context', nil].include?(params[:type])
+    if params[:user_id]
+      recipients = matching_participants(:ids => [params[:user_id]], :conversation_id => params[:from_conversation_id])
+    elsif (params[:context] || params[:search]) && ['user', 'context', nil].include?(params[:type])
       options = {:search => params[:search], :context => params[:context], :limit => limit, :offset => offset, :synthetic_contexts => params[:synthetic_contexts]}
 
       contexts = params[:type] == 'user' ? [] : matching_contexts(options.merge(:exclude_ids => exclude.grep(User::MESSAGEABLE_USER_CONTEXT_REGEX)))
@@ -630,7 +634,14 @@ class ConversationsController < ApplicationController
 
     result = []
     if context_name.nil?
-      result = @contexts.values.map(&:values).flatten
+      result = if params[:search].blank?
+                 courses = @contexts[:courses].values
+                 group_ids = @current_user.current_groups.map(&:id)
+                 groups = @contexts[:groups].slice(*group_ids).values
+                 courses + groups
+               else
+                 @contexts.values.map(&:values).flatten
+               end
     elsif options[:synthetic_contexts]
       if context_name =~ /\Acourse_(\d+)(_(groups|sections))?\z/ && (course = @contexts[:courses][$1.to_i]) && course[:active]
         course = Course.find_by_id(course[:id])
@@ -742,7 +753,7 @@ class ConversationsController < ApplicationController
     result = conversation.as_json(options)
     audience = conversation.participants.reject{ |u| u.id == conversation.user_id }
     result[:messages] = jsonify_messages(options[:messages]) if options[:messages]
-    result[:submissions] = options[:submissions].map { |s| submission_json(s, s.assignment, nil, ['assignment', 'submission_comments']) } if options[:submissions]
+    result[:submissions] = options[:submissions].map { |s| submission_json(s, s.assignment, @current_user, session, nil, ['assignment', 'submission_comments']) } if options[:submissions]
     result[:audience] = audience.map(&:id)
     result[:audience_contexts] = contexts_for(audience)
     result[:avatar_url] = avatar_url_for(conversation)
@@ -778,12 +789,5 @@ class ConversationsController < ApplicationController
       hash[:avatar_url] = avatar_url_for_user(user, options[:blank_avatar_fallback]) if options[:include_participant_avatars]
       hash
     }
-  end
-
-  def render(options = {}, extra_options = {}, &block)
-    if options.keys == [:json] && request.headers['CONTENT_TYPE'].to_s =~ %r{multipart/form-data} && params[:format].to_s != 'json'
-      options[:text] = options.delete(:json).to_json
-    end
-    super
   end
 end

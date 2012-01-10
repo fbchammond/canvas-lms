@@ -47,11 +47,12 @@ describe Pseudonym do
   end
   
   it "should find the correct pseudonym for logins" do
-    p1 = Pseudonym.create!(:unique_id => 'Cody@instructure.com')
-    p2 = Pseudonym.create!(:unique_id => 'codY@instructure.com') { |p| p.workflow_state = 'deleted' }
+    user = User.create!
+    p1 = Pseudonym.create!(:unique_id => 'Cody@instructure.com', :user => user)
+    p2 = Pseudonym.create!(:unique_id => 'codY@instructure.com', :user => user) { |p| p.workflow_state = 'deleted' }
     Pseudonym.custom_find_by_unique_id('cody@instructure.com').should == p1
     account = Account.create!
-    p3 = Pseudonym.create!(:unique_id => 'cOdy@instructure.com', :account => account)
+    p3 = Pseudonym.create!(:unique_id => 'cOdy@instructure.com', :account => account, :user => user)
     Pseudonym.custom_find_by_unique_id('cody@instructure.com', :all).sort.should == [p1, p3]
   end
 
@@ -71,7 +72,7 @@ describe Pseudonym do
     Pseudonym.all.sort.map(&:id).should eql([p3.id, p2.id, p1.id])
   end
   
-  it "should update user account associations on create and update" do
+  it "should update user account associations on CRUD" do
     account_model
     user_model
     account1 = account_model
@@ -89,6 +90,10 @@ describe Pseudonym do
     @user.reload
     @user.user_account_associations.length.should eql(1)
     @user.user_account_associations.first.account.should eql(account2)
+
+    @pseudonym.destroy
+    @user.reload
+    @user.user_account_associations.should == []
   end
   
   it "should allow deleting pseudonyms" do

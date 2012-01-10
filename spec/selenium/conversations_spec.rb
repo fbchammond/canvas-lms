@@ -21,18 +21,12 @@ shared_examples_for "conversations selenium tests" do
 
     if opts[:add_recipient] && browser = find_with_jquery("#create_message_form .browser:visible")
       browser.click
-      keep_trying_until{
-        if elem = find_with_jquery('.selectable:visible')
-          elem.click
-        end
-        elem
-      }
-      keep_trying_until{
-        if elem = find_with_jquery('.toggleable:visible .toggle')
-          elem.click
-        end
-        elem
-      }
+      wait_for_ajaximations(150)
+      find_with_jquery('.selectable:visible').click
+      wait_for_ajaximations(150)
+      find_with_jquery('.toggleable:visible .toggle').click
+      wait_for_ajaximations
+      driver.find_elements(:css, '.token_input ul li').length.should > 0
       find_with_jquery("#create_message_form input:visible").send_keys("\t")
     end
 
@@ -54,6 +48,9 @@ shared_examples_for "conversations selenium tests" do
         $("#action_media_comment").hide()
       JS
     end
+
+    group_conversation_link = driver.find_element(:id, "group_conversation")
+    group_conversation_link.click if group_conversation_link.displayed?
 
     expect {
       driver.find_element(:id, "create_message_form").submit
@@ -85,13 +82,13 @@ shared_examples_for "conversations selenium tests" do
       @course.default_section.update_attribute(:name, "the section")
       @other_section = @course.course_sections.create(:name => "the other section")
 
-      s1 = User.create(:name => "student 1")
-      @course.enroll_user(s1)
-      s2 = User.create(:name => "student 2")
-      @course.enroll_user(s2, "StudentEnrollment", :section => @other_section)
+      @s1 = User.create(:name => "student 1")
+      @course.enroll_user(@s1)
+      @s2 = User.create(:name => "student 2")
+      @course.enroll_user(@s2, "StudentEnrollment", :section => @other_section)
 
       @group = @course.groups.create(:name => "the group")
-      @group.users << s1
+      @group.users << @s1 << @user
 
       new_conversation
       @input = find_with_jquery("#create_message_form input:visible")
@@ -113,10 +110,10 @@ shared_examples_for "conversations selenium tests" do
       element = prev_elements.detect{ |e| e.last == name } or raise "menu item does not exist"
 
       element.first.click
+      wait_for_ajaximations(150)
       keep_trying_until{
         find_all_with_jquery('.autocomplete_menu:visible .list').size.should eql(@level)
       }
-      wait_for_animations
 
       @elements = nil
       elements
@@ -173,7 +170,7 @@ shared_examples_for "conversations selenium tests" do
     it "should allow browsing" do
       browse_menu
 
-      menu.should eql ["the course", "the group", "the other section", "the section"]
+      menu.should eql ["the course", "the group"]
       browse "the course" do
         menu.should eql ["Everyone", "Teachers", "Students", "Course Sections", "Student Groups"]
         browse("Everyone") { menu.should eql ["Select All", "nobody@example.com", "student 1", "student 2"] }
@@ -194,27 +191,17 @@ shared_examples_for "conversations selenium tests" do
         end
         browse "Student Groups" do
           menu.should eql ["the group"]
-          browse("the group") { menu.should eql ["student 1"] }
+          browse("the group") { menu.should eql ["Select All", "nobody@example.com", "student 1"] }
         end
       end
-      browse("the group") { menu.should eql ["student 1"] }
-      browse "the other section" do
-        menu.should eql ["Students"]
-        browse("Students") { menu.should eql ["student 2"] }
-      end
-      browse "the section" do
-        menu.should eql ["Everyone", "Teachers", "Students"]
-        browse("Everyone") { menu.should eql ["Select All", "nobody@example.com", "student 1"] }
-        browse("Teachers") { menu.should eql ["nobody@example.com"] }
-        browse("Students") { menu.should eql ["student 1"] }
-      end
+      browse("the group") { menu.should eql ["Select All", "nobody@example.com", "student 1"] }
     end
 
     it "should check already-added tokens when browsing" do
       browse_menu
 
       browse("the group") do
-        menu.should eql ["student 1"]
+        menu.should eql ["Select All", "nobody@example.com", "student 1"]
         toggle "student 1"
         tokens.should eql ["student 1"]
       end
@@ -330,6 +317,34 @@ shared_examples_for "conversations selenium tests" do
         end
       end
     end
+
+    it "should allow a user id in the url hash to add recipient" do
+      # check without any user_name
+      get "/conversations#/conversations?user_id=#{@s1.id}"
+      wait_for_ajaximations
+      tokens.should eql ["student 1"]
+      # explanation of user_name param: we used to pass the user name in the
+      # hash fragment, and it was spoofable. now we load that data via ajax.
+      get "/conversations#/conversations?user_id=#{@s1.id}&user_name=some_fake_name"
+      wait_for_ajaximations
+      tokens.should eql ["student 1"]
+    end
+
+    it "should reject a non-contactable user id in the url hash" do
+      other = User.create(:name => "other guy")
+      get "/conversations#/conversations?user_id=#{other.id}"
+      wait_for_ajaximations
+      tokens.should eql []
+    end
+
+    it "should allow a non-contactable user in the hash if a shared conversation exists" do
+      other = User.create(:name => "other guy")
+      # if the users have a conversation in common already, then the recipient can be added
+      c = Conversation.initiate([@user.id, other.id], true)
+      get "/conversations#/conversations?user_id=#{other.id}&from_conversation_id=#{c.id}"
+      wait_for_ajaximations
+      tokens.should eql ["other guy"]
+    end
   end
 
   context "media comments" do
@@ -401,8 +416,9 @@ shared_examples_for "conversations selenium tests" do
 
       find_all_with_jquery("#{message} .message_attachments li").size.should == 1
       find_with_jquery("#{message} .message_attachments li a .title").text.should == filename
-      find_with_jquery("#{message} .message_attachments li a").click
-      driver.page_source.should match data
+      download_link = driver.find_element(:css, "#{message} .message_attachments li a")
+      file = open(download_link.attribute('href'))
+      file.read.should match data
     end
 
     it "should save attachments on new messages on existing conversations" do
@@ -532,6 +548,129 @@ shared_examples_for "conversations selenium tests" do
       coms.last.find_element(:css, '.audience').text.should == 'nobody@example.com'
       coms.last.find_element(:css, 'p').text.should == 'hey bob'
     end
+
+    def get_messages
+      get "/conversations"
+      elements = nil
+      keep_trying_until {
+        elements = find_all_with_jquery("#conversations > ul > li:visible")
+        elements.size == 1
+      }
+      elements.first.click
+      wait_for_ajaximations
+      msgs = driver.find_elements(:css, "div#messages ul.messages > li")
+    end
+
+    it "should interleave submissions with messages based on comment time" do
+      @me = @user
+      @bob = student_in_course(:name => "bob", :active_all => true).user
+      @conversation = conversation(@bob).conversation
+      submission1 = submission_model(:course => @course, :user => @bob)
+      submission1.add_comment(:comment => "hey bob", :author => @me).update_attribute(:created_at, 10.minutes.ago)
+      @conversation.conversation_messages.first.update_attribute(:created_at, 9.minutes.ago)
+
+      # message comes first, then submission, due to creation times
+      msgs = get_messages
+      msgs.size.should == 2
+      msgs[0].should have_class('message')
+      msgs[1].should have_class('submission')
+
+      # now new submission comment bumps it up
+      submission1.add_comment(:comment => "hey teach", :author => @bob).update_attribute(:created_at, 8.minutes.ago)
+      msgs = get_messages
+      msgs.size.should == 2
+      msgs[0].should have_class('submission')
+      msgs[1].should have_class('message')
+
+      # new message appears on top, submission now in the middle
+      @conversation.add_message(@bob, 'ohai there').update_attribute(:created_at, 7.minutes.ago)
+      msgs = get_messages
+      msgs.size.should == 3
+      msgs[0].should have_class('message')
+      msgs[1].should have_class('submission')
+      msgs[2].should have_class('message')
+    end
+  end
+
+  context "group conversations" do
+    before do
+      @course.update_attribute(:name, "the course")
+      @course.default_section.update_attribute(:name, "the section")
+      @other_section = @course.course_sections.create(:name => "the other section")
+
+      s1 = User.create(:name => "student 1")
+      @course.enroll_user(s1)
+      s2 = User.create(:name => "student 2")
+      @course.enroll_user(s2, "StudentEnrollment", :section => @other_section)
+
+      @group = @course.groups.create(:name => "the group")
+      @group.users << s1
+
+      new_conversation
+      @input = find_with_jquery("#create_message_form input:visible")
+      @checkbox = driver.find_element(:id, "group_conversation")
+    end
+
+    def choose_recipient(*names)
+      name = names.shift
+      level = 1
+
+      @input.send_keys(name)
+      wait_for_ajaximations(150)
+      loop do
+        keep_trying_until{ find_all_with_jquery('.autocomplete_menu:visible .list').size == level }
+        driver.execute_script("return $('.autocomplete_menu:visible .list').last().find('ul').last().find('li').toArray();").detect { |e|
+          (e.find_element(:tag_name, :b).text rescue e.text) == name
+        }.click
+        wait_for_ajaximations
+
+        break if names.empty?
+
+        level += 1
+        name = names.shift
+      end
+      keep_trying_until{ find_with_jquery('.autocomplete_menu:visible').nil? }
+    end
+
+    it "should not be an option with no recipients" do
+      @checkbox.should_not be_displayed
+    end
+
+    it "should not be an option for a single individual recipient" do
+      choose_recipient("student 1")
+      @checkbox.should_not be_displayed
+    end
+
+    it "should be an option, default false, for a single 'bulk' recipient" do
+      choose_recipient("the course", "Everyone", "Select All")
+      @checkbox.should be_displayed
+      is_checked(@checkbox).should be_false
+    end
+
+    it "should be an option, default false, for multiple individual recipients" do
+      choose_recipient("student 1")
+      choose_recipient("student 2")
+      @checkbox.should be_displayed
+      is_checked(@checkbox).should be_false
+    end
+
+    it "should disappear when there are no longer multiple recipients" do
+      choose_recipient("student 1")
+      choose_recipient("student 2")
+      @input.send_keys([:backspace])
+      @checkbox.should_not be_displayed
+    end
+
+    it "should revert to false after disappearing and reappearing" do
+      choose_recipient("student 1")
+      choose_recipient("student 2")
+      @checkbox.click
+      @input.send_keys([:backspace])
+      choose_recipient("student 2")
+      @checkbox.should be_displayed
+      is_checked(@checkbox).should be_false
+    end
+
   end
 end
 

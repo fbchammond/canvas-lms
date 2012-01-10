@@ -27,6 +27,7 @@ describe CoursesController, :type => :integration do
   end
   
   it "should accept access_token" do
+    @user.pseudonyms.create!(:unique_id => 'test@example.com')
     @token = @user.access_tokens.create!(:purpose => "test")
 
     @token.last_used_at.should be_nil
@@ -42,6 +43,7 @@ describe CoursesController, :type => :integration do
   end
   
   it "should not accept an invalid access_token" do
+    @user.pseudonyms.create!(:unique_id => 'test@example.com')
     @token = @user.access_tokens.create!(:purpose => "test")
 
     raw_api_call(:get, "/api/v1/courses/#{@course2.id}/students.json?access_token=1234",
@@ -52,7 +54,20 @@ describe CoursesController, :type => :integration do
   end
   
   it "should not accept an expired access_token" do
+    @user.pseudonyms.create!(:unique_id => 'test@example.com')
     @token = @user.access_tokens.create!(:purpose => "test", :expires_at => 2.weeks.ago)
+
+    raw_api_call(:get, "/api/v1/courses/#{@course2.id}/students.json?access_token=#{@token.token}",
+            { :access_token => @token.token, :controller => 'courses', :action => 'students', :course_id => @course2.id.to_s, :format => 'json' })
+    response.status.to_i.should == 400
+    json = JSON.parse(response.body)
+    json['errors'].should == "Invalid access token"
+  end
+
+  it "should require an active pseudonym" do
+    @token = @user.access_tokens.create!(:purpose => "test")
+
+    @token.last_used_at.should be_nil
 
     raw_api_call(:get, "/api/v1/courses/#{@course2.id}/students.json?access_token=#{@token.token}",
             { :access_token => @token.token, :controller => 'courses', :action => 'students', :course_id => @course2.id.to_s, :format => 'json' })
@@ -116,5 +131,40 @@ describe CoursesController, :type => :integration do
       'login_id' => 'nobody_sis@example.com',
       'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@student.uuid}.ics" },
     }
+  end
+
+  it "should not prepend the CSRF protection to API requests" do
+    user_with_pseudonym(:user => @user)
+    raw_api_call(:get, "/api/v1/users/self/profile",
+                    :controller => "profile", :action => "show", :user_id => "self", :format => "json")
+    response.should be_success
+    raw_json = response.body
+    raw_json.should_not match(%r{^while\(1\);})
+    json = JSON.parse(raw_json)
+    json['id'].should == @user.id
+  end
+
+  it "should not prepend the CSRF protection to HTTP Basic API requests" do
+    user_with_pseudonym(:active_user => true, :username => 'test1@example.com', :password => 'test123')
+    get "/api/v1/users/self/profile", {}, { :authorization => ActionController::HttpAuthentication::Basic.encode_credentials('test1@example.com', 'test123') }
+    response.should be_success
+    raw_json = response.body
+    raw_json.should_not match(%r{^while\(1\);})
+    json = JSON.parse(raw_json)
+    json['id'].should == @user.id
+  end
+
+  it "should prepend the CSRF protection for API endpoints, when session auth is used" do
+    user_with_pseudonym(:active_user => true, :username => 'test1@example.com', :password => 'test123')
+    post "/login", "pseudonym_session[unique_id]" => "test1@example.com",
+      "pseudonym_session[password]" => "test123"
+    assert_response 302
+    get "/api/v1/users/self/profile"
+    response.should be_success
+    raw_json = response.body
+    raw_json.should match(%r{^while\(1\);})
+    expect { JSON.parse(raw_json) }.to raise_error
+    json = JSON.parse(raw_json.sub(%r{^while\(1\);}, ''))
+    json['id'].should == @user.id
   end
 end

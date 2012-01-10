@@ -549,7 +549,7 @@ describe Account do
   context "tabs_available" do
     it "should not include external tools if not configured for course navigation" do
       @account = Account.default.sub_accounts.create!(:name => "sub-account")
-      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob")
+      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob", :domain => "example.com")
       tool.settings[:user_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       tool.has_account_navigation.should == false
@@ -559,7 +559,7 @@ describe Account do
     
     it "should include external tools if configured on the account" do
       @account = Account.default.sub_accounts.create!(:name => "sub-account")
-      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob")
+      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob", :domain => "example.com")
       tool.settings[:account_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       tool.has_account_navigation.should == true
@@ -573,86 +573,7 @@ describe Account do
     
     it "should include external tools if configured on the root account" do
       @account = Account.default.sub_accounts.create!(:name => "sub-account")
-      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob")
-      tool.settings[:account_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
-      tool.save!
-      tool.has_account_navigation.should == true
-      tabs = @account.tabs_available(nil)
-      tabs.map{|t| t[:id] }.should be_include(tool.asset_string)
-      tab = tabs.detect{|t| t[:id] == tool.asset_string }
-      tab[:label].should == tool.settings[:account_navigation][:text]
-      tab[:href].should == :account_external_tool_path
-      tab[:args].should == [@account.id, tool.id]
-    end
-  end
-
-  context "users_not_in_groups" do
-    before :each do
-      @account = Account.default
-      @user1 = account_admin_user(:account => @account)
-      @user2 = account_admin_user(:account => @account)
-      @user3 = account_admin_user(:account => @account)
-    end
-
-    it "should not include deleted users" do
-      @user1.destroy
-      @account.users_not_in_groups([]).size.should == 2
-    end
-
-    it "should not include users in one of the groups" do
-      group = @account.groups.create
-      group.add_user(@user1)
-      users = @account.users_not_in_groups([group])
-      users.size.should == 2
-      users.should_not be_include(@user1)
-    end
-
-    it "should include users otherwise" do
-      group = @account.groups.create
-      group.add_user(@user1)
-      users = @account.users_not_in_groups([group])
-      users.should be_include(@user2)
-      users.should be_include(@user3)
-    end
-  end
-
-  it "should order results of paginate_users_not_in_groups by user's sortable name" do
-    @account = Account.default
-    @user1 = account_admin_user(:account => @account); @user1.sortable_name = 'jonny'; @user1.save
-    @user2 = account_admin_user(:account => @account); @user2.sortable_name = 'bob'; @user2.save
-    @user3 = account_admin_user(:account => @account); @user3.sortable_name = 'richard'; @user3.save
-    users = @account.paginate_users_not_in_groups([], 1)
-    users.map{ |u| u.id }.should == [@user2.id, @user1.id, @user3.id]
-  end
-
-  context "tabs_available" do
-    it "should not include external tools if not configured for course navigation" do
-      @account = Account.default.sub_accounts.create!(:name => "sub-account")
-      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob")
-      tool.settings[:user_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
-      tool.save!
-      tool.has_account_navigation.should == false
-      tabs = @account.tabs_available(nil)
-      tabs.map{|t| t[:id] }.should_not be_include(tool.asset_string)
-    end
-    
-    it "should include external tools if configured on the account" do
-      @account = Account.default.sub_accounts.create!(:name => "sub-account")
-      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob")
-      tool.settings[:account_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
-      tool.save!
-      tool.has_account_navigation.should == true
-      tabs = @account.tabs_available(nil)
-      tabs.map{|t| t[:id] }.should be_include(tool.asset_string)
-      tab = tabs.detect{|t| t[:id] == tool.asset_string }
-      tab[:label].should == tool.settings[:account_navigation][:text]
-      tab[:href].should == :account_external_tool_path
-      tab[:args].should == [@account.id, tool.id]
-    end
-    
-    it "should include external tools if configured on the root account" do
-      @account = Account.default.sub_accounts.create!(:name => "sub-account")
-      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob")
+      tool = @account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob", :domain => "example.com")
       tool.settings[:account_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       tool.has_account_navigation.should == true
@@ -675,5 +596,51 @@ describe Account do
       Account.default.fast_all_users.should == [@jtolds, @johnstclair]
     end
   end
->>>>>>> e9eec02... fix display of sortable name in users list refs #5317
+
+  it "should not allow setting an sis id for a root account" do
+    @account = Account.create!
+    @account.sis_source_id = 'abc'
+    @account.save.should be_false
+  end
+
+  describe "open_registration_for?" do
+    it "should be true for anyone if open registration is turned on" do
+      account = Account.default
+      account.settings = { :open_registration => true }
+      account.open_registration_for?(nil).should be_true
+      account.open_registration_for?(user).should be_true
+    end
+
+    it "should be true for account admins" do
+      account = Account.default
+      account.open_registration_for?(nil).should be_false
+      account.open_registration_for?(user).should be_false
+      user
+      account.add_user(@user)
+      account.open_registration_for?(@user).should be_true
+    end
+  end
+
+  context "settings" do
+    describe ":condition" do
+      it "should not allow setting things where condition is false" do
+        account = Account.default
+        account.stubs(:global_includes?).returns(false)
+        account.settings = { :global_javascript => 'bob' }
+        account.settings[:global_javascript].should be_nil
+        account.stubs(:global_includes?).returns(true)
+        account.settings = { :global_javascript => 'bob' }
+        account.settings[:global_javascript].should == 'bob'
+      end
+    end
+
+    describe "open_registration" do
+      it "should not allow it to be turned on if delegated auth is enabled" do
+        account = Account.default
+        account.account_authorization_configs.create!(:auth_type => 'cas')
+        account.settings = { :open_registration => true }
+        account.open_registration?.should be_false
+      end
+    end
+  end
 end

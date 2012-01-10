@@ -53,6 +53,88 @@ describe CoursesController, :type => :integration do
     ]
   end
 
+  describe "course creation" do
+    context "an account admin" do
+      before do
+        @account = Account.first
+        account_admin_user
+        @resource_path = "/api/v1/accounts/#{@account.id}/courses"
+        @resource_params = { :controller => 'courses', :action => 'create', :format => 'json', :account_id => @account.id.to_s }
+      end
+
+      it "should create a new course" do
+        post_params = {
+          'account_id' => @account.id,
+          'offer'      => true,
+          'course'     => {
+            'name'                            => 'Test Course',
+            'course_code'                     => 'Test Course',
+            'start_at'                        => '2011-01-01T00:00:00-0700',
+            'conclude_at'                     => '2011-05-01T00:00:00-0700',
+            'publish_grades_immediately'      => true,
+            'is_public'                       => true,
+            'allow_student_assignment_edits'  => true,
+            'allow_wiki_comments'             => true,
+            'allow_student_forum_attachments' => true,
+            'open_enrollment'                 => true,
+            'self_enrollment'                 => true,
+            'license'                         => 'Creative Commons',
+            'sis_course_id'                   => '12345'
+          }
+        }
+        course_response = post_params['course'].merge({
+          'account_id' => @account.id,
+          'root_account_id' => @account.id,
+          'start_at' => '2011-01-01T07:00:00Z',
+          'conclude_at' => '2011-05-01T07:00:00Z'
+        })
+        json = api_call(:post, @resource_path, @resource_params, post_params)
+        new_course = Course.find(json['id'])
+        [:name, :course_code, :start_at, :conclude_at, :publish_grades_immediately,
+        :is_public, :allow_student_assignment_edits, :allow_wiki_comments,
+        :open_enrollment, :self_enrollment, :license, :sis_course_id,
+        :allow_student_forum_attachments].each do |attr|
+          [:start_at, :conclude_at].include?(attr) ?
+            new_course.send(attr).should == Time.parse(post_params['course'][attr.to_s]) :
+            new_course.send(attr).should == post_params['course'][attr.to_s]
+        end
+        new_course.workflow_state.should eql 'available'
+        course_response.merge!(
+          'id' => new_course.id,
+          'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/course_#{new_course.uuid}.ics" }
+        )
+        json.should eql course_response
+      end
+
+      it "should offer a course if passed the 'offer' parameter" do
+        json = api_call(:post, @resource_path,
+          @resource_params,
+          { :account_id => @account.id, :offer => true, :course => { :name => 'Test Course' } }
+        )
+        new_course = Course.find(json['id'])
+        new_course.should be_available
+      end
+    end
+
+    describe "a user without permissions" do
+      it "should return 401 Unauthorized if a user lacks permissions" do
+        course_with_student(:active_all => true)
+        account = Account.first
+        raw_api_call(:post, "/api/v1/accounts/#{account.id}/courses",
+          { :controller => 'courses', :action => 'create', :format => 'json', :account_id => account.id.to_s },
+          {
+            :account_id => account.id,
+            :course => {
+              :name => 'Test Course'
+            }
+          }
+        )
+
+        response.status.should eql '401 Unauthorized'
+      end
+    end
+  end
+
   it "should include scores in course list if requested" do
     @course2.grading_standard_enabled = true
     @course2.save
@@ -140,8 +222,8 @@ describe CoursesController, :type => :integration do
 
     json = api_call(:get, "/api/v1/courses/#{@course2.id}/students.json",
             { :controller => 'courses', :action => 'students', :course_id => @course2.id.to_s, :format => 'json' })
-    json.should == api_json_response([first_user, new_user],
-        :only => USER_API_FIELDS)
+    json.sort_by{|x| x["id"]}.should == api_json_response([first_user, new_user],
+        :only => USER_API_FIELDS).sort_by{|x| x["id"]}
   end
 
   it "should not include user sis id or login id for non-admins" do
@@ -238,8 +320,8 @@ describe CoursesController, :type => :integration do
 
     json = api_call(:get, "/api/v1/courses/sis_course_id:TEST-SIS-ONE.2011/students.json",
             { :controller => 'courses', :action => 'students', :course_id => 'sis_course_id:TEST-SIS-ONE.2011', :format => 'json' })
-    json.should == api_json_response([first_user, new_user],
-        :only => USER_API_FIELDS)
+    json.sort_by{|x| x["id"]}.should == api_json_response([first_user, new_user],
+        :only => USER_API_FIELDS).sort_by{|x| x["id"]}
 
     json = api_call(:get, "/api/v1/courses/sis_course_id:TEST-SIS-ONE.2011.json",
             { :controller => 'courses', :action => 'show', :id => 'sis_course_id:TEST-SIS-ONE.2011', :format => 'json' })
@@ -256,6 +338,16 @@ describe CoursesController, :type => :integration do
             { :controller => 'courses', :action => 'show', :id => "hex:sis_course_id:#{packed_sis_id}", :format => 'json' })
     json['id'].should == @course1.id
     json['sis_course_id'].should == sis_id
+  end
+
+  it "should not find courses in other root accounts" do
+    acct = account_model(:name => 'root')
+    acct.add_user(@user)
+    course(:account => acct)
+    @course.update_attribute('sis_source_id', 'OTHER-SIS')
+    raw_api_call(:get, "/api/v1/courses/sis_course_id:OTHER-SIS",
+                 :controller => "courses", :action => "show", :id => "sis_course_id:OTHER-SIS", :format => "json")
+    response.status.should == "404 Not Found"
   end
 
   it "should return the needs_grading_count for all assignments" do
@@ -303,4 +395,174 @@ describe CoursesController, :type => :integration do
             { :controller => 'courses', :action => 'show', :id => @course1.to_param, :format => 'json' })
     json['id'].should == @course1.id
   end
+end
+
+def each_copy_option
+  [[:assignments, :assignments], [:external_tools, :context_external_tools], [:files, :attachments], 
+   [:topics, :discussion_topics], [:calendar_events, :calendar_events], [:quizzes, :quizzes], 
+   [:modules, :context_modules], [:outcomes, :learning_outcomes]].each{|o| yield o}
+end
+
+describe ContentImportsController, :type => :integration do
+  before(:each) do
+    course_with_teacher_logged_in(:active_all => true, :name => 'origin story')
+    @copy_from = @course
+    @copy_from.sis_source_id = 'from_course'
+    
+    # create one of everything that can be copied
+    group = @course.assignment_groups.create!(:name => 'group1')
+    @course.assignments.create!(:title => 'Assignment 1', :points_possible => 10, :assignment_group => group)
+    @copy_from.discussion_topics.create!(:title => "Topic 1", :message => "<p>watup?</p>")
+    @copy_from.syllabus_body = "haha"
+    @copy_from.wiki.wiki_pages.create!(:title => "some page", :body => 'hi')
+    @copy_from.context_external_tools.create!(:name => "new tool", :consumer_key => "key", :shared_secret => "secret", :domain => 'example.com')
+    Attachment.create!(:filename => 'wut.txt', :display_name => "huh?", :uploaded_data => StringIO.new('uh huh.'), :folder => Folder.unfiled_folder(@copy_from), :context => @copy_from)
+    @copy_from.calendar_events.create!(:title => 'event', :description => 'hi', :start_at => 1.day.from_now)
+    @copy_from.context_modules.create!(:name => "a module")
+    @copy_from.quizzes.create!(:title => 'quiz')
+    LearningOutcomeGroup.default_for(@copy_from).add_item(@copy_from.learning_outcomes.create!(:short_description => 'oi'))
+    @copy_from.save
+    
+    course_with_teacher(:active_all => true, :name => 'whatever', :user => @user)
+    @copy_to = @course
+    @copy_to.sis_source_id = 'to_course'
+    @copy_to.save
+  end
+  
+  def run_copy(to_id=nil, from_id=nil, options={})
+    to_id ||= @copy_to.to_param
+    from_id ||= @copy_from.to_param
+    api_call(:post, "/api/v1/courses/#{to_id}/course_copy",
+            { :controller => 'content_imports', :action => 'copy_course_content', :course_id => to_id, :format => 'json' },
+    {:source_course => from_id}.merge(options))
+    data = JSON.parse(response.body)
+    
+    status_url = data['status_url']
+    dj = Delayed::Job.last
+    
+    api_call(:get, status_url, { :controller => 'content_imports', :action => 'copy_course_status', :course_id => @copy_to.to_param, :id => data['id'].to_param, :format => 'json' })
+    (JSON.parse(response.body)).tap do |res|
+      res['workflow_state'].should == 'created'
+      res['progress'].should be_nil
+    end
+    
+    dj.invoke_job
+    
+    api_call(:get, status_url, { :controller => 'content_imports', :action => 'copy_course_status', :course_id => @copy_to.to_param, :id => data['id'].to_param, :format => 'json' })
+    (JSON.parse(response.body)).tap do |res|
+      res['workflow_state'].should == 'completed'
+      res['progress'].should == 100
+    end
+  end
+  
+  def run_unauthorized(to_id, from_id)
+    status = raw_api_call(:post, "/api/v1/courses/#{to_id}/course_copy",
+            { :controller => 'content_imports', :action => 'copy_course_content', :course_id => to_id, :format => 'json' },
+    {:source_course => from_id})
+    status.should == 401
+  end
+  
+  def run_not_found(to_id, from_id)
+    status = raw_api_call(:post, "/api/v1/courses/#{to_id}/course_copy",
+            { :controller => 'content_imports', :action => 'copy_course_content', :course_id => to_id, :format => 'json' },
+    {:source_course => from_id})
+    response.status.should == "404 Not Found"
+  end
+  
+  def run_only_copy(option)
+    run_copy(nil, nil, {:only => [option]})
+  end
+  
+  def run_except_copy(option)
+    run_copy(nil, nil, {:except => [option]})
+  end
+  
+  def check_counts(expected_count, skip = nil)
+    each_copy_option do |option, association|
+      next if skip && option == skip
+      @copy_to.send(association).count.should == expected_count
+    end
+  end
+  
+  it "should copy a course with canvas id" do
+    run_copy
+    check_counts 1
+  end
+  
+  it "should copy a course using sis ids" do
+    run_copy('sis_course_id:to_course', 'sis_course_id:from_course')
+    check_counts 1
+  end
+  
+  it "should not allow copying into an unauthorized course" do
+    course_with_teacher_logged_in(:active_all => true, :name => 'origin story')
+    run_unauthorized(@copy_to.to_param, @course.to_param)
+  end
+  
+  it "should not allow copying from an unauthorized course" do
+    course_with_teacher_logged_in(:active_all => true, :name => 'origin story')
+    run_unauthorized(@course.to_param, @copy_from.to_param)
+  end
+  
+  it "should return 404 for a source course that isn't found" do
+    run_not_found(@copy_to.to_param, "0")
+  end
+  
+  it "should return 404 for a destination course that isn't found" do
+    run_not_found("0", @copy_from.to_param)
+  end
+  
+  it "should return 404 for an import that isn't found" do
+    raw_api_call(:get, "/api/v1/courses/#{@copy_to.id}/course_copy/444", 
+                 { :controller => 'content_imports', :action => 'copy_course_status', :course_id => @copy_to.to_param, :id => '444', :format => 'json' })
+    response.status.should == "404 Not Found"
+  end
+  
+  it "shouldn't allow both only and except options" do
+    raw_api_call(:post, "/api/v1/courses/#{@copy_to.id}/course_copy",
+            { :controller => 'content_imports', :action => 'copy_course_content', :course_id => @copy_to.to_param, :format => 'json' },
+    {:source_course => @copy_from.to_param, :only => [:topics], :except => [:assignments]})
+    response.status.to_i.should == 400
+    json = JSON.parse(response.body)
+    json['errors'].should == 'You can not use "only" and "except" options at the same time.'
+  end
+  
+  it "should only copy course settings" do
+    run_only_copy(:course_settings)
+    check_counts 0
+    @copy_to.reload
+    @copy_to.syllabus_body.should == "haha"
+  end
+  it "should only copy wiki pages" do
+    run_only_copy(:wiki_pages)
+    check_counts 0
+    @copy_to.wiki.wiki_pages.count.should == 1
+  end
+  each_copy_option do |option, association|
+    it "should only copy #{option}" do
+      run_only_copy(option)
+      @copy_to.send(association).count.should == 1
+      check_counts(0, option)
+    end
+  end
+  
+  it "should skip copy course settings" do
+    run_except_copy(:course_settings)
+    check_counts 1
+    @copy_to.reload
+    @copy_to.syllabus_body.should == nil
+  end
+  it "should skip copy wiki pages" do
+    run_except_copy(:wiki_pages)
+    check_counts 1
+    @copy_to.wiki.wiki_pages.count.should == 0
+  end
+  each_copy_option do |option, association|
+    it "should skip copy #{option}" do
+      run_except_copy(option)
+      @copy_to.send(association).count.should == 0
+      check_counts(1, option)
+    end
+  end
+  
 end

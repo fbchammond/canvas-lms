@@ -36,7 +36,7 @@ class AccountsController < ApplicationController
         # that you implicitly have access to, or have a separate method
         # to get the sub-accounts of an account?
         @accounts = Api.paginate(@accounts, self, api_v1_accounts_path)
-        render :json => @accounts.map { |a| account_json(a, []) }
+        render :json => @accounts.map { |a| account_json(a, @current_user, session, []) }
       end
     end
   end
@@ -54,7 +54,7 @@ class AccountsController < ApplicationController
         @courses = @account.fast_all_courses(:term => @term, :limit => @maximum_courses_im_gonna_show, :hide_enrollmentless_courses => @hide_enrollmentless_courses)
         build_course_stats
       end
-      format.json { render :json => account_json(@account, []) }
+      format.json { render :json => account_json(@account, @current_user, session, []) }
     end
   end
 
@@ -73,7 +73,7 @@ class AccountsController < ApplicationController
       @courses = @account.associated_courses.active
       @courses = @courses.with_enrollments if params[:hide_enrollmentless_courses]
       @courses = Api.paginate(@courses, self, api_v1_account_courses_path, :order => :id)
-      render :json => @courses.map { |c| course_json(c, [], nil) }
+      render :json => @courses.map { |c| course_json(c, @current_user, session, [], nil) }
     end
   end
 
@@ -82,6 +82,7 @@ class AccountsController < ApplicationController
       respond_to do |format|
         enable_user_notes = params[:account].delete :enable_user_notes
         allow_sis_import = params[:account].delete :allow_sis_import
+        global_includes = !!params[:account][:settings].try(:delete, :global_includes)
         if params[:account][:services]
           params[:account][:services].slice(*Account.services_exposed_to_ui_hash.keys).each do |key, value|
             @account.set_service_availability(key, value == '1')
@@ -93,12 +94,12 @@ class AccountsController < ApplicationController
           @account.allow_sis_import = allow_sis_import if allow_sis_import && @account.root_account?
           if params[:account][:settings]
             @account.settings[:admins_can_change_passwords] = !!params[:account][:settings][:admins_can_change_passwords]
-            @account.settings[:global_includes] = !!params[:account][:settings][:global_includes]
+            @account.settings[:global_includes] = global_includes
             @account.settings[:enable_eportfolios] = !!params[:account][:settings][:enable_eportfolios] unless @account.site_admin?
           end
         end
         if sis_id = params[:account].delete(:sis_source_id)
-          if sis_id != @account.sis_source_id && (@account.root_account || @account).grants_right?(@current_user, session, :manage_sis)
+          if !@account.root_account? && sis_id != @account.sis_source_id && (@account.root_account || @account).grants_right?(@current_user, session, :manage_sis)
             if sis_id == ''
               @account.sis_source_id = nil
             else
@@ -143,9 +144,10 @@ class AccountsController < ApplicationController
   end
 
   def confirm_delete_user
-    if authorized_action(@account, @current_user, :manage_user_logins)
-      @context = @account
-      @user = @account.all_users.find_by_id(params[:user_id]) if params[:user_id].present?
+    @root_account = @account.root_account || @account
+    if authorized_action(@root_account, @current_user, :manage_user_logins)
+      @context = @root_account
+      @user = @root_account.all_users.find_by_id(params[:user_id]) if params[:user_id].present?
       if !@user
         flash[:error] = t(:no_user_message, "No user found with that id")
         redirect_to account_url(@account)
@@ -154,26 +156,23 @@ class AccountsController < ApplicationController
   end
   
   def remove_user
-    if authorized_action(@account, @current_user, :manage_user_logins)
-      @user = UserAccountAssociation.find_by_account_id_and_user_id(@account.id, params[:user_id]).user rescue nil
+    @root_account = @account.root_account || @account
+    if authorized_action(@root_account, @current_user, :manage_user_logins)
+      @user = UserAccountAssociation.find_by_account_id_and_user_id(@root_account.id, params[:user_id]).user rescue nil
       # if the user is in any account other then the
       # current one, remove them from the current account
       # instead of deleting them completely
-      account_ids = []
       if @user
-        account_ids = @user.associated_root_accounts.map(&:id)
-      end
-      account_ids = account_ids.compact.uniq - [@account.id]
-      if @user && !account_ids.empty?
-        @root_account = @account.root_account || @account
-        @user.remove_from_root_account(@root_account)
-      else
-        @user && @user.destroy
+        if !(@user.associated_root_accounts.map(&:id).compact.uniq - [@root_account.id]).empty?
+          @user.remove_from_root_account(@root_account)
+        else
+          @user.destroy(true)
+        end
+        flash[:notice] = t(:user_deleted_message, "%{username} successfully deleted", :username => @user.name)
       end
       respond_to do |format|
-        flash[:notice] = t(:user_deleted_message, "%{username} successfully deleted", :username => @user.name) if @user
-        format.html { redirect_to account_url(@account) }
-        format.json { render :json => @user.to_json }
+        format.html { redirect_to account_users_url(@account) }
+        format.json { render :json => (@user || {}).to_json }
       end
     end
   end
@@ -244,13 +243,15 @@ class AccountsController < ApplicationController
   
   def statistics_page_views
     if authorized_action(@account, @current_user, :view_statistics)
+      today = Time.zone.today
+
       start_at = Date.parse(params[:start_at]) rescue nil
       start_at ||= 1.month.ago.to_date
       end_at = Date.parse(params[:end_at]) rescue nil
-      end_at ||= Date.today
+      end_at ||= today
 
-      @end_at = [[start_at, end_at].max, Date.today].min
-      @start_at = [[start_at, end_at].min, Date.today].min
+      @end_at = [[start_at, end_at].max, today].min
+      @start_at = [[start_at, end_at].min, today].min
       add_crumb(t(:crumb_statistics, "Statistics"), statistics_account_url(@account))
       add_crumb(t(:crumb_page_views, "Page Views"))
     end
@@ -323,9 +324,11 @@ class AccountsController < ApplicationController
           @account.current_sis_batch_id = batch.id
           @account.save
           batch.process
-          render :text => batch.to_json(:include => :sis_batch_log_entries)
+          render :json => batch.to_json(:include => :sis_batch_log_entries),
+                 :as_text => true
         else
-          render :text => {:error=>true, :error_message=> t(:sis_import_in_process_notice, "An SIS import is already in process."), :batch_in_progress=>true}.to_json
+          render :json => {:error=>true, :error_message=> t(:sis_import_in_process_notice, "An SIS import is already in process."), :batch_in_progress=>true}.to_json,
+                 :as_text => true
         end
       end
     end
@@ -380,23 +383,18 @@ class AccountsController < ApplicationController
     end
   end
   
+  # TODO Refactor add_account_user and remove_account_user actions into
+  # AdminsController. see https://redmine.instructure.com/issues/6634
   def add_account_user
     if authorized_action(@context, @current_user, :manage_account_memberships)
-      list = UserList.new(params[:user_list], @context, @context.grants_right?(@current_user, session, :manage_user_logins))
+      list = UserList.new(params[:user_list], @context.root_account || @context, params[:only_search_existing_users] ? false : @context.open_registration_for?(@current_user, session))
       users = list.users
       account_users = users.map do |user|
-        account_user = @context.add_user(user, params[:membership_type])
-
-        if user.registered?
-          account_user.account_user_notification!
-        else
-          account_user.account_user_registration!
-        end
-
+        admin = user.flag_as_admin(@context, params[:membership_type])
         { :enrollment => {
-          :id => account_user.id,
+          :id => admin.id,
           :name => user.name,
-          :membership_type => account_user.membership_type,
+          :membership_type => admin.membership_type,
           :workflow_state => 'active',
           :user_id => user.id,
           :type => 'admin',

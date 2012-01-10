@@ -64,7 +64,7 @@ window.onerror = function (msg, url, line) {
   // we're going to ignore errors generated from javascript that isn't served from canvas.
   // this prevents a whole ton of errors about not being able to load google
   // analytics because of firewall rules, etc.
-  if (!url.match(window.location.hostname)) {
+  if (url && url.match && !url.match(window.location.hostname)) {
     return true;
   }
 
@@ -87,7 +87,7 @@ $(document).ready(function() {
     try {
       status = request.status;
       text = request.responseText;
-      json_data = JSON.parse(text);
+      json_data = $.parseJSON(text);
     } catch(e) {}
     $.ajaxJSON(location.protocol + '//' + location.host + "/simple_response.json?rnd=" + Math.round(Math.random() * 9999999), 'GET', {}, function() {
       if(json_data && json_data.status == 'AUT') {

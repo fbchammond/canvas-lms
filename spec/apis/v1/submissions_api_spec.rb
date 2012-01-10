@@ -71,31 +71,31 @@ describe SubmissionsApiController, :type => :integration do
       @default_section = @course.default_section
       @section = factory_with_protected_attributes(@course.course_sections, :sis_source_id => 'my-section-sis-id', :name => 'section2')
       @course.enroll_user(@student1, 'StudentEnrollment', :section => @section).accept!
-    end
 
-    it "should list submissions" do
       quiz = Quiz.create!(:title => 'quiz1', :context => @course)
       quiz.did_edit!
       quiz.offer!
-      a1 = quiz.assignment
-      sub = a1.find_or_create_submission(@student1)
+      @a1 = quiz.assignment
+      sub = @a1.find_or_create_submission(@student1)
       sub.submission_type = 'online_quiz'
       sub.workflow_state = 'submitted'
       sub.save!
+    end
 
+    it "should list submissions" do
       json = api_call(:get,
-            "/api/v1/sections/#{@default_section.id}/assignments/#{a1.id}/submissions.json",
+            "/api/v1/sections/#{@default_section.id}/assignments/#{@a1.id}/submissions.json",
             { :controller => 'submissions_api', :action => 'index',
               :format => 'json', :section_id => @default_section.id.to_s,
-              :assignment_id => a1.id.to_s },
+              :assignment_id => @a1.id.to_s },
             { :include => %w(submission_history submission_comments rubric_assessment) })
       json.size.should == 0
 
       json = api_call(:get,
-            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{a1.id}/submissions.json",
+            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions.json",
             { :controller => 'submissions_api', :action => 'index',
               :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
-              :assignment_id => a1.id.to_s },
+              :assignment_id => @a1.id.to_s },
             { :include => %w(submission_history submission_comments rubric_assessment) })
       json.size.should == 1
       json.first['user_id'].should == @student1.id
@@ -116,31 +116,103 @@ describe SubmissionsApiController, :type => :integration do
     end
 
     it "should post to submissions" do
-      a1 = @course.assignments.create!({:title => 'assignment1', :grading_type => 'percent', :points_possible => 10})
-
+      @a1 = @course.assignments.create!({:title => 'assignment1', :grading_type => 'percent', :points_possible => 10})
       raw_api_call(:put,
-                      "/api/v1/sections/#{@default_section.id}/assignments/#{a1.id}/submissions/#{@student1.id}",
+                      "/api/v1/sections/#{@default_section.id}/assignments/#{@a1.id}/submissions/#{@student1.id}",
       { :controller => 'submissions_api', :action => 'update',
         :format => 'json', :section_id => @default_section.id.to_s,
-        :assignment_id => a1.id.to_s, :id => @student1.id.to_s },
+        :assignment_id => @a1.id.to_s, :id => @student1.id.to_s },
         { :submission => { :posted_grade => '75%' } })
       response.status.should == "404 Not Found"
 
       json = api_call(:put,
-                      "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{a1.id}/submissions/#{@student1.id}",
+                      "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions/#{@student1.id}",
       { :controller => 'submissions_api', :action => 'update',
         :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
-        :assignment_id => a1.id.to_s, :id => @student1.id.to_s },
+        :assignment_id => @a1.id.to_s, :id => @student1.id.to_s },
         { :submission => { :posted_grade => '75%' } })
 
-      Submission.count.should == 1
-      @submission = Submission.first
+      Submission.count.should == 2
+      @submission = Submission.last(:order => :id)
 
       json['score'].should == 7.5
       json['grade'].should == '75%'
     end
 
     it "should return submissions for a section" do
+      json = api_call(:get,
+            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions/#{@student1.id}",
+            { :controller => 'submissions_api', :action => 'show',
+              :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
+              :assignment_id => @a1.id.to_s, :id => @student1.id.to_s },
+            { :include => %w(submission_history submission_comments rubric_assessment) })
+      json['user_id'].should == @student1.id
+    end
+
+    it "should not show grades or hidden comments to students on muted assignments" do
+      @a1.mute!
+      @a1.grade_student(@student1, :grade => 5)
+
+      @a1.update_submission(@student1, :hidden => false, :comment => "visible comment")
+      @a1.update_submission(@student1, :hidden => true, :comment => "hidden comment")
+
+      @user = @student1
+      json = api_call(:get,
+            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions/#{@student1.id}",
+            { :controller => 'submissions_api', :action => 'show',
+              :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
+              :assignment_id => @a1.id.to_s, :id => @student1.id.to_s },
+            { :include => %w(submission_comments rubric_assessment) })
+
+      %w(score published_grade published_score grade).each do |a|
+        json[a].should be_nil
+      end
+
+      json["submission_comments"].size.should == 1
+      json["submission_comments"][0]["comment"].should == "visible comment"
+
+      # should still show this stuff to the teacher
+      @user = @teacher
+      json = api_call(:get,
+            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions/#{@student1.id}",
+            { :controller => 'submissions_api', :action => 'show',
+              :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
+              :assignment_id => @a1.id.to_s, :id => @student1.id.to_s },
+            { :include => %w(submission_comments rubric_assessment) })
+      json["submission_comments"].size.should == 2
+      json["grade"].should == "5"
+
+      # should show for an admin with no enrollments in the course
+      account_admin_user
+      @user.enrollments.should be_empty
+      json = api_call(:get,
+            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions/#{@student1.id}",
+            { :controller => 'submissions_api', :action => 'show',
+              :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
+              :assignment_id => @a1.id.to_s, :id => @student1.id.to_s },
+            { :include => %w(submission_comments rubric_assessment) })
+      json["submission_comments"].size.should == 2
+      json["grade"].should == "5"
+    end
+
+    it "should not find sections in other root accounts" do
+      acct = account_model(:name => 'other root')
+      @first_course = @course
+      course(:active_all => true, :account => acct)
+      @course.default_section.update_attribute('sis_source_id', 'my-section-sis-id')
+      json = api_call(:get,
+            "/api/v1/sections/sis_section_id:my-section-sis-id/assignments/#{@a1.id}/submissions",
+            { :controller => 'submissions_api', :action => 'index',
+              :format => 'json', :section_id => 'sis_section_id:my-section-sis-id',
+              :assignment_id => @a1.id.to_s })
+      json.size.should == 1 # should find the submission for @first_course
+      @course.default_section.update_attribute('sis_source_id', 'section-2')
+      raw_api_call(:get,
+            "/api/v1/sections/sis_section_id:section-2/assignments/#{@a1.id}/submissions",
+            { :controller => 'submissions_api', :action => 'index',
+              :format => 'json', :section_id => 'sis_section_id:section-2',
+              :assignment_id => @a1.id.to_s })
+      response.status.should == "404 Not Found" # rather than 401 unauthorized
     end
   end
 
@@ -166,16 +238,20 @@ describe SubmissionsApiController, :type => :integration do
 
     json['discussion_entries'].sort_by { |h| h['user_id'] }.should ==
       [{
+        'id' => se1.id,
         'message' => 'sub 1',
         'user_id' => @student.id,
         'created_at' => se1.created_at.as_json,
         'updated_at' => se1.updated_at.as_json,
+        'user_name' => 'User',
       },
       {
+        'id' => se2.id,
         'message' => 'student 1',
         'user_id' => @student.id,
         'created_at' => se2.created_at.as_json,
         'updated_at' => se2.updated_at.as_json,
+        'user_name' => 'User',
       }].sort_by { |h| h['user_id'] }
 
     # don't include discussion entries if response_fields limits the response
@@ -223,14 +299,18 @@ describe SubmissionsApiController, :type => :integration do
 
     json['discussion_entries'].sort_by { |h| h['user_id'] }.should ==
       [{
+        'id' => se1.id,
         'message' => 'sub 1',
         'user_id' => @student.id,
+        'user_name' => 'User',
         'created_at' => se1.created_at.as_json,
         'updated_at' => se1.updated_at.as_json,
       },
       {
+        'id' => se2.id,
         'message' => 'student 1',
         'user_id' => @student.id,
+        'user_name' => 'User',
         'created_at' => se2.created_at.as_json,
         'updated_at' => se2.updated_at.as_json,
       }].sort_by { |h| h['user_id'] }
@@ -410,7 +490,7 @@ describe SubmissionsApiController, :type => :integration do
         "attachments" =>
          [
            { "content-type" => "application/loser",
-             "url" => "http://www.example.com/files/#{sub1.attachments.first.id}/download?verifier=#{sub1.attachments.first.uuid}",
+             "url" => "http://www.example.com/files/#{sub1.attachments.first.id}/download?download_frd=1&verifier=#{sub1.attachments.first.uuid}",
              "filename" => "unknown.loser",
              "display_name" => "unknown.loser" },
          ],
@@ -453,7 +533,7 @@ describe SubmissionsApiController, :type => :integration do
            "attachments" =>
             [
               { "content-type" => "application/loser",
-                "url" => "http://www.example.com/files/#{sub1.attachments.first.id}/download?verifier=#{sub1.attachments.first.uuid}",
+                "url" => "http://www.example.com/files/#{sub1.attachments.first.id}/download?download_frd=1&verifier=#{sub1.attachments.first.uuid}",
                 "filename" => "unknown.loser",
                 "display_name" => "unknown.loser" },
             ],
@@ -511,11 +591,11 @@ describe SubmissionsApiController, :type => :integration do
              {"content-type" => "image/png",
               "display_name" => "ss2.png",
               "filename" => "ss2.png",
-              "url" => "http://www.example.com/files/#{sub2.attachments.first.id}/download?verifier=#{sub2.attachments.first.uuid}",},
+              "url" => "http://www.example.com/files/#{sub2.attachments.first.id}/download?download_frd=1&verifier=#{sub2.attachments.first.uuid}",},
              {"content-type" => "image/png",
               "display_name" => "snapshot.png",
               "filename" => "snapshot.png",
-              "url" => "http://www.example.com/files/#{sub2.attachment.id}/download?verifier=#{sub2.attachment.uuid}",},
+              "url" => "http://www.example.com/files/#{sub2.attachment.id}/download?download_frd=1&verifier=#{sub2.attachment.uuid}",},
             ],
            "score"=>9}],
         "attempt"=>1,
@@ -527,11 +607,11 @@ describe SubmissionsApiController, :type => :integration do
           {"content-type" => "image/png",
            "display_name" => "ss2.png",
            "filename" => "ss2.png",
-           "url" => "http://www.example.com/files/#{sub2.attachments.first.id}/download?verifier=#{sub2.attachments.first.uuid}",},
+           "url" => "http://www.example.com/files/#{sub2.attachments.first.id}/download?download_frd=1&verifier=#{sub2.attachments.first.uuid}",},
           {"content-type" => "image/png",
            "display_name" => "snapshot.png",
            "filename" => "snapshot.png",
-           "url" => "http://www.example.com/files/#{sub2.attachment.id}/download?verifier=#{sub2.attachment.uuid}",},
+           "url" => "http://www.example.com/files/#{sub2.attachment.id}/download?download_frd=1&verifier=#{sub2.attachment.uuid}",},
          ],
         "submission_comments"=>[],
         "score"=>9,
@@ -1201,6 +1281,141 @@ describe SubmissionsApiController, :type => :integration do
     json['submission_comments'].first['comment'].should == "This works"
     json['submission_comments'].last['comment'].should == "10/12 ain't bad"
     @submission.user_id.should == student.id
+  end
+
+  it "should not allow accessing other sections when limited" do
+    course_with_teacher(:active_all => true)
+    @enrollment.update_attribute(:limit_privileges_to_course_section, true)
+    @teacher = @user
+    s1 = submission_model(:course => @course)
+    section2 = @course.course_sections.create(:name => "another section")
+    s2 = submission_model(:course => @course, :username => 'otherstudent@example.com', :section => section2, :assignment => @assignment)
+    @user = @teacher
+
+    json = api_call(:get,
+          "/api/v1/courses/#{@course.id}/assignments/#{@assignment.id}/submissions",
+          { :controller => 'submissions_api', :action => 'index',
+            :format => 'json', :course_id => @course.id.to_s,
+            :assignment_id => @assignment.id.to_s })
+    json.map { |u| u['user_id'] }.should == [s1.user_id]
+
+    # try querying the other section directly
+    json = api_call(:get,
+          "/api/v1/sections/#{section2.id}/assignments/#{@assignment.id}/submissions",
+          { :controller => 'submissions_api', :action => 'index',
+            :format => 'json', :section_id => section2.id.to_s,
+            :assignment_id => @assignment.id.to_s })
+    json.size.should == 0
+
+    raw_api_call(:get,
+          "/api/v1/courses/#{@course.id}/assignments/#{@assignment.id}/submissions/#{s2.user_id}",
+          { :controller => 'submissions_api', :action => 'show',
+            :format => 'json', :course_id => @course.id.to_s,
+            :assignment_id => @assignment.id.to_s, :id => s2.user_id.to_s })
+    response.status.should == "404 Not Found"
+
+    # try querying the other section directly
+    raw_api_call(:get,
+          "/api/v1/sections/#{section2.id}/assignments/#{@assignment.id}/submissions/#{s2.user_id}",
+          { :controller => 'submissions_api', :action => 'show',
+            :format => 'json', :section_id => section2.id.to_s,
+            :assignment_id => @assignment.id.to_s, :id => s2.user_id.to_s })
+    response.status.should == "404 Not Found"
+
+    json = api_call(:get,
+          "/api/v1/courses/#{@course.id}/students/submissions",
+          { :controller => 'submissions_api', :action => 'for_students',
+            :format => 'json', :course_id => @course.id.to_s },
+          { :student_ids => [s1.user_id, s2.user_id], :grouped => 1 })
+    json.map { |u| u['user_id'] }.should == [s1.user_id]
+
+    # try querying the other section directly
+    json = api_call(:get,
+          "/api/v1/sections/#{section2.id}/students/submissions",
+          { :controller => 'submissions_api', :action => 'for_students',
+            :format => 'json', :section_id => section2.id.to_s },
+          { :student_ids => [s1.user_id, s2.user_id], :grouped => 1 })
+    json.size.should == 0
+
+    # grade the s1 submission, succeeds because the section is the same
+    json = api_call(:put,
+          "/api/v1/courses/#{@course.id}/assignments/#{@assignment.id}/submissions/#{s1.user_id}",
+          { :controller => 'submissions_api', :action => 'update',
+            :format => 'json', :course_id => @course.id.to_s,
+            :assignment_id => @assignment.id.to_s, :id => s1.user_id.to_s },
+          { :submission => { :posted_grade => '10' } })
+    @submission = @assignment.submission_for_student(s1.user)
+    @submission.should be_present
+    @submission.grade.should == '10'
+
+    # grading s2 will fail because the teacher can't manipulate this student's section
+    raw_api_call(:put,
+          "/api/v1/courses/#{@course.id}/assignments/#{@assignment.id}/submissions/#{s2.user_id}",
+          { :controller => 'submissions_api', :action => 'update',
+            :format => 'json', :course_id => @course.id.to_s,
+            :assignment_id => @assignment.id.to_s, :id => s2.user_id.to_s },
+          { :submission => { :posted_grade => '10' } })
+    response.status.should == "404 Not Found"
+
+    # try querying the other section directly
+    raw_api_call(:put,
+          "/api/v1/sections/#{section2.id}/assignments/#{@assignment.id}/submissions/#{s2.user_id}",
+          { :controller => 'submissions_api', :action => 'update',
+            :format => 'json', :section_id => section2.id.to_s,
+            :assignment_id => @assignment.id.to_s, :id => s2.user_id.to_s },
+          { :submission => { :posted_grade => '10' } })
+    response.status.should == "404 Not Found"
+  end
+
+  context 'map_user_ids' do
+    before do
+      @controller = SubmissionsApiController.new
+      @controller.instance_variable_set :@domain_root_account, Account.default
+    end
+
+    it 'should map an empty list' do
+      @controller.map_user_ids([]).should == []
+    end
+
+    it 'should map a list of AR ids' do
+      @controller.map_user_ids([1, 2, '3', '4']).sort.should == [1, 2, 3, 4]
+    end
+
+    it "should bail on ids it can't figure out" do
+      @controller.map_user_ids(["nonexistentcolumn:5"]).should == []
+    end
+
+    it "should filter out sis ids that don't exist, but not filter out AR ids" do
+      @controller.map_user_ids(["sis_user_id:1", "2"]).should == [2]
+    end
+
+    it "should find sis ids that exist" do
+      user_with_pseudonym
+      @pseudonym.sis_user_id = "sisuser1"
+      @pseudonym.save!
+      @user1 = @user
+      user_with_pseudonym :username => "sisuser2@example.com"
+      @user2 = @user
+      user_with_pseudonym :username => "sisuser3@example.com"
+      @user3 = @user
+      @controller.map_user_ids(["sis_user_id:sisuser1", "sis_login_id:sisuser2@example.com",
+        "hex:sis_login_id:7369737573657233406578616d706c652e636f6d", "sis_user_id:sisuser4",
+        "5123"]).sort.should == [
+        @user1.id, @user2.id, @user3.id, 5123].sort
+    end
+
+    it "should not find sis ids in other accounts" do
+      account1 = account_model
+      account2 = account_model
+      @controller.instance_variable_set :@domain_root_account, account1
+      user1 = user_with_pseudonym :username => "sisuser1@example.com", :account => account1
+      user2 = user_with_pseudonym :username => "sisuser2@example.com", :account => account2
+      user3 = user_with_pseudonym :username => "sisuser3@example.com", :account => account1
+      user4 = user_with_pseudonym :username => "sisuser3@example.com", :account => account2
+      user5 = user :account => account1
+      user6 = user :account => account2
+      @controller.map_user_ids(["sis_login_id:sisuser1@example.com", "sis_login_id:sisuser2@example.com", "sis_login_id:sisuser3@example.com", user5.id, user6.id]).sort.should == [user1.id, user3.id, user5.id, user6.id].sort
+    end
   end
 
 end

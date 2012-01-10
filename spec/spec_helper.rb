@@ -23,6 +23,7 @@ require 'spec'
 require 'spec/rails'
 require 'webrat'
 require 'mocha'
+require File.dirname(__FILE__) + '/mocha_extensions'
 
 Dir.glob("#{File.dirname(__FILE__).gsub(/\\/, "/")}/factories/*.rb").each { |file| require file }
 
@@ -44,6 +45,11 @@ def truncate_table(model)
   case model.connection.adapter_name
   when "SQLite"
     model.delete_all
+    begin
+      model.connection.execute("delete from sqlite_sequence where name='#{model.connection.quote_table_name(model.table_name)}';")
+      model.connection.execute("insert into sqlite_sequence (name, seq) values ('#{model.connection.quote_table_name(model.table_name)}', #{rand(100)});")
+    rescue
+    end
   else
     model.connection.execute("TRUNCATE TABLE #{model.connection.quote_table_name(model.table_name)}")
   end
@@ -71,16 +77,37 @@ Spec::Runner.configure do |config|
   config.use_transactional_fixtures = true
   config.use_instantiated_fixtures  = false
   config.fixture_path = RAILS_ROOT + '/spec/fixtures/'
-  config.global_fixtures = :plugin_settings
   config.mock_with :mocha
 
-  config.include Webrat::Matchers, :type => :views 
+  config.include Webrat::Matchers, :type => :views
 
   config.before :each do
     Time.zone = 'UTC'
     Account.default.update_attribute(:default_time_zone, 'UTC')
     Setting.reset_cache!
+    HostUrl.reset_cache!
+    ActiveRecord::Base.reset_any_instantiation!
   end
+
+  # flush redis before the first spec, and before each spec that comes after
+  # one that used redis
+  class << Canvas
+    attr_accessor :redis_used
+    def redis_with_track_usage(*a, &b)
+      self.redis_used = true
+      redis_without_track_usage(*a, &b)
+    end
+    alias_method_chain :redis, :track_usage
+    Canvas.redis_used = true
+  end
+  config.before :each do
+    if Canvas.redis_enabled? && Canvas.redis_used
+      Canvas.redis.flushdb
+    end
+    Canvas.redis_used = false
+  end
+
+  def use_remote_services; ENV['ACTUALLY_TALK_TO_REMOTE_SERVICES'].to_i > 0; end
 
   def account_with_cas(opts={})
     @account = opts[:account]
@@ -128,7 +155,7 @@ Spec::Runner.configure do |config|
   end
 
   def account_admin_user(opts={})
-    user(opts)
+    @user = opts[:user] || user(opts)
     @admin = @user
     @user.account_users.create(:account => opts[:account] || Account.default, :membership_type => opts[:membership_type] || 'AccountAdmin')
     @user
@@ -144,22 +171,64 @@ Spec::Runner.configure do |config|
   def user(opts={})
     @user = User.create!(:name => opts[:name])
     @user.register! if opts[:active_user] || opts[:active_all]
+    @user.workflow_state = opts[:user_state] if opts[:user_state]
     @user
   end
 
   def user_with_pseudonym(opts={})
     user(opts) unless opts[:user]
     user = opts[:user] || @user
+    @pseudonym = pseudonym(user, opts)
+    user
+  end
+
+  def communication_channel(user, opts={})
     username = opts[:username] || "nobody@example.com"
-    password = opts[:password] || "asdfasdf"
-    password = nil if password == :autogenerate
-    @pseudonym = user.pseudonyms.create!(:account => opts[:account] || Account.default, :unique_id => username, :password => password, :password_confirmation => password)
-    @cc = @pseudonym.communication_channel = user.communication_channels.create!(:path_type => 'email', :path => username) do |cc|
+    @cc = user.communication_channels.create!(:path_type => 'email', :path => username) do |cc|
       cc.workflow_state = 'active' if opts[:active_cc] || opts[:active_all]
       cc.workflow_state = opts[:cc_state] if opts[:cc_state]
     end
     @cc.should_not be_nil
     @cc.should_not be_new_record
+    @cc
+  end
+
+  def user_with_communication_channel(opts={})
+    user(opts) unless opts[:user]
+    user = opts[:user] || @user
+    @cc = communication_channel(user, opts)
+    user
+  end
+
+  def pseudonym(user, opts={})
+    username = opts[:username] || "nobody@example.com"
+    password = opts[:password] || "asdfasdf"
+    password = nil if password == :autogenerate
+    @pseudonym = user.pseudonyms.create!(:account => opts[:account] || Account.default, :unique_id => username, :password => password, :password_confirmation => password)
+    @pseudonym.communication_channel = communication_channel(user, opts)
+    @pseudonym
+  end
+
+  def managed_pseudonym(user, opts={})
+    other_account = opts[:account] || account_with_saml
+    if other_account.password_authentication?
+      config = AccountAuthorizationConfig.new
+      config.auth_type = "saml"
+      config.log_in_url = opts[:saml_log_in_url] if opts[:saml_log_in_url]
+      other_account.account_authorization_configs << config
+    end
+    opts[:account] = other_account
+    pseudonym(user, opts)
+    @pseudonym.sis_user_id = opts[:sis_user_id] || "U001"
+    @pseudonym.save!
+    @pseudonym.should be_managed_password
+    @pseudonym
+  end
+
+  def user_with_managed_pseudonym(opts={})
+    user(opts) unless opts[:user]
+    user = opts[:user] || @user
+    managed_pseudonym(user, opts)
     user
   end
 
@@ -170,7 +239,7 @@ Spec::Runner.configure do |config|
 
   def course_with_student_logged_in(opts={})
     course_with_student(opts)
-    user_session(@user)    
+    user_session(@user)
   end
 
   def student_in_course(opts={})
@@ -187,7 +256,7 @@ Spec::Runner.configure do |config|
   end
 
   def course_with_teacher(opts={})
-    course(opts)
+    @course = opts[:course] || course(opts)
     @user = opts[:user] || user(opts)
     @teacher = @user
     @enrollment = @course.enroll_teacher(@user)
@@ -230,6 +299,7 @@ Spec::Runner.configure do |config|
     session = mock()
     session.stubs(:record).returns(pseudonym)
     session.stubs(:session_credentials).returns(nil)
+    session.stubs(:used_basic_auth?).returns(false)
     PseudonymSession.stubs(:find).returns(session)
   end
 
@@ -241,11 +311,29 @@ Spec::Runner.configure do |config|
     path.should eql("/?login_success=1")
   end
 
+  # The block should return the submission_data. A block is used so
+  # that we have access to the @questions variable that is created
+  # in this method
+  def quiz_with_graded_submission(questions, &block)
+    course_with_student(:active_all => true)
+    @assignment = @course.assignments.create(:title => "Test Assignment")
+    @assignment.workflow_state = "available"
+    @assignment.submission_types = "online_quiz"
+    @assignment.save
+    @quiz = Quiz.find_by_assignment_id(@assignment.id)
+    @questions = questions.map { |q| @quiz.quiz_questions.create!(q) }
+    @quiz.generate_quiz_data
+    @quiz_submission = @quiz.generate_submission(@user)
+    @quiz_submission.mark_completed
+    @quiz_submission.submission_data = yield if block_given?
+    @quiz_submission.grade_submission
+  end
+
   def outcome_with_rubric(opts={})
     @outcome_group ||= LearningOutcomeGroup.default_for(@course)
     @outcome = @course.created_learning_outcomes.create!(:description => '<p>This is <b>awesome</b>.</p>', :short_description => 'new outcome')
     @outcome_group.add_item(@outcome)
-    @outcome_group.save! 
+    @outcome_group.save!
 
     @rubric = Rubric.new(:title => 'My Rubric', :context => @course)
     @rubric.data = [
@@ -345,13 +433,13 @@ Spec::Runner.configure do |config|
     response.should be_redirect
     flash[:notice].should eql("You must be logged in to access this page")
   end
-  
+
   def default_uploaded_data
     require 'action_controller'
     require 'action_controller/test_process.rb'
     ActionController::TestUploadedFile.new(File.expand_path(File.dirname(__FILE__) + '/fixtures/scribd_docs/doc.doc'), 'application/msword', true)
   end
-  
+
   def valid_gradebook_csv_content
     File.read(File.expand_path(File.join(File.dirname(__FILE__), %w(fixtures default_gradebook.csv))))
   end
@@ -374,7 +462,7 @@ Spec::Runner.configure do |config|
 
   def process_csv_data(*lines_or_opts)
     account_model unless @account
-  
+
     lines = lines_or_opts.reject{|thing| thing.is_a? Hash}
     opts = lines_or_opts.select{|thing| thing.is_a? Hash}.inject({:allow_printing => false}, :merge)
 
@@ -383,14 +471,14 @@ Spec::Runner.configure do |config|
     tmp.close!
     File.open(path, "w+") { |f| f.puts lines.flatten.join "\n" }
     opts[:files] = [path]
-    
+
     importer = SIS::CSV::Import.process(@account, opts)
-    
+
     File.unlink path
-    
+
     importer
   end
-  
+
   def process_csv_data_cleanly(*lines_or_opts)
     importer = process_csv_data(*lines_or_opts)
     importer.errors.should == []
@@ -419,30 +507,32 @@ Spec::Runner.configure do |config|
     ActionController::Base.class_eval { alias_method :allow_forgery_protection, :_old_protect }
   end
 
-  def start_test_http_server
+  def start_test_http_server(requests=1)
     post_lines = []
     server = TCPServer.open(0)
     port = server.addr[1]
     post_lines = []
     server_thread = Thread.new(server, post_lines) do |server, post_lines|
-      client = server.accept
-      content_length = 0
-      loop do
-        line = client.readline
-        post_lines << line.strip unless line =~ /\AHost: localhost:|\AContent-Length: /
-        content_length = line.split(":")[1].to_i if line.strip =~ /\AContent-Length: [0-9]+\z/
-        if line.strip.blank?
-          post_lines << client.read(content_length)
-          break
+      requests.times do
+        client = server.accept
+        content_length = 0
+        loop do
+          line = client.readline
+          post_lines << line.strip unless line =~ /\AHost: localhost:|\AContent-Length: /
+          content_length = line.split(":")[1].to_i if line.strip =~ /\AContent-Length: [0-9]+\z/
+          if line.strip.blank?
+            post_lines << client.read(content_length)
+            break
+          end
         end
+        client.puts("HTTP/1.1 200 OK\nContent-Length: 0\n\n")
+        client.close
       end
-      client.puts("HTTP/1.1 200 OK\nContent-Length: 0\n\n")
-      client.close
       server.close
     end
     return server, server_thread, post_lines
   end
- 
+
   def stub_kaltura
     # trick kaltura into being activated
     Kaltura::ClientV3.stubs(:config).returns({
@@ -468,5 +558,9 @@ Spec::Runner.configure do |config|
     attachment_obj_with_context(obj, opts)
     @attachment.save!
     @attachment
+  end
+
+  def json_parse(json_string = response.body)
+    JSON.parse(json_string.sub(%r{^while\(1\);}, ''))
   end
 end

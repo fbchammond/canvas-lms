@@ -38,9 +38,6 @@ class DiscussionTopicsController < ApplicationController
   # @response_field id The unique identifier for the discussion topic.
   # @response_field last_reply_at The datetime for when the last reply was in the topic
   # @response_field message The HTML content of the topic 
-  # @response_field permissions A hash of permissions for the current user. If a key is not present then the permission is false. 
-  #   Example:
-  #           {"delete"=>true,"reply"=>true,"read"=>true,"attach"=>true,"create"=>true,"update"=>true}
   # @response_field podcast_url If the topic is a podcast topic this is the feed url for the current user
   # @response_field posted_at The datetime the topic was posted. If it is null it hasn't been posted yet. (see delayed_post_at)
   # @response_field require_initial_post If true then a user may not respond to other replies until that user has made an initial reply
@@ -48,6 +45,7 @@ class DiscussionTopicsController < ApplicationController
   # @response_field title The title of the topic
   # @response_field topic_children An array of topic_ids for the group discussions the user is a part of
   # @response_field user_name The username of the creator
+  # @response_field url The URL to the discussion topic in canvas
   #
   # @example_response
   #     [
@@ -62,7 +60,6 @@ class DiscussionTopicsController < ApplicationController
   #        "assignment_id":null,
   #        "delayed_post_at":null,
   #        "user_name":"User Name",
-  #        "permissions":{"reply":true,"read":true},
   #        "topic_children":[],
   #        "root_topic_id":null,
   #        "podcast_url":"/feeds/topics/1/enrollment_1XAcepje4u228rt4mi7Z1oFbRpn3RAkTzuXIGOPe.rss",
@@ -86,10 +83,9 @@ class DiscussionTopicsController < ApplicationController
       log_asset_access("topics:#{@context.asset_string}", "topics", 'other')
       respond_to do |format|
         format.html
-        format.xml  { render :xml => @topics.to_xml }
         format.json do
           if api_request?
-            render :json => discussion_topic_api_json(@topics, @context)
+            render :json => discussion_topics_api_json(@topics, @context, @current_user, session)
           else
             render :json => @topics.to_json(:methods => [:user_name, :discussion_subentry_count], :permissions => {:user => @current_user, :session => session })
           end
@@ -152,13 +148,15 @@ class DiscussionTopicsController < ApplicationController
           @entries = [@group_entry]
         end
       end
-      if @topic.require_initial_post || (@topic.root_topic && @topic.root_topic.require_initial_post)
-        user_ids = []
-        user_ids << @current_user.id if @current_user
-        user_ids << @context_enrollment.associated_user_id if @context_enrollment && @context_enrollment.respond_to?(:associated_user_id) && @context_enrollment.associated_user_id
-        unless @entries.detect{|e| user_ids.include?(e.user_id) } || @topic.grants_right?(@current_user, session, :update)
+      
+      if @topic.require_initial_post?
+        # check if the user, or the user being observed can see the posts
+        if @context_enrollment && @context_enrollment.respond_to?(:associated_user) && @context_enrollment.associated_user
+          @initial_post_required = true if !@topic.user_can_see_posts?(@context_enrollment.associated_user)
+        elsif !@topic.user_can_see_posts?(@current_user, session)
           @initial_post_required = true
         end
+        @entries = [] if @initial_post_required
       end
 
       log_asset_access(@topic, 'topics', 'topics')
@@ -170,7 +168,6 @@ class DiscussionTopicsController < ApplicationController
           format.html { redirect_to named_context_url(@topics[0].context, :context_discussion_topics_url, :root_discussion_topic_id => @topic.id) }
         else
           format.html { render :action => "show" }
-          format.xml  { render :xml => @topic.to_xml }
           format.json  { render :json => @entries.to_json(:methods => :user_name, :permissions => {:user => @current_user, :session => session}) }
         end
       end
@@ -250,12 +247,10 @@ class DiscussionTopicsController < ApplicationController
           end
           flash[:notice] = t :topic_created_notice, 'Topic was successfully created.'
           format.html { redirect_to named_context_url(@context, :context_discussion_topic_url, @topic) }
-          format.xml  { head :created, :location => named_context_url(@context, :context_discussion_topic_url, @topic) }
           format.json  { render :json => @topic.to_json(:include => [:assignment,:attachment], :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :created }
           format.text  { render :json => @topic.to_json(:include => [:assignment,:attachment], :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :created }
         else
           format.html { render :action => "new" }
-          format.xml  { render :xml => @topic.errors.to_xml }
           format.json { render :json => @topic.errors.to_json, :status => :bad_request }
           format.text { render :json => @topic.errors.to_json, :status => :bad_request }
         end
@@ -306,12 +301,10 @@ class DiscussionTopicsController < ApplicationController
           end
           flash[:notice] = t :topic_updated_notice, 'Topic was successfully updated.'
           format.html { redirect_to named_context_url(@context, :context_discussion_topic_url, @topic) }
-          format.xml  { head :ok }
           format.json  { render :json => @topic.to_json(:include => [:assignment, :attachment], :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :ok }
           format.text  { render :json => @topic.to_json(:include => [:assignment, :attachment], :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :ok }
         else
           format.html { render :action => "edit" }
-          format.xml  { render :xml => @topic.errors.to_xml }
           format.json { render :json => @topic.errors.to_json, :status => :bad_request }
           format.text { render :json => @topic.errors.to_json, :status => :bad_request }
         end
@@ -325,7 +318,6 @@ class DiscussionTopicsController < ApplicationController
       @topic.destroy
       respond_to do |format|
         format.html { redirect_to named_context_url(@context, :context_discussion_topics_url) }
-        format.xml  { head :ok }
         format.json  { render :json => @topic.to_json(:include => {:user => {:only => :name} } ), :status => :ok }
       end
     end

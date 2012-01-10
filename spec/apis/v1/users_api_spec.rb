@@ -123,11 +123,112 @@ describe "Users API", :type => :integration do
     json.each { |j| j['url'].should == "http://www.example.com/courses/1" }
   end
 
+  it "shouldn't find users in other root accounts by sis id" do
+    acct = account_model(:name => 'other root')
+    acct.add_user(@user)
+    @me = @user
+    course_with_student(:account => acct, :active_all => true, :user => user_with_pseudonym(:name => 's2', :username => 'other@example.com'))
+    @other_user = @user
+    @other_user.pseudonym.update_attribute('sis_user_id', 'other-sis')
+    @other_user.pseudonym.update_attribute('account_id', acct.id)
+    @user = @me
+    raw_api_call(:get, "/api/v1/users/sis_user_id:other-sis/page_views",
+                       { :controller => "page_views", :action => "index", :user_id => 'sis_user_id:other-sis', :format => 'json' })
+    response.status.should == "404 Not Found"
+  end
+
   it "should allow id of 'self'" do
     page_view_model(:user => @admin)
     json = api_call(:get, "/api/v1/users/self/page_views?per_page=1000",
                        { :controller => "page_views", :action => "index", :user_id => 'self', :format => 'json', :per_page => '1000' })
     json.size.should == 1
+  end
+
+  describe "user account creation" do
+    it "should allow site admins to create users" do
+      json = api_call(:post, "/api/v1/accounts/#{@admin.account.id}/users",
+        { :controller => 'users', :action => 'create', :format => 'json', :account_id => @admin.account.id.to_s },
+        {
+          :user => {
+            :name          => "Test User",
+            :short_name    => "Test",
+            :sortable_name => "User, T.",
+            :time_zone     => "Mountain Time (United States & Canada)"
+          },
+          :pseudonym => {
+            :unique_id         => "test@example.com",
+            :password          => "password123",
+            :sis_user_id       => "12345",
+            :send_confirmation => 0
+          }
+        }
+      )
+      users = User.find_all_by_name "Test User"
+      users.length.should eql 1
+      user = users.first
+      user.name.should eql "Test User"
+      user.short_name.should eql "Test"
+      user.sortable_name.should eql "User, T."
+      user.time_zone.should eql "Mountain Time (United States & Canada)"
+
+      user.pseudonyms.count.should eql 1
+      pseudonym = user.pseudonyms.first
+      pseudonym.unique_id.should eql "test@example.com"
+      pseudonym.sis_user_id.should eql "12345"
+
+      JSON.parse(response.body).should == {
+        "name"          => "Test User",
+        "short_name"    => "Test",
+        "sortable_name" => "User, T.",
+        "id"            => user.id,
+        "sis_user_id"   => "12345",
+        "login_id"      => "test@example.com",
+        "sis_login_id"  => "test@example.com"
+      }
+    end
+
+    it "should not allow non-admins to create users" do
+      @user = @student
+      raw_api_call(:post, "/api/v1/accounts/#{@admin.account.id}/users",
+        { :controller => 'users', :action => 'create', :format => 'json', :account_id => @admin.account.id.to_s },
+        {
+          :user      => { :name => "Test User" },
+          :pseudonym => { :unique_id => "test@example.com", :password => "password123" }
+        }
+      )
+      response.status.should eql "403 Forbidden"
+    end
+
+    it "should send a confirmation if send_confirmation is set to 1" do
+      Pseudonym.any_instance.expects(:send_registration_notification!)
+      api_call(:post, "/api/v1/accounts/#{@admin.account.id}/users",
+        { :controller => 'users', :action => 'create', :format => 'json', :account_id => @admin.account.id.to_s },
+        {
+          :user => {
+            :name => "Test User"
+          },
+          :pseudonym => {
+            :unique_id         => "test@example.com",
+            :password          => "password123",
+            :send_confirmation => 1
+          }
+        }
+      )
+    end
+
+    it "should return a 400 error if the request doesn't include a unique id" do
+      raw_api_call(:post, "/api/v1/accounts/#{@admin.account.id}/users",
+        { :controller => 'users', :action => 'create', :format => 'json', :account_id => @admin.account.id.to_s },
+        {
+          :user      => { :name => "Test User" },
+          :pseudonym => { :password => "password123" }
+        }
+      )
+      response.status.should eql "400 Bad Request"
+      errors = JSON.parse(response.body)['errors']
+      errors.length.should eql 1
+      errors['unique_id'].length.should be > 0
+    end
   end
 end
 

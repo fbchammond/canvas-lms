@@ -17,14 +17,15 @@
 #
 
 module Api::V1::User
-  JSON_FIELDS = {
-    :include_root => false,
+  include Api::V1::Json
+
+  API_USER_JSON_OPTS = {
     :only => %w(id name),
     :methods => %w(sortable_name short_name)
   }
 
-  def user_json(user)
-    user.as_json(JSON_FIELDS).tap do |json|
+  def user_json(user, current_user, session)
+    api_json(user, current_user, session, API_USER_JSON_OPTS).tap do |json|
       if user_json_is_admin? && pseudonym = user.pseudonym
         # the sis fields on pseudonym are poorly named -- sis_user_id is
         # the id in the SIS import data, where on every other table
@@ -45,7 +46,7 @@ module Api::V1::User
         permissions_context = permissions_account = @domain_root_account
       else
         permissions_context = @context
-        permissions_account = @context.account
+        permissions_account = @context.is_a?(Account) ? @context : @context.account
       end
       @user_json_is_admin = !!(
         permissions_context.grants_right?(@current_user, :manage_students) ||

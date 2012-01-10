@@ -20,92 +20,137 @@ module Api
   # find id in collection, by either id or sis_*_id
   # if the collection is over the users table, `self` is replaced by @current_user.id
   def api_find(collection, id)
-    if collection.table_name == User.table_name && id == 'self' && @current_user
-      id = @current_user.id
+    api_find_all(collection, [id], 1).first || raise(ActiveRecord::RecordNotFound, "Couldn't find #{collection.name} with API id '#{id}'")
+  end
+
+  def api_find_all(collection, ids, limit=nil)
+    if collection.table_name == User.table_name && @current_user
+      ids = ids.map{|id| id == 'self' ? @current_user.id : id }
     end
 
-    sis_column, sis_id, sis_find_params = Api.sis_find_params_for_collection(collection, id)
-    if sis_id
-      collection.first(sis_find_params) || raise(ActiveRecord::RecordNotFound, "Couldn't find #{collection.name} with #{sis_column}=#{sis_id}")
-    else
-      collection.find(id)
-    end
+    find_params = Api.sis_find_params_for_collection(collection, ids, @domain_root_account)
+    return [] if find_params[:conditions] == ["?", false]
+    find_params[:limit] = limit unless limit.nil?
+    return collection.all(find_params)
   end
 
   # map a list of ids and/or sis ids to plain ids.
   # sis ids that can't be found in the db won't appear in the result, however
   # AR object ids aren't verified to exist in the db so they'll still be
   # returned in the result.
-  def self.map_ids(ids, collection)
-    result = []
-    sis_find = {}
-    ids.each do |id|
-      sis_column, sis_id, sis_find = Api.sis_find_params_for_collection(collection, id, sis_find)
-      unless sis_id
-        result << id
-      end
-    end
-    unless sis_find.blank?
-      result.concat collection.all(sis_find.merge(:select => :id)).map(&:id)
+  def self.map_ids(ids, collection, root_account)
+    sis_mapping = sis_find_sis_mapping_for_collection(collection)
+    columns = sis_parse_ids(ids, sis_mapping[:lookups])
+    result = columns.delete(sis_mapping[:lookups]["id"]) || []
+    unless columns.empty?
+      find_params = sis_make_params_for_sis_mapping_and_columns(columns, sis_mapping, root_account)
+      find_params[:select] = :id
+      result.concat collection.all(find_params).map(&:id)
+      result.uniq!
     end
     result
   end
 
-  VALID_SIS_COLUMNS = {
+  SIS_MAPPINGS = {
     'courses' =>
-      { 'sis_course_id' => 'sis_source_id' },
+      { :lookups => { 'sis_course_id' => 'sis_source_id', 'id' => 'id' },
+        :is_not_scoped_to_account => ['id'].to_set,
+        :scope => 'root_account_id' },
     'enrollment_terms' =>
-      { 'sis_term_id' => 'sis_source_id' },
+      { :lookups => { 'sis_term_id' => 'sis_source_id', 'id' => 'id' },
+        :is_not_scoped_to_account => ['id'].to_set,
+        :scope => 'root_account_id' },
     'users' =>
-      { 'sis_user_id' => 'pseudonyms.sis_user_id', 'sis_login_id' => 'pseudonyms.unique_id' },
+      { :lookups => { 'sis_user_id' => 'pseudonyms.sis_user_id', 'sis_login_id' => 'pseudonyms.unique_id', 'id' => 'users.id' },
+        :is_not_scoped_to_account => ['users.id'].to_set,
+        :scope => 'pseudonyms.account_id',
+        :joins => [:pseudonym] },
     'accounts' =>
-      { 'sis_account_id' => 'sis_source_id' },
+      { :lookups => { 'sis_account_id' => 'sis_source_id', 'id' => 'id' },
+        :is_not_scoped_to_account => ['id'].to_set,
+        :scope => 'root_account_id' },
     'course_sections' =>
-      { 'sis_section_id' => 'sis_source_id' },
-  }
+      { :lookups => { 'sis_section_id' => 'sis_source_id', 'id' => 'id' },
+        :is_not_scoped_to_account => ['id'].to_set,
+        :scope => 'root_account_id' },
+  }.freeze
 
-  def self.sis_find_params_for_collection(collection, id, sis_find_params = nil)
-    case id
-    when Numeric
-      return nil, nil, sis_find_params
+  def self.sis_parse_id(id, lookups)
+    # returns column_name, column_value
+    return lookups['id'], id if id.is_a?(Numeric)
+    id = id.to_s.strip
+    if id =~ %r{\Ahex:(sis_[\w_]+):(([0-9A-Fa-f]{2})+)\z}
+      sis_column = $1
+      sis_id = [$2].pack('H*')
+    elsif id =~ %r{\A(sis_[\w_]+):(.+)\z}
+      sis_column = $1
+      sis_id = $2
+    elsif id =~ %r{\A\d+\z}
+      return lookups['id'], id.to_i
     else
-      id = id.to_s
-      if id =~ %r{^hex:(sis_[\w_]+):(.+)$}
-        sis_column = $1
-        sis_id = [$2].pack('H*')
-      elsif id =~ %r{^(sis_[\w_]+):(.+)$}
-        sis_column = $1
-        sis_id = $2
-      else
-        return nil, nil, sis_find_params
-      end
-
-      valid_sis_columns = VALID_SIS_COLUMNS[collection.table_name] or
-        raise(ArgumentError, "need to add support for table name: #{collection.table_name}")
-
-      sis_find_params ||= {}
-
-      if column = valid_sis_columns[sis_column]
-        sis_find_params[:conditions] ||= {}
-        sis_find_params[:conditions][column] ||= []
-        sis_find_params[:conditions][column] << sis_id
-        # the "user" sis columns are actually on the pseudonym
-        if collection.table_name == User.table_name
-          sis_find_params[:include] ||= []
-          sis_find_params[:include] << :pseudonym
-        end
-        return sis_column, sis_id, sis_find_params
-      else
-        return nil, nil, sis_find_params
-      end
+      return nil, nil
     end
+
+    column = lookups[sis_column]
+    return nil, nil unless column
+    return column, sis_id
+  end
+
+  def self.sis_parse_ids(ids, lookups)
+    # returns {column_name => [column_value,...].uniq, ...}
+    columns = {}
+    ids.compact.each do |id|
+      column, sis_id = sis_parse_id(id, lookups)
+      next unless column && sis_id
+      columns[column] ||= []
+      columns[column] << sis_id
+    end
+    columns.keys.each { |key| columns[key].uniq! }
+    return columns
+  end
+
+  def self.sis_find_sis_mapping_for_collection(collection)
+    SIS_MAPPINGS[collection.table_name] or
+        raise(ArgumentError, "need to add support for table name: #{collection.table_name}")
+  end
+
+  def self.sis_find_params_for_collection(collection, ids, sis_root_account)
+    return sis_find_params_for_sis_mapping(sis_find_sis_mapping_for_collection(collection), ids, sis_root_account)
+  end
+
+  def self.sis_find_params_for_sis_mapping(sis_mapping, ids, sis_root_account)
+    return sis_make_params_for_sis_mapping_and_columns(sis_parse_ids(ids, sis_mapping[:lookups]), sis_mapping, sis_root_account)
+  end
+
+  def self.sis_make_params_for_sis_mapping_and_columns(columns, sis_mapping, sis_root_account)
+    raise ArgumentError, "sis_root_account required for lookups" unless sis_root_account.is_a?(Account)
+
+    args = [false]
+    query = ["?"]
+
+    columns.keys.sort.each do |column|
+      sis_ids = columns[column]
+      if (sis_mapping[:is_not_scoped_to_account] || []).include?(column)
+        query << " OR (#{column} IN ("
+      else
+        raise ArgumentError, "missing scope for collection" unless sis_mapping[:scope]
+        query << " OR (#{sis_mapping[:scope]} = #{sis_root_account.id} AND #{column} IN ("
+      end
+      query << sis_ids.map{"?"}.join(", ")
+      args.concat sis_ids
+      query << "))"
+    end
+
+    find_params = { :conditions => ([query.join] + args) }
+    find_params[:include] = sis_mapping[:joins] if sis_mapping[:joins]
+    return find_params
   end
   
   # Add [link HTTP Headers](http://www.w3.org/Protocols/9707-link-header.html) for pagination
   # The collection needs to be a will_paginate collection (or act like one)
   # a new, paginated collection will be returned
   def self.paginate(collection, controller, base_url, pagination_args = {})
-    per_page = [(controller.params[:per_page] || 10).to_i, Setting.get_cached('api_max_per_page', '50').to_i].min
+    per_page = [(controller.params[:per_page] || Setting.get_cached('api_per_page', '10')).to_i, Setting.get_cached('api_max_per_page', '50').to_i].min
     collection = collection.paginate({ :page => controller.params[:page], :per_page => per_page }.merge(pagination_args))
     return unless collection.respond_to?(:next_page)
     links = []
@@ -125,7 +170,7 @@ module Api
   end
   
   def attachment_json(attachment)
-    url = file_download_url(attachment, :verifier => attachment.uuid, :download => '1')
+    url = file_download_url(attachment, :verifier => attachment.uuid, :download => '1', :download_frd => '1')
     {
       'content-type' => attachment.content_type,
       'display_name' => attachment.display_name,
@@ -171,7 +216,7 @@ module Api
     rewriter = UserContent::HtmlRewriter.new(context, user)
     rewriter.set_handler('files') do |match|
       obj = match.obj_class.find_by_id(match.obj_id)
-      break unless obj && rewriter.user_can_view_content?(obj)
+      next unless obj && rewriter.user_can_view_content?(obj)
       file_download_url(obj.id, :verifier => obj.uuid, :download => '1')
     end
     html = rewriter.translate_content(html)

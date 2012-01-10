@@ -143,7 +143,7 @@ class User < ActiveRecord::Base
   }
   named_scope :for_course_section, lambda{|sections|
     section_ids = Array(sections).map{|s| s.is_a?(Fixnum) ? s : s.id }
-    {:conditions => "enrollments.limit_priveleges_to_course_section IS NULL OR enrollments.limit_priveleges_to_course_section != #{User.connection.quoted_true} OR enrollments.course_section_id IN (#{section_ids.join(",")})" }
+    {:conditions => "enrollments.limit_privileges_to_course_section IS NULL OR enrollments.limit_privileges_to_course_section != #{User.connection.quoted_true} OR enrollments.course_section_id IN (#{section_ids.join(",")})" }
   }
   named_scope :name_like, lambda { |name|
     { :conditions => ["(", wildcard('users.name', 'users.short_name', name), " OR exists (select 1 from pseudonyms where ", wildcard('pseudonyms.sis_user_id', 'pseudonyms.unique_id', name), " and pseudonyms.user_id = users.id and (", User.send(:sanitize_sql_array, Pseudonym.active.proxy_options[:conditions]), ")))"].join }
@@ -551,7 +551,7 @@ class User < ActiveRecord::Base
   
   def email_channel
     # It's already ordered, so find the first one, if there's one.
-    communication_channels.to_a.find{|cc| cc.path_type == 'email' }
+    communication_channels.to_a.find{|cc| cc.path_type == 'email' && cc.workflow_state != 'retired' }
   end
   
   def email
@@ -571,7 +571,7 @@ class User < ActiveRecord::Base
   def gmail_channel
     google_services = self.user_services.find_all_by_service_domain("google.com")
     addr = google_services.find{|s| s.service_user_id}.service_user_id rescue nil
-    self.communication_channels.find_by_path_and_path_type(addr, 'email')
+    self.communication_channels.email.by_path(addr).find(:first)
   end
   
   def gmail
@@ -589,7 +589,8 @@ class User < ActiveRecord::Base
     if e.is_a?(CommunicationChannel) and e.user_id == self.id
       cc = e
     else
-      cc = CommunicationChannel.find_or_create_by_path_and_user_id(e, self.id)
+      cc = self.communication_channels.find_or_create_by_path_and_path_type(e, 'email')
+      cc.user = self
     end
     cc.move_to_top
     cc.save!
@@ -657,12 +658,14 @@ class User < ActiveRecord::Base
   end
   
   alias_method :destroy!, :destroy
-  def destroy
-    self.workflow_state = 'deleted'
-    self.save
-    self.pseudonyms.each{|p| p.destroy }
-    self.communication_channels.each{|cc| cc.destroy }
-    self.enrollments.each{|e| e.destroy }
+  def destroy(even_if_managed_passwords=false)
+    ActiveRecord::Base.transaction do
+      self.workflow_state = 'deleted'
+      self.save
+      self.pseudonyms.each{|p| p.destroy(even_if_managed_passwords) }
+      self.communication_channels.each{|cc| cc.destroy }
+      self.enrollments.each{|e| e.destroy }
+    end
   end
   
   def remove_from_root_account(account)
@@ -902,7 +905,7 @@ class User < ActiveRecord::Base
   end
   
   def available_courses
-    # this list should be longer if the person has admin priveleges...
+    # this list should be longer if the person has admin privileges...
     self.courses
   end
   
@@ -911,6 +914,12 @@ class User < ActiveRecord::Base
   end
   memoize :courses_with_grades
   
+  def sis_pseudonym_for(context)
+    root_account = context.root_account || context
+    raise "could not resolve root account" unless root_account.is_a?(Account)
+    self.pseudonyms.active.find_by_account_id(root_account.id, :conditions => ["sis_user_id IS NOT NULL"])
+  end
+
   set_policy do
     given { |user| user == self }
     can :rename and can :read and can :manage and can :manage_content and can :manage_files and can :manage_calendar and can :become_user
@@ -1175,6 +1184,7 @@ class User < ActiveRecord::Base
     if context.respond_to?(:account_chain) && !context.account_chain_ids.empty?
       memberships += account_users.find_all_by_membership_type_and_account_id('AccountAdmin', context.account_chain_ids).uniq
     end
+    return ["urn:lti:sysrole:ims/lis/None"] if memberships.empty?
     memberships.map{|membership|
       case membership
       when StudentEnrollment
@@ -1457,15 +1467,40 @@ class User < ActiveRecord::Base
   end
   memoize :account
   
-  def courses_with_primary_enrollment(association = :current_and_invited_courses)
-    Rails.cache.fetch([self, 'courses_with_primary_enrollment', association].cache_key) do
+  def courses_with_primary_enrollment(association = :current_and_invited_courses, enrollment_uuid = nil)
+    res = Rails.cache.fetch([self, 'courses_with_primary_enrollment', association].cache_key) do
       send(association).distinct_on(["courses.id"],
         :select => "courses.*, enrollments.type AS primary_enrollment, #{Enrollment::TYPE_RANK_SQL} AS primary_enrollment_rank, enrollments.workflow_state AS primary_enrollment_state",
         :order => "courses.id, #{Enrollment::TYPE_RANK_SQL}, #{Enrollment::STATE_RANK_SQL}"
-      ).sort_by{ |c| [c.primary_enrollment_rank, c.name.downcase] }
+      )
+    end.dup
+    if association == :current_and_invited_courses
+      if enrollment_uuid && pending_course = Course.find(:first,
+          :select => "courses.*, enrollments.type AS primary_enrollment, #{Enrollment::TYPE_RANK_SQL} AS primary_enrollment_rank, enrollments.workflow_state AS primary_enrollment_state",
+          :joins => :enrollments, :conditions => ["enrollments.uuid=? AND enrollments.workflow_state='invited'", enrollment_uuid])
+        res << pending_course
+        res.uniq!
+      end
+      pending_enrollments = temporary_invitations
+      unless pending_enrollments.empty?
+        Enrollment.send(:preload_associations, pending_enrollments, :course)
+        res.concat(pending_enrollments.map { |e| c = e.course; c.write_attribute(:primary_enrollment, e.type); c.write_attribute(:primary_enrollment_rank, e.rank_sortable.to_s); c.write_attribute(:primary_enrollment_state, e.workflow_state); c.write_attribute(:invitation, e.uuid); c })
+        res.uniq!
+      end
     end
+    res.sort_by{ |c| [c.primary_enrollment_rank, c.name.downcase] }
   end
   memoize :courses_with_primary_enrollment
+
+  def cached_active_emails
+    Rails.cache.fetch([self, 'active_emails'].cache_key) do
+      self.communication_channels.active.email.map(&:path)
+    end
+  end
+
+  def temporary_invitations
+    cached_active_emails.map { |email| Enrollment.cached_temporary_invitations(email).dup.reject { |e| e.user_id == self.id } }.flatten
+  end
 
    # activesupport/lib/active_support/memoizable.rb from rails and
    # http://github.com/seamusabshere/cacheable/blob/master/lib/cacheable.rb from the cacheable gem
@@ -1473,14 +1508,14 @@ class User < ActiveRecord::Base
   
   # this method takes an optional {:include_enrollment_uuid => uuid}   so that you can pass it the session[:enrollment_uuid] and it will include it. 
   def cached_current_enrollments(opts={})
-    Rails.cache.fetch([self, 'current_enrollments', opts[:include_enrollment_uuid] ].cache_key) do
+    res = Rails.cache.fetch([self, 'current_enrollments', opts[:include_enrollment_uuid] ].cache_key) do
       res = self.current_and_invited_enrollments.to_a.dup
       if opts[:include_enrollment_uuid] && pending_enrollment = Enrollment.find_by_uuid_and_workflow_state(opts[:include_enrollment_uuid], "invited")
         res << pending_enrollment
         res.uniq!
       end
       res
-    end
+    end + temporary_invitations
   end
   memoize :cached_current_enrollments
   
@@ -2030,9 +2065,6 @@ class User < ActiveRecord::Base
   def set_menu_data(enrollment_uuid)
     return @menu_data if @menu_data
     coalesced_enrollments = []
-    course_name_counts = {}
-    has_completed_enrollment = false
-    favorite_courses = self.favorite_courses
 
     cached_enrollments = self.cached_current_enrollments(:include_enrollment_uuid => enrollment_uuid)
     cached_enrollments.each do |e|
@@ -2062,12 +2094,9 @@ class User < ActiveRecord::Base
         existing_enrollment_info[:sortable] = [existing_enrollment_info[:sortable] || [999,999, 999], [e.rank_sortable, e.state_sortable, 0 - e.id]].min
       else
         coalesced_enrollments << { :enrollment => e, :sortable => [e.rank_sortable, e.state_sortable, 0 - e.id], :types => [ e.readable_type ] }
-        course_name_counts[e.course.name] ||= 0
-        course_name_counts[e.course.name] += 1
       end
     end
     coalesced_enrollments = coalesced_enrollments.sort_by{|e| e[:sortable] || [999,999, 999] }
-
     active_enrollments = coalesced_enrollments.map{ |e| e[:enrollment] }
     cached_group_memberships = self.cached_current_group_memberships
     coalesced_group_memberships = cached_group_memberships.
@@ -2075,10 +2104,6 @@ class User < ActiveRecord::Base
       sort_by{ |gm| gm.group.name }
 
     @menu_data = {
-      :enrollments => coalesced_enrollments,
-      :enrollments_count => cached_enrollments.length,
-      :course_name_counts => course_name_counts,
-      :has_completed_enrollment => has_completed_enrollment,
       :group_memberships => coalesced_group_memberships,
       :group_memberships_count => cached_group_memberships.length,
       :accounts => self.accounts,
@@ -2086,10 +2111,11 @@ class User < ActiveRecord::Base
     }
   end
 
-  def menu_courses
-    favorites = self.courses_with_primary_enrollment(:favorite_courses)
-    return favorites if favorites.length > 0
-    self.courses_with_primary_enrollment[0..11]
+  def menu_courses(enrollment_uuid = nil)
+    return @menu_courses if @menu_courses
+    favorites = self.courses_with_primary_enrollment(:favorite_courses, enrollment_uuid)
+    return (@menu_courses = favorites) if favorites.length > 0
+    @menu_courses = self.courses_with_primary_enrollment(:current_and_invited_courses, enrollment_uuid)[0..11]
   end
 
   def user_can_edit_name?
@@ -2099,5 +2125,65 @@ class User < ActiveRecord::Base
   def section_for_course(course)
     enrollment = course.student_enrollments.active.for_user(self).first
     enrollment && enrollment.course_section
+  end
+
+  def can_create_enrollment_for?(course, session, type)
+    can_add = %w{StudentEnrollment ObserverEnrollment}.include?(type) && course.grants_right?(self, session, :manage_students)
+    can_add ||= type == 'TeacherEnrollment' && course.teacherless? && course.grants_right?(self, session, :manage_students)
+    can_add ||= course.grants_right?(self, session, :manage_admin_users)
+
+    can_add
+  end
+
+  def group_member_json(context)
+    h = { :user_id => self.id, :name => self.last_name_first, :display_name => self.short_name }
+    if context && context.is_a?(Course) && (section = self.section_for_course(context))
+      h = h.merge(:section_id => section.id, :section_code => section.section_code)
+    end
+    h
+  end
+
+  def find_pseudonym_for_account(account)
+    self.pseudonyms.detect { |p| p.active? && p.works_for_account?(account) }
+  end
+
+  # account = the account that you want a pseudonym for
+  # preferred_template_account = pass in an actual account if you have a preference for which account the new pseudonym gets copied from
+  # this may not be able to find a suitable pseudonym to copy, so would still return nil
+  # if a pseudonym is created, it is *not* saved, and *not* added to the pseudonyms collection
+  def find_or_initialize_pseudonym_for_account(account, preferred_template_account = nil)
+    pseudonym = find_pseudonym_for_account(account)
+    if !pseudonym
+      # list of copyable pseudonyms
+      active_pseudonyms = self.pseudonyms.select { |p| p.active? && !p.password_auto_generated? && !p.account.delegated_authentication? }
+      templates = []
+      # re-arrange in the order we prefer
+      templates.concat active_pseudonyms.select { |p| p.account_id == preferred_template_account.id } if preferred_template_account
+      templates.concat active_pseudonyms.select { |p| p.account_id == Account.site_admin.id }
+      templates.concat active_pseudonyms.select { |p| p.account_id == Account.default.id }
+      templates.concat active_pseudonyms
+      templates.uniq!
+
+      template = templates.detect { |template| !account.pseudonyms.custom_find_by_unique_id(template.unique_id) }
+      if template
+        # creating this not attached to the user's pseudonyms is intentional
+        pseudonym = account.pseudonyms.build
+        pseudonym.user = self
+        pseudonym.unique_id = template.unique_id
+        pseudonym.password_salt = template.password_salt
+        pseudonym.crypted_password = template.crypted_password
+      end
+    end
+    pseudonym
+  end
+
+  def flag_as_admin(account, role=nil)
+    admin = account.add_user(self, role)
+    if self.registered?
+      admin.account_user_notification!
+    else
+      admin.account_user_registration!
+    end
+    admin
   end
 end

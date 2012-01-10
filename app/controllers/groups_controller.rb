@@ -23,7 +23,7 @@ class GroupsController < ApplicationController
   
   def context_group_members
     @group = @context
-    if authorized_action(@group, @current_user, :manage)
+    if authorized_action(@group, @current_user, :read_roster)
       respond_to do |format|
         format.json { render :json => @group.members_json_cached }
       end
@@ -101,7 +101,6 @@ class GroupsController < ApplicationController
       @home_page = WikiNamespace.default_for_context(@group).wiki.wiki_page
       respond_to do |format|
         format.html
-        format.xml  { render :xml => @group.to_xml }
       end
     end
   end
@@ -194,11 +193,9 @@ class GroupsController < ApplicationController
           @group.invitees = params[:invitees]
           flash[:notice] = t('notices.create_success', 'Group was successfully created.')
           format.html { redirect_to group_url(@group) }
-          format.xml  { head :created, :location => group_url(@group) }
           format.json { render :json => @group.to_json }
         else
           format.html { render :action => "new" }
-          format.xml  { render :xml => @group.errors.to_xml }
           format.json { render :json => @group.errors.to_json }
         end
       end
@@ -226,11 +223,9 @@ class GroupsController < ApplicationController
           flash[:notice] = t('notices.update_success', 'Group was successfully updated.')
           format.html { redirect_to group_url(@group) }
           format.json { render :json => @group.to_json }
-          format.xml  { head :ok }
         else
           format.html { render :action => "edit" }
           format.json { render :json => @group.errors.to_json }
-          format.xml  { render :xml => @group.errors.to_xml }
         end
       end
     end
@@ -244,13 +239,11 @@ class GroupsController < ApplicationController
         flash[:notice] = t('notices.delete_success', "Group successfully deleted")
         respond_to do |format|
           format.html { redirect_to(dashboard_url) }
-          format.xml  { head :ok }
           format.json { render :json => @group.to_json }
         end
       rescue Exception => e
         respond_to do |format|
           format.html { redirect_to(dashboard_url) }
-          format.xml  { render :xml => @group.to_xml }
           format.json { render :json => @group.to_json, :status => :bad_request }
         end
       end
@@ -276,6 +269,30 @@ class GroupsController < ApplicationController
     respond_to do |format|
       format.atom { render :text => feed.to_xml }
     end
+  end
+
+  def assign_unassigned_members
+    return unless authorized_action(@context, @current_user, :manage_groups)
+
+    # valid category?
+    category = @context.group_categories.find_by_id(params[:category_id])
+    return render(:json => {}, :status => :not_found) unless category
+
+    # option disabled for student organized groups or section-restricted
+    # self-signup groups. (but self-signup is ignored for non-Course groups)
+    return render(:json => {}, :status => :bad_request) if category.student_organized?
+    return render(:json => {}, :status => :bad_request) if @context.is_a?(Course) && category.restricted_self_signup?
+
+    # do the distribution and note the changes
+    groups = category.groups.active
+    potential_members = @context.users_not_in_groups(groups)
+    memberships = distribute_members_among_groups(potential_members, groups)
+
+    # render the changes
+    json = memberships.group_by{ |m| m.group_id }.map do |group_id, new_members|
+      { :id => group_id, :new_members => new_members.map{ |m| m.user.group_member_json(@context) } }
+    end
+    render :json => json
   end
 
   protected
@@ -317,7 +334,6 @@ class GroupsController < ApplicationController
         else
           format.html { render :action => 'context_groups' }
         end
-        format.xml  { render :xml => @groups.to_xml }
         format.atom { render :xml => @groups.to_atom.to_xml }
       end
     end
@@ -348,13 +364,14 @@ class GroupsController < ApplicationController
   
   def create_default_groups_in_category
     self_signup = params[:category][:enable_self_signup] == "1"
-    distribute_students = !self_signup && params[:category][:split_groups] == "1"
-    return unless self_signup || distribute_students
+    distribute_members = !self_signup && params[:category][:split_groups] == "1"
+    return unless self_signup || distribute_members
+    potential_members = distribute_members ? @context.users_not_in_groups([]) : nil
 
     count_field = self_signup ? :create_group_count : :split_group_count
     count = params[:category][count_field].to_i
     count = 0 if count < 0
-    count = @context.students.length if distribute_students && count > @context.students.length
+    count = potential_members.length if distribute_members && count > potential_members.length
     return if count.zero?
 
     # TODO i18n
@@ -364,11 +381,42 @@ class GroupsController < ApplicationController
       @group_category.groups.create(:name => "#{group_name} #{idx + 1}", :context => @context)
     end
 
-    if distribute_students
-      @students = @context.students.sort_by{|s| rand}
-      @students.each_index do |idx|
-        @group_category.groups[idx % count].add_user(@students[idx])
+    distribute_members_among_groups(potential_members, @group_category.groups) if distribute_members
+  end
+
+  def distribute_members_among_groups(members, groups)
+    return [] if groups.empty?
+    new_memberships = []
+    touched_groups = [].to_set
+
+    groups_by_size = {}
+    groups.each do |group|
+      size = group.users.size
+      groups_by_size[size] ||= []
+      groups_by_size[size] << group
+    end
+    smallest_group_size = groups_by_size.keys.min
+
+    members.sort_by{ rand }.each do |member|
+      group = groups_by_size[smallest_group_size].first
+      membership = group.add_user(member)
+      if membership.valid?
+        new_memberships << membership
+        touched_groups << group.id
+
+        # successfully added member to group, move it to the new size bucket
+        groups_by_size[smallest_group_size].shift
+        groups_by_size[smallest_group_size + 1] ||= []
+        groups_by_size[smallest_group_size + 1] << group
+
+        # was that the last group of that size?
+        if groups_by_size[smallest_group_size].empty?
+          groups_by_size.delete(smallest_group_size)
+          smallest_group_size += 1
+        end
       end
     end
+    Group.update_all({:updated_at => Time.now.utc}, :id => touched_groups.to_a) unless touched_groups.empty?
+    return new_memberships
   end
 end

@@ -22,6 +22,8 @@ module ActiveRecord
           done_ids = {}
           cnt = 1
           ids.each do |id|
+            id = id.to_i
+            next unless id > 0
             updates << "WHEN id=#{id} THEN #{cnt}"
             done_ids[id.to_i] = true
             cnt += 1
@@ -35,10 +37,6 @@ module ActiveRecord
           end
           acts_as_list_class.update_all("position=CASE #{updates.join(" ")} ELSE 0 END", "#{scope_condition}") unless updates.empty?
         end
-        def add_to_list_bottom_with_in_list_check
-          add_to_list_bottom_without_in_list_check unless in_list?
-        end
-        alias_method_chain :add_to_list_bottom, :in_list_check
       end
     end
   end

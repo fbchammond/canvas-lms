@@ -36,8 +36,8 @@ describe "Respondus SOAP API", :type => :integration do
   end
 
   before(:each) do
-    setting = PluginSetting.find_or_create_by_name('qti_exporter')
-    setting.settings = Canvas::Plugin.find('qti_exporter').default_settings.merge({:enabled => 'true'})
+    setting = PluginSetting.find_or_create_by_name('qti_converter')
+    setting.settings = Canvas::Plugin.find('qti_converter').default_settings.merge({:enabled => 'true'})
     setting.save!
     setting = PluginSetting.find_or_create_by_name('respondus_soap_endpoint')
     setting.settings = {:enabled => 'true'}
@@ -102,8 +102,7 @@ Implemented for: Canvas LMS}
 
   describe "delegated auth" do
     before do
-      @account = account_with_cas
-      @pseudonym.update_attribute(:account, @account)
+      @account = account_with_cas(:account => Account.default)
     end
 
     it "should error if token is required" do

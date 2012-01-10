@@ -20,9 +20,9 @@ require File.expand_path(File.dirname(__FILE__) + '/../api_spec_helper')
 
 describe SisImportsApiController, :type => :integration do
   before do
-    @user = user :active_all => true
+    @user = user_with_pseudonym :active_all => true
     user_session @user
-    @account = Account.create!(:name => UUIDSingleton.instance.generate)
+    @account = Account.default
     @account.allow_sis_import = true
     @account.save
     @account.add_user(@user, 'AccountAdmin')

@@ -52,11 +52,11 @@ class SubmissionsApiController < ApplicationController
     if authorized_action(@context, @current_user, :manage_grades)
       @assignment = @context.assignments.active.find(params[:assignment_id])
       @submissions = @assignment.submissions.all(
-        :conditions => { :user_id => (@section || @context).student_ids })
+        :conditions => { :user_id => visible_user_ids })
 
       includes = Array(params[:include])
 
-      result = @submissions.map { |s| submission_json(s, @assignment, @context, includes) }
+      result = @submissions.map { |s| submission_json(s, @assignment, @current_user, session, @context, includes) }
 
       render :json => result.to_json
     end
@@ -92,8 +92,9 @@ class SubmissionsApiController < ApplicationController
   # ]
   def for_students
     if authorized_action(@context, @current_user, :manage_grades)
-      student_ids = map_user_ids(params[:student_ids])
-      raise ActiveRecord::RecordNotFound if student_ids.blank?
+      raise ActiveRecord::RecordNotFound if params[:student_ids].blank?
+      student_ids = map_user_ids(params[:student_ids]).map(&:to_i) & visible_user_ids
+      return render(:json => []) if student_ids.blank?
 
       includes = Array(params[:include])
 
@@ -121,7 +122,7 @@ class SubmissionsApiController < ApplicationController
           # we've already got all the assignments loaded, so bypass AR loading
           # here and just give the submission its assignment
           submission.assignment = assignments_hash[submission.assignment_id]
-          hash[:submissions] << submission_json(submission, submission.assignment, @context, includes)
+          hash[:submissions] << submission_json(submission, submission.assignment, @current_user, session, @context, includes)
         end unless assignments.empty?
         if includes.include?('total_scores') && params[:grouped].present?
           hash.merge!(
@@ -147,10 +148,11 @@ class SubmissionsApiController < ApplicationController
   def show
     @assignment = @context.assignments.active.find(params[:assignment_id])
     @user = get_user_considering_section(params[:id])
-    @submission = @assignment.submissions.find_or_initialize_by_user_id(@user.id) or raise ActiveRecord::RecordNotFound
+    @submission = @assignment.submission_for_student(@user)
+
     if authorized_action(@submission, @current_user, :read)
       includes = Array(params[:include])
-      render :json => submission_json(@submission, @assignment, @context, includes).to_json
+      render :json => submission_json(@submission, @assignment, @current_user, session, @context, includes).to_json
     end
   end
 
@@ -262,12 +264,12 @@ class SubmissionsApiController < ApplicationController
       # fix this at some point.
       @submission.reload
 
-      render :json => submission_json(@submission, @assignment, @context, %w(submission_comments)).to_json
+      render :json => submission_json(@submission, @assignment, @current_user, session, @context, %w(submission_comments)).to_json
     end
   end
 
   def map_user_ids(user_ids)
-    Api.map_ids(user_ids, User).compact unless user_ids.blank?
+    Api.map_ids(user_ids, User, @domain_root_account)
   end
 
   def get_course_from_section
@@ -283,5 +285,14 @@ class SubmissionsApiController < ApplicationController
       scope = scope.scoped(:conditions => { 'enrollments.course_section_id' => @section.id })
     end
     api_find(scope, user_id)
+  end
+
+  def visible_user_ids
+    scope = if @section
+      @context.enrollments_visible_to(@current_user, false, false, [@section.id])
+    else
+      @context.enrollments_visible_to(@current_user)
+    end
+    scope.all(:select => :user_id).map(&:user_id)
   end
 end

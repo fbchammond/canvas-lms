@@ -49,6 +49,22 @@ shared_examples_for "dashboard selenium tests" do
     find_all_with_jquery("div.communication_message.conversation .communication_sub_message:visible").size.should == 3 # two messages, plus add message form
   end
 
+  it "should allow replying to conversation stream items" do
+    course_with_student_logged_in(:active_all => true)
+    c = User.create.initiate_conversation([@user.id, User.create.id])
+    c.add_message('test')
+
+    get "/"
+    driver.find_element(:css, ".reply_message .textarea").click
+    driver.find_element(:css, "textarea[name='body']").send_keys("hey there")
+    driver.find_element(:css, ".communication_sub_message .submit_button").click
+    wait_for_ajax_requests
+    messages = find_all_with_jquery(".communication_message.conversation .communication_sub_message:visible")
+
+    # messages[-1] is the reply form
+    messages[-2].text.should =~ /hey there/
+  end
+
   it "should display assignment in to do list" do
     course_with_student_logged_in
 
@@ -92,7 +108,7 @@ shared_examples_for "dashboard selenium tests" do
     #verify assignment changed notice is in messages
     driver.find_element(:css, '#topic_list .topic_message').should include_text('Assignment Due Date Changed')
     #verify assignment is in to do list
-    driver.find_element(:css, '.to-do-list > li').should include_text("#{assignment.submission_action_string} #{assignment.title}")
+    driver.find_element(:css, '.to-do-list > li').should include_text(assignment.submission_action_string)
 
     #verify assignment is in drop down
     assignment_menu = driver.find_element(:link, 'Assignments').find_element(:xpath, '..')
@@ -132,56 +148,102 @@ shared_examples_for "dashboard selenium tests" do
     course_menu.should include_text(group.name)
   end
 
-  it "should not allow customization of the course menu if there are insufficient courses" do
-    course_with_teacher_logged_in
-
-    get "/"
-
-    course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
-    driver.action.move_to(course_menu).perform
-    course_menu.should include_text('My Courses')
-    course_menu.should_not include_text('Customize')
-  end
-
-  it "should allow customization of the course menu if there are sufficient courses" do
-    course_with_teacher_logged_in
-    20.times { course_with_teacher({:user => @user, :active_course => true, :active_enrollment => true}) }
-
-    get "/"
-
-    course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
-    driver.action.move_to(course_menu).perform
-    course_menu.should include_text('My Courses')
-    course_menu.should include_text('Customize')
-  end
-
-  it "should allow customization of the course menu even before the course ajax request comes back" do
-    course_with_teacher_logged_in
-    20.times { course_with_teacher({:user => @user, :active_course => true, :active_enrollment => true}) }
-
-    get "/"
-
-    course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
-    driver.action.move_to(course_menu).perform
-    course_menu.should include_text('My Courses')
-    course_menu.find_element(:css, '.customListOpen').click
-    keep_trying_until {
-      course_menu.find_element(:css, '.customListWrapper').should be_displayed
-    }
-  end
-
-  it "should display scheduled web conference in stream" do
-    course_with_student_logged_in
-     @conference = @course.web_conferences.build({:title => "my Conference", :conference_type => "DimDim", :duration => 60})
-     @conference.user = @user
-     @conference.save!
-     @conference.add_initiator(@user)
-     @conference.add_invitee(@user)
-     @conference.save!
+  context "course menu customization" do
+    it "should not allow customization if there are insufficient courses" do
+      course_with_teacher_logged_in
 
       get "/"
 
-      driver.find_element(:css, '#topic_list .topic_message:last-child .header_title').should include_text(@conference.title)
+      course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
+      driver.action.move_to(course_menu).perform
+      course_menu.should include_text('My Courses')
+      course_menu.should_not include_text('Customize')
+    end
+
+    it "should allow customization if there are sufficient courses" do
+      course_with_teacher_logged_in
+      20.times { course_with_teacher({:user => @user, :active_course => true, :active_enrollment => true}) }
+
+      get "/"
+
+      course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
+      driver.action.move_to(course_menu).perform
+      course_menu.should include_text('My Courses')
+      course_menu.should include_text('Customize')
+      course_menu.should include_text('View all courses')
+    end
+
+    it "should allow customization if there are sufficient course invitations" do
+      course_with_teacher_logged_in(:active_cc => true)
+      20.times { course_with_teacher({:user => user_with_communication_channel(:user_state => :creation_pending), :active_course => true}) }
+
+      get "/"
+
+      course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
+      driver.action.move_to(course_menu).perform
+      course_menu.should include_text('My Courses')
+      course_menu.should include_text('Customize')
+      course_menu.should include_text('View all courses')
+    end
+
+    it "should allow customization if all courses are already favorited" do
+      course_with_teacher_logged_in
+      @user.favorites.create(:context => @course)
+      20.times {
+        course_with_teacher({:user => @user, :active_course => true, :active_enrollment => true})
+        @user.favorites.create(:context => @course)
+      }
+
+      get "/"
+
+      course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
+      driver.action.move_to(course_menu).perform
+      course_menu.should include_text('My Courses')
+      course_menu.should include_text('Customize')
+    end
+
+    it "should allow customization even before the course ajax request comes back" do
+      course_with_teacher_logged_in
+      20.times { course_with_teacher({:user => @user, :active_course => true, :active_enrollment => true}) }
+
+      get "/"
+
+      # Now artificially make the next ajax request slower. We want to make sure that we click the
+      # customize button before the ajax request returns. Delaying the request by 1s should
+      # be enough.
+      UsersController.before_filter { sleep 1; true }
+
+      course_menu = driver.find_element(:link, 'Courses').find_element(:xpath, '..')
+      driver.execute_script(%{$("#menu li.menu-item:first").trigger('mouseenter')})
+      sleep 0.4 # there's a fixed 300ms delay before the menu will display
+
+      # For some reason, a normal webdriver click here causes strangeness on FF in XP with
+      # firebug installed.
+      driver.execute_script("$('#menu .customListOpen:first').click()")
+      wait_for_ajaximations
+
+      UsersController.filter_chain.pop
+
+      course_menu.should include_text('My Courses')
+      course_menu.should include_text('View all courses')
+      course_menu.find_element(:css, '.customListWrapper').should be_displayed
+    end
+  end
+
+  it "should display scheduled web conference in stream" do
+    PluginSetting.create!(:name => "dim_dim", :settings => {"domain" => "dimdim.instructure.com"})
+
+    course_with_student_logged_in
+    @conference = @course.web_conferences.build({:title => "my Conference", :conference_type => "DimDim", :duration => 60})
+    @conference.user = @user
+    @conference.save!
+    @conference.add_initiator(@user)
+    @conference.add_invitee(@user)
+    @conference.save!
+
+    get "/"
+
+    driver.find_element(:css, '#topic_list .topic_message:last-child .header_title').should include_text(@conference.title)
   end
 
   it "should display calendar events in the coming up list" do
@@ -189,8 +251,8 @@ shared_examples_for "dashboard selenium tests" do
     calendar_event_model({
       :title => "super fun party",
       :description => 'celebrating stuff',
-      :start_at => 5.minutes.ago,
-      :end_at => 5.minutes.from_now
+      :start_at => 5.minutes.from_now,
+      :end_at => 10.minutes.from_now
     })
     get "/"
     driver.find_element(:css, 'div.events_list .event a').should include_text(@event.title)

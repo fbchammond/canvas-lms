@@ -30,7 +30,6 @@ class DiscussionEntry < ActiveRecord::Base
   belongs_to :user
   belongs_to :attachment
   belongs_to :editor, :class_name => 'User'
-  has_many :attachments, :as => :context
   has_one :external_feed_entry, :as => :asset
   
   before_create :infer_parent_id
@@ -88,13 +87,13 @@ class DiscussionEntry < ActiveRecord::Base
       # If the topic has been going for more than two weeks and it suddenly
       # got "popular" again, move it back up in user streams
       if !self.discussion_topic.for_assignment? && self.created_at && self.created_at > self.discussion_topic.created_at + 2.weeks && recent_entries.select{|e| e.created_at && e.created_at > 24.hours.ago }.length > 10
-        self.discussion_topic.participants
+        self.discussion_topic.active_participants
       # If the topic has beeng going for more than two weeks, only show
       # people who have been participating in the topic
       elsif self.created_at > self.discussion_topic.created_at + 2.weeks
         recent_entries.map(&:user_id).uniq
       else
-        self.discussion_topic.participants
+        self.discussion_topic.active_participants
       end
     else
       []
@@ -124,12 +123,12 @@ class DiscussionEntry < ActiveRecord::Base
     elsif !message || message.empty?
       raise "Message body cannot be blank"
     else
-      DiscussionEntry.create!({
-        :message => message,
-        :discussion_topic_id => self.discussion_topic_id,
-        :parent_id => self.parent_id == 0 ? self.id : self.parent_id,
-        :user_id => user.id
-      })
+      entry = DiscussionEntry.new(:message => message)
+      entry.discussion_topic_id = self.discussion_topic_id
+      entry.parent_id = self.parent_id == 0 ? self.id : self.parent_id
+      entry.user_id = user.id
+      entry.save!
+      entry
     end
   end
   
@@ -183,13 +182,11 @@ class DiscussionEntry < ActiveRecord::Base
   protected :infer_parent_id
   
   def update_topic
-    if self.discussion_topic    
-      DiscussionTopic.update_all({:last_reply_at => Time.now.utc, :updated_at => Time.now.utc}, {:id => self.discussion_topic_id})
-      if self.discussion_topic.for_assignment? && self.discussion_topic.assignment.context.students.include?(self.user)
-        submission ||= self.discussion_topic.assignment.submit_homework(self.user, :submission_type => 'discussion_topic')
-      end
+    if self.discussion_topic
+      last_reply_at = [self.discussion_topic.last_reply_at, self.created_at].max
+      DiscussionTopic.update_all({:last_reply_at => last_reply_at, :updated_at => Time.now.utc}, {:id => self.discussion_topic_id})
     end
-   end
+  end
   
   set_policy do
     given { |user| self.user && self.user == user && !self.discussion_topic.locked? }

@@ -10,14 +10,24 @@ fieldset, form, label, legend,
 table, caption, tbody, tfoot, thead, tr, th, td,
 article, aside, dialog, figure, footer, header,
 hgroup, nav, section
-  margin: 0
   padding: 0
-  border: 0
   font-weight: inherit
   font-style: inherit
   font-size: 100%
   font-family: inherit
   vertical-align: baseline
+
+// dont reset border for tables so tinyMCE can do it's thing
+// and dont reset margin so setting html align="center" works for tiny tables
+html, body, div, span, object, iframe,
+h1, h2, h3, h4, h5, h6, p, blockquote, pre,
+a, abbr, acronym, address, code,
+del, dfn, em, img, q, dl, dt, dd,
+fieldset, form, label, legend,
+article, aside, dialog, figure, footer, header,
+hgroup, nav, section
+  border: 0
+  margin: 0
 
 // reset-html5
 article, aside, dialog, figure, footer, header,
@@ -28,10 +38,20 @@ hgroup, nav, section
 body
   line-height: 1.5
 
-/* Tables still need 'cellspacing="0"' in the markup. */
+/* NOTE: table border-spacing is purposely not being reset because TinyMCE relies on
+   it not being there. Once you set border-spacing: 0 in css,  there is no way to do
+   table.user_content {border-spacing:auto} (there is no 'auto' or 'default' value for
+   border-spacing) and you cannot override it with the cellspacing html attribute
+   (which is what tinyMCE uses). But we can, and do, reset border-collapse which makes
+   it so we dont have to add cellspacing=0 to all our tables.
+   see: http://stackoverflow.com/questions/339923/how-to-set-cellpadding-cellspacing-in-css */
 table
   border-collapse: collapse
-  border-spacing: 0
+.user_content,.mceContentBody
+  table
+    border-collapse: separate
+
+
 caption, th, td
   text-align: left
   font-weight: normal

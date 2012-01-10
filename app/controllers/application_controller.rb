@@ -40,7 +40,8 @@ class ApplicationController < ActionController::Base
   after_filter :discard_flash_if_xhr
   after_filter :cache_buster
   before_filter :fix_xhr_requests
-  before_filter :init_body_classes_and_active_tab
+  before_filter :init_body_classes
+  before_filter :set_ua_header
 
   add_crumb(proc { I18n.t('links.dashboard', "My Dashboard") }, :root_path, :class => "home")
 
@@ -58,11 +59,14 @@ class ApplicationController < ActionController::Base
     I18n.localizer = nil
   end
 
-  def init_body_classes_and_active_tab
+  def init_body_classes
     @body_classes = []
-    active_tab = nil
   end
-  
+
+  def set_ua_header
+    headers['X-UA-Compatible'] = 'IE=edge,chrome=1'
+  end
+
   # make things requested from jQuery go to the "format.js" part of the "respond_to do |format|" block
   # see http://codetunes.com/2009/01/31/rails-222-ajax-and-respond_to/ for why
   def fix_xhr_requests
@@ -120,7 +124,7 @@ class ApplicationController < ActionController::Base
   end
 
   def tab_enabled?(id)
-    if @context && @context.respond_to?(:tabs_available) && !@context.tabs_available(@current_user, :session => session, :include_hidden_unused => true).any?{|t| t[:id] == id }
+    if @context && @context.respond_to?(:tabs_available) && !@context.tabs_available(@current_user, :session => session, :include_hidden_unused => true, :root_account => @domain_root_account).any?{|t| t[:id] == id }
       if @context.is_a?(Account)
         flash[:notice] = t "#application.notices.page_disabled_for_account", "That page has been disabled for this account"
       elsif @context.is_a?(Course)
@@ -185,7 +189,6 @@ class ApplicationController < ActionController::Base
         render :template => "shared/unauthorized", :layout => "application", :status => :unauthorized 
       }
       format.zip { redirect_to(url_for(params)) }
-      format.xml { render :xml => { 'status' => 'unauthorized' }, :status => :unauthorized }
       format.json { render :json => { 'status' => 'unauthorized' }, :status => :unauthorized }
     end
     response.headers["Pragma"] = "no-cache"
@@ -749,7 +752,7 @@ class ApplicationController < ActionController::Base
     Rails.logger.warn("developer_key id: #{@developer_key.id}") if @developer_key
   end
 
-  API_REQUEST_REGEX = /\A\/api\//
+  API_REQUEST_REGEX = %r{\A/api/v\d}
 
   def api_request?
     @api_request ||= !!request.path.match(API_REQUEST_REGEX)
@@ -813,6 +816,14 @@ class ApplicationController < ActionController::Base
       render :template => 'context_modules/url_show'
     elsif tag.content_type == 'ContextExternalTool'
       @tag = tag
+      if @tag.context.is_a?(Assignment)
+        @assignment = @tag.context
+        @resource_title = @assignment.title
+      else
+        @resource_title = @tag.title
+      end
+      @resource_url = @tag.url
+      @opaque_id = @tag.opaque_identifier(:asset_string)
       @tool = ContextExternalTool.find_external_tool(tag.url, context)
       @target = '_blank' if tag.new_tab
       tag.context_module_action(@current_user, :read)
@@ -820,6 +831,12 @@ class ApplicationController < ActionController::Base
         flash[:error] = t "#application.errors.invalid_external_tool", "Couldn't find valid settings for this link"
         redirect_to named_context_url(context, error_redirect_symbol)
       else
+        @return_url = named_context_url(@context, :context_external_tool_finished_url, @tool.id, :include_host => true)
+        @launch = BasicLTI::ToolLaunch.new(:url => @resource_url, :tool => @tool, :user => @current_user, :context => @context, :link_code => @opaque_id, :return_url => @return_url)
+        if @assignment && @context.students.include?(@current_user)
+          @launch.for_assignment!(@tag.context, lti_grade_passback_api_url(@tool), blti_legacy_grade_passback_api_url(@tool))
+        end
+        @tool_settings = @launch.generate
         render :template => 'external_tools/tool_show'
       end
     else
@@ -871,7 +888,7 @@ class ApplicationController < ActionController::Base
   
   # escape everything but slashes, see http://code.google.com/p/phusion-passenger/issues/detail?id=113
   FILE_PATH_ESCAPE_PATTERN = Regexp.new("[^#{URI::PATTERN::UNRESERVED}/]")
-  def safe_domain_file_url(attachment, host=nil, verifier = nil) # TODO: generalize this
+  def safe_domain_file_url(attachment, host=nil, verifier = nil, download = false) # TODO: generalize this
     res = "#{request.protocol}#{host || HostUrl.file_host(@domain_root_account || Account.default)}"
     ts, sig = @current_user && @current_user.access_verifier
 
@@ -881,6 +898,7 @@ class ApplicationController < ActionController::Base
     # of content.
     opts = { :user_id => @current_user.try(:id), :ts => ts, :sf_verifier => sig }
     opts[:verifier] = verifier if verifier.present?
+    opts[:download_frd] = 1 if download
 
     if @context && Attachment.relative_context?(@context.class.base_ar_class) && @context == attachment.context
       # if the context is one that supports relative paths (which requires extra
@@ -974,7 +992,8 @@ class ApplicationController < ActionController::Base
   def require_site_admin_with_permission(permission)
     unless current_user_is_site_admin?(permission)
       flash[:error] = t "#application.errors.permission_denied", "You don't have permission to access that page"
-      redirect_to root_url
+      store_location
+      redirect_to @current_user ? root_url : login_url
       return false
     end
   end
@@ -1034,5 +1053,32 @@ class ApplicationController < ActionController::Base
     end
     yield if block_given? && (@bank = bank)
     bank
+  end
+
+  # refs #6632 -- once the speed grader ipad app is upgraded, we can remove these exceptions
+  SKIP_JSON_CSRF_REGEX = %r{\A(?:/login|/logout|/dashboard/comment_session)}
+  def prepend_json_csrf?
+    request.get? && @pseudonym_session && !@pseudonym_session.used_basic_auth? && !request.path.match(SKIP_JSON_CSRF_REGEX)
+  end
+
+  def render(options = nil, extra_options = {}, &block)
+    if options && options.key?(:json)
+      json = options.delete(:json)
+      json = ActiveSupport::JSON.encode(json) unless json.is_a?(String)
+      # prepend our CSRF protection to the JSON response, unless this is an API
+      # call that didn't use session auth, or a non-GET request.
+      if prepend_json_csrf?
+        json = "while(1);#{json}"
+      end
+
+      # fix for some browsers not properly handling json responses to multipart
+      # file upload forms and s3 upload success redirects -- we'll respond with text instead.
+      if options[:as_text] || (request.headers['CONTENT_TYPE'].to_s =~ %r{multipart/form-data} && params[:format].to_s != 'json')
+        options[:text] = json
+      else
+        options[:json] = json
+      end
+    end
+    super
   end
 end

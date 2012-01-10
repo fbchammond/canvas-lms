@@ -1,4 +1,5 @@
 require File.expand_path(File.dirname(__FILE__) + '/common')
+require 'thread'
 
 describe "manage_groups selenium tests" do
   it_should_behave_like "in-process server selenium tests"
@@ -215,14 +216,7 @@ describe "manage_groups selenium tests" do
     driver.find_elements(:css, "#category_list li").size.should == 1
 
     # submit new category form
-    driver.find_element(:css, ".add_category_link").click
-    form = driver.find_element(:css, "#add_category_form")
-    form.find_element(:css, "input[type=text]").clear
-    form.find_element(:css, "input[type=text]").send_keys("New Category")
-    form.find_element(:css, "#category_no_groups").click
-    form.submit
-    wait_for_ajax_requests
-
+    add_category(@course, 'New Category')
     driver.find_elements(:css, "#category_list li").size.should == 2
     driver.find_elements(:css, "#category_list li a").last.text.should == "New Category"
   end
@@ -238,14 +232,7 @@ describe "manage_groups selenium tests" do
     driver.find_elements(:css, "#category_list li").size.should == 1
 
     # submit new category form
-    driver.find_element(:css, ".add_category_link").click
-    form = driver.find_element(:css, "#add_category_form")
-    form.find_element(:css, "input[type=text]").clear
-    form.find_element(:css, "input[type=text]").send_keys("New Category")
-    form.find_element(:css, "#category_no_groups").click
-    form.submit
-    wait_for_ajax_requests
-
+    add_category(@course, 'New Category')
     driver.find_elements(:css, "#category_list li").size.should == 2
     driver.find_elements(:css, "#category_list li a").first.text.should == "New Category"
     driver.find_elements(:css, "#category_list li a").last.text.should == group_category.name
@@ -305,18 +292,7 @@ describe "manage_groups selenium tests" do
     find_with_jquery("#sidebar_category_#{group_category.id} #sidebar_group_#{group.id}").should_not be_nil
 
     # submit new category form
-    driver.find_element(:css, ".add_category_link").click
-    driver.find_element(:css, "#add_category_form input[type=text]").clear
-    driver.find_element(:css, "#add_category_form input[type=text]").send_keys("New Category")
-    driver.find_element(:css, "#category_split_groups").click
-    driver.find_element(:css, "#category_split_group_count").clear
-    driver.find_element(:css, "#category_split_group_count").send_keys("1")
-    driver.find_element(:css, "#add_category_form").submit
-    wait_for_ajax_requests
-    wait_for_ajaximations
-
-    new_category = @course.group_categories.find_by_name('New Category')
-    new_category.should_not be_nil
+    new_category = add_category(@course, 'New Category', :group_count => '1')
     new_category.groups.size.should == 1
     new_group = new_category.groups.first
 
@@ -331,16 +307,7 @@ describe "manage_groups selenium tests" do
     get "/courses/#{@course.id}/groups"
 
     # submit new category form
-    driver.find_element(:css, ".add_category_link").click
-    driver.find_element(:css, "#add_category_form input[type=text]").clear
-    driver.find_element(:css, "#add_category_form input[type=text]").send_keys("New Category")
-    driver.find_element(:css, "#add_category_form #category_enable_self_signup").click
-    driver.find_element(:css, "#add_category_form").submit
-    wait_for_ajax_requests
-    wait_for_ajaximations
-
-    new_category = @course.group_categories.find_by_name('New Category')
-    new_category.should_not be_nil
+    new_category = add_category(@course, 'New Category', :enable_self_signup => true)
     new_category.should be_self_signup
     new_category.should be_unrestricted_self_signup
   end
@@ -352,17 +319,7 @@ describe "manage_groups selenium tests" do
     get "/courses/#{@course.id}/groups"
 
     # submit new category form
-    driver.find_element(:css, ".add_category_link").click
-    driver.find_element(:css, "#add_category_form input[type=text]").clear
-    driver.find_element(:css, "#add_category_form input[type=text]").send_keys("New Category")
-    driver.find_element(:css, "#add_category_form #category_enable_self_signup").click
-    driver.find_element(:css, "#add_category_form #category_restrict_self_signup").click
-    driver.find_element(:css, "#add_category_form").submit
-    wait_for_ajax_requests
-    wait_for_ajaximations
-
-    new_category = @course.group_categories.find_by_name('New Category')
-    new_category.should_not be_nil
+    new_category = add_category(@course, 'New Category', :enable_self_signup => true, :restrict_self_signup => true)
     new_category.should be_self_signup
     new_category.should be_restricted_self_signup
   end
@@ -374,18 +331,7 @@ describe "manage_groups selenium tests" do
     get "/courses/#{@course.id}/groups"
 
     # submit new category form
-    driver.find_element(:css, ".add_category_link").click
-    driver.find_element(:css, "#add_category_form input[type=text]").clear
-    driver.find_element(:css, "#add_category_form input[type=text]").send_keys("New Category")
-    driver.find_element(:css, "#add_category_form #category_enable_self_signup").click
-    driver.find_element(:css, "#category_create_group_count").clear
-    driver.find_element(:css, "#category_create_group_count").send_keys("2")
-    driver.find_element(:css, "#add_category_form").submit
-    wait_for_ajax_requests
-    wait_for_ajaximations
-
-    new_category = @course.group_categories.find_by_name('New Category')
-    new_category.should_not be_nil
+    new_category = add_category(@course, 'New Category', :enable_self_signup => true, :group_count => '2')
     new_category.groups.size.should == 2
   end
 
@@ -410,5 +356,160 @@ describe "manage_groups selenium tests" do
     wait_for_ajaximations
 
     find_with_jquery("#category_#{group_category.id} #group_#{group.id}").should_not be_nil
+  end
+
+  context "assign_students_link" do
+    before :each do
+      course_with_teacher_logged_in
+      @student = @course.enroll_student(user_model(:name => "John Doe")).user
+      get "/courses/#{@course.id}/groups"
+      @category = add_category(@course, "New Category", :enable_self_signup => true, :group_count => '2')
+    end
+
+    it "should be visible iff category is not restricted self signup" do
+      new_category = add_category(@course, "Unrestricted Self-Signup Category", :enable_self_signup => true, :restrict_self_signup => false)
+      find_with_jquery("#category_#{new_category.id} .assign_students_link:visible").should_not be_nil
+
+      edit_category(:restrict_self_signup => true)
+      find_with_jquery("#category_#{new_category.id} .assign_students_link:visible").should be_nil
+
+      new_category = add_category(@course, "Restricted Self-Signup Category", :enable_self_signup => true, :restrict_self_signup => true)
+      find_with_jquery("#category_#{new_category.id} .assign_students_link:visible").should be_nil
+
+      edit_category(:restrict_self_signup => false)
+      find_with_jquery("#category_#{new_category.id} .assign_students_link:visible").should_not be_nil
+    end
+
+    it "should assign students in DB and in UI" do
+      find_with_jquery("#category_#{@category.id} .group_blank .user_id_#{@student.id}").should_not be_nil
+      @student.groups.should be_empty
+
+      assign_students(@category)
+
+      @student.reload
+      @student.groups.size.should == 1
+      group = @student.groups.first
+
+      find_with_jquery("#category_#{@category.id} .group_blank .user_id_#{@student.id}").should be_nil
+      find_with_jquery("#category_#{@category.id} #group_#{group.id} .user_id_#{@student.id}").should_not be_nil
+    end
+
+    it "should give 'Assigning Students...' visual feedback" do
+      assign_students = find_with_jquery("#category_#{@category.id} .assign_students_link:visible")
+      assign_students.should_not be_nil
+      assign_students.click
+
+      # Do some magic to make sure the next ajax request doesn't complete until we're ready for it to
+      lock = Mutex.new
+      lock.lock
+      GroupsController.before_filter { lock.lock; lock.unlock; true }
+
+      confirm_dialog = driver.switch_to.alert
+      confirm_dialog.accept
+      loading = find_with_jquery("#category_#{@category.id} .group_blank .loading_members:visible")
+      loading.text.should == 'Assigning Students...'
+
+      lock.unlock
+      GroupsController.filter_chain.pop
+
+      # make sure we wait before moving on
+      wait_for_ajax_requests
+    end
+
+    it "should give 'Nothing to do.' error flash if no unassigned students" do
+      assign_students(@category)
+      assign_students(@category)
+      should_flash(:error, 'Nothing to do.')
+    end
+
+    it "should give 'Students assigned to groups.' success flash otherwise" do
+      assign_students(@category)
+      should_flash(:notice, 'Students assigned to groups.')
+    end
+  end
+end
+
+def add_category(course, name, opts={})
+  driver.find_element(:css, ".add_category_link").click
+  form = driver.find_element(:css, "#add_category_form")
+
+  form.find_element(:css, "input[type=text]").clear
+  form.find_element(:css, "input[type=text]").send_keys(name)
+
+  enable_self_signup = form.find_element(:css, "#category_enable_self_signup")
+  enable_self_signup.click unless !!enable_self_signup.attribute('checked') == !!opts[:enable_self_signup]
+
+  restrict_self_signup = form.find_element(:css, "#category_restrict_self_signup")
+  restrict_self_signup.click unless !!restrict_self_signup.attribute('checked') == !!opts[:restrict_self_signup]
+
+  if opts[:group_count]
+    if enable_self_signup.attribute('checked')
+      form.find_element(:css, "#category_create_group_count").clear
+      form.find_element(:css, "#category_create_group_count").send_keys(opts[:group_count].to_s)
+    else
+      form.find_element(:css, "#category_split_groups").click
+      form.find_element(:css, "#category_split_group_count").clear
+      form.find_element(:css, "#category_split_group_count").send_keys(opts[:group_count].to_s)
+    end
+  elsif enable_self_signup.attribute('checked')
+    form.find_element(:css, "#category_create_group_count").clear
+  else
+    form.find_element(:css, "#category_no_groups").click
+  end
+
+  form.submit
+  sleep 3 # wait_for_ajax_requests times out
+  keep_trying_until { find_with_jquery("#add_category_form:visible").should be_nil }
+
+  category = course.group_categories.find_by_name(name)
+  category.should_not be_nil
+  category
+end
+
+def edit_category(opts={})
+  find_with_jquery(".edit_category_link:visible").click
+  form = driver.find_element(:css, "#edit_category_form")
+
+  if opts[:new_name]
+    form.find_element(:css, "input[type=text]").clear
+    form.find_element(:css, "input[type=text]").send_keys(opts[:new_name])
+  end
+
+  # click only if we're requesting a different state than current; if we're not
+  # specifying a state, leave as is
+  if opts.has_key?(:enable_self_signup)
+    enable_self_signup = form.find_element(:css, "#category_enable_self_signup")
+    enable_self_signup.click unless !!enable_self_signup.attribute('checked') == !!opts[:enable_self_signup]
+  end
+
+  if opts.has_key?(:restrict_self_signup)
+    restrict_self_signup = form.find_element(:css, "#category_restrict_self_signup")
+    restrict_self_signup.click unless !!restrict_self_signup.attribute('checked') == !!opts[:restrict_self_signup]
+  end
+
+  form.submit
+  wait_for_ajaximations
+end
+
+def assign_students(category)
+  assign_students = find_with_jquery("#category_#{category.id} .assign_students_link:visible")
+  assign_students.should_not be_nil
+  assign_students.click
+  confirm_dialog = driver.switch_to.alert
+  confirm_dialog.accept
+  # wait_for_ajax_requests times out here
+  sleep 5
+end
+
+def should_flash(type, message)
+  [:notice, :error].should be_include(type)
+  element = case type
+    when :notice then '#flash_notice_message'
+    when :error then '#flash_error_message'
+    end
+  keep_trying_until do
+    flash = find_with_jquery("#{element}:visible")
+    flash.should_not be_nil
+    flash.text.should =~ /#{message}/
   end
 end

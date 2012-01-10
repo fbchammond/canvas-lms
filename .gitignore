@@ -23,6 +23,8 @@ tmp_*
 public/files/**/*
 public/javascripts/cached/*
 public/javascripts/translations/*
+public/javascripts/compiled/*
+public/javascripts/jst/*
 public/stylesheets/compiled/*
 public/stylesheets/compiled/**/*
 public/stylesheets/cached/*
@@ -50,3 +52,6 @@ doc/api/*
 doc/plugins/*
 public/doc/api/*
 .yardoc/*
+spec/javascripts/*Spec.js
+spec/javascripts/*/*Spec.js
+spec/javascripts/helpers/*

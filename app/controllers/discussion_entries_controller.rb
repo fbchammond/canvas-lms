@@ -58,12 +58,10 @@ class DiscussionEntriesController < ApplicationController
           end
           flash[:notice] = t :created_entry_notice, 'Entry was successfully created.'
           format.html { redirect_to named_context_url(@context, :context_discussion_topic_url, @topic.id) }
-          format.xml  { head :created, :location => named_context_url(@context, :context_discussion_topic_url, @topic.id) }
           format.json { render :json => @entry.to_json(:include => :attachment, :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :created }
           format.text { render :json => @entry.to_json(:include => :attachment, :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :created }
         else
           format.html { render :action => "new" }
-          format.xml  { render :xml => @entry.errors.to_xml }
           format.json { render :json => @entry.errors.to_json, :status => :bad_request }
           format.text { render :json => @entry.errors.to_json, :status => :bad_request }
         end
@@ -95,12 +93,10 @@ class DiscussionEntriesController < ApplicationController
           end
           flash[:notice] = t :updated_entry_notice, 'Entry was successfully updated.'
           format.html { redirect_to named_context_url(@context, :context_discussion_topic_url, @entry.discussion_topic_id) }
-          format.xml  { head :ok }
           format.json { render :json => @entry.to_json(:include => :attachment, :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :ok }
           format.text { render :json => @entry.to_json(:include => :attachment, :methods => :user_name, :permissions => {:user => @current_user, :session => session}), :status => :ok }
         else
           format.html { render :action => "edit" }
-          format.xml  { render :xml => @entry.errors.to_xml }
           format.json { render :json => @entry.errors.to_json, :status => :bad_request }
           format.text { render :json => @entry.errors.to_json, :status => :bad_request }
         end
@@ -115,7 +111,6 @@ class DiscussionEntriesController < ApplicationController
 
       respond_to do |format|
         format.html { redirect_to named_context_url(@context, :context_discussion_topic_url, @entry.discussion_topic_id) }
-        format.xml  { head :ok }
         format.json { render :json => @entry.to_json, :status => :ok }
       end
     end
@@ -138,7 +133,7 @@ class DiscussionEntriesController < ApplicationController
         @admins = @context.admins
         @discussion_entries = @discussion_entries.find_all_by_user_id(@admins.map(&:id))
       end
-      if @topic.require_initial_post && (!@current_user || !@all_discussion_entries.find_by_user_id(@current_user.id))
+      if !@topic.user_can_see_posts?(@current_user)
         @discussion_entries = []
       end
       if @topic.locked_for?(@current_user) && !@topic.grants_right?(@current_user, nil, :update)

@@ -1,14 +1,23 @@
 class ContextExternalTool < ActiveRecord::Base
   include Workflow
   has_many :content_tags, :as => :content
+  has_many :assignments
   belongs_to :context, :polymorphic => true
-  attr_accessible :privacy_level, :domain, :url, :shared_secret, :consumer_key, :name, :description, :custom_fields, :custom_fields_string
+  belongs_to :cloned_item
+  attr_accessible :privacy_level, :domain, :url, :shared_secret, :consumer_key, 
+                  :name, :description, :custom_fields, :custom_fields_string,
+                  :course_navigation, :account_navigation, :user_navigation,
+                  :resource_selection, :editor_button,
+                  :config_type, :config_url, :config_xml
   validates_presence_of :name
   validates_presence_of :consumer_key
   validates_presence_of :shared_secret
+  validate :url_or_domain_is_set
   serialize :settings
+  attr_accessor :config_type, :config_url, :config_xml
   
   before_save :infer_defaults
+  validate :check_for_xml_error
 
   workflow do
     state :anonymous
@@ -22,9 +31,39 @@ class ContextExternalTool < ActiveRecord::Base
     can :read and can :update and can :delete
   end
   
+  def url_or_domain_is_set
+    if url.present? && domain.present?
+      errors.add(:url, t('url_or_domain_not_both', "Either the url or domain should be set, not both."))
+      errors.add(:domain, t('url_or_domain_not_both', "Either the url or domain should be set, not both."))
+    elsif url.blank? && domain.blank?
+      errors.add(:url, t('url_or_domain_required', "Either the url or domain should be set."))
+      errors.add(:domain, t('url_or_domain_required', "Either the url or domain should be set."))
+    end
+  end
+  
   def settings
     read_attribute(:settings) || write_attribute(:settings, {})
   end
+  
+  def label_for(key, lang=nil)
+    labels = settings[key] && settings[key][:labels]
+    (labels && labels[lang]) || 
+      (labels && lang && labels[lang.split('-').first]) || 
+      (settings[key] && settings[key][:text]) || 
+      settings[:text] || name || "External Tool"
+  end
+  
+  def xml_error(error)
+    @xml_error = error
+  end
+  
+  def check_for_xml_error
+    if @xml_error
+      errors.add_to_base(@xml_error)
+      false
+    end
+  end
+  protected :check_for_xml_error
   
   def readable_state
     workflow_state.titleize
@@ -36,10 +75,51 @@ class ContextExternalTool < ActiveRecord::Base
     end
   end
   
+  def privacy_level
+    self.workflow_state
+  end
+  
   def custom_fields_string
     (settings[:custom_fields] || {}).map{|key, val|
       "#{key}=#{val}"
     }.join("\n")
+  end
+  
+  def config_type=(val)
+    @config_type = val
+    process_extended_configuration
+  end
+  
+  def config_xml=(val)
+    @config_xml = val
+    process_extended_configuration
+  end
+  
+  def config_url=(val)
+    @config_url = val
+    process_extended_configuration
+  end
+  
+  def process_extended_configuration
+    return unless (config_type == 'by_url' && config_url) || (config_type == 'by_xml' && config_xml)
+    tool_hash = nil
+    begin
+      converter = CC::Importer::Canvas::Converter.new({:no_archive_file => true})
+      if config_type == 'by_url'
+        tool_hash = converter.retrieve_and_convert_blti_url(config_url)
+      else
+        tool_hash = converter.convert_blti_xml(config_xml)
+      end
+    rescue CC::Importer::BLTIConverter::CCImportError => e
+      tool_hash = {:error => e.message}
+    end
+    real_name = self.name
+    if tool_hash[:error]
+      xml_error(tool_hash[:error])
+    else
+      ContextExternalTool.import_from_migration(tool_hash, self.context, self)
+    end
+    self.name = real_name unless real_name.blank?
   end
   
   def custom_fields_string=(str)
@@ -55,13 +135,77 @@ class ContextExternalTool < ActiveRecord::Base
     settings[:custom_fields] = hash if hash.is_a?(Hash)
   end
   
+  def custom_fields
+    settings[:custom_fields]
+  end
+
+  def course_navigation=(hash)
+    tool_setting(:course_navigation, hash) { |nav_settings|
+      if hash[:visibility] == 'members' || hash[:visibility] == 'admins'
+        nav_settings[:visibility] = hash[:visibility]
+      end
+      nav_settings[:default] = !!hash[:default]
+    }
+  end
+
+  def account_navigation=(hash)
+    tool_setting(:account_navigation, hash)
+  end
+
+  def account_navigation
+    settings[:account_navigation]
+  end
+
+  def user_navigation=(hash)
+    tool_setting(:user_navigation, hash)
+  end
+
+  def user_navigation
+    settings[:user_navigation]
+  end
+
+  def resource_selection=(hash)
+    tool_setting(:resource_selection, hash, :selection_width, :selection_height)
+  end
+
+  def resource_selection
+    settings[:resource_selection]
+  end
+
+  def editor_button=(hash)
+    tool_setting(:editor_button, hash, :selection_width, :selection_height, :icon_url)
+  end
+
+  def editor_button
+    settings[:editor_button]
+  end
+  
   def shared_secret=(val)
     write_attribute(:shared_secret, val) unless val.blank?
   end
   
   def infer_defaults
-    url = nil if url.blank?
-    domain = nil if domain.blank?
+    self.url = nil if url.blank?
+    self.domain = nil if domain.blank?
+    
+    settings.delete(:user_navigation) if settings[:user_navigation] && (!settings[:user_navigation][:url])
+    settings.delete(:course_navigation) if settings[:course_navigation] && (!settings[:course_navigation][:url])
+    settings.delete(:account_navigation) if settings[:account_navigation] && (!settings[:account_navigation][:url])
+    settings.delete(:resource_selection) if settings[:resource_selection] && (!settings[:resource_selection][:url] || !settings[:resource_selection][:selection_width] || !settings[:resource_selection][:selection_height])
+    settings.delete(:editor_button) if settings[:editor_button] && (!settings[:editor_button][:url] || !settings[:editor_button][:icon_url])
+    [:resource_selection, :editor_button].each do |type|
+      if settings[type]
+        settings[type][:selection_width] = settings[type][:selection_width].to_i
+        settings[type][:selection_height] = settings[type][:selection_height].to_i
+      end
+    end
+
+    self.has_user_navigation = !!settings[:user_navigation]
+    self.has_course_navigation = !!settings[:course_navigation]
+    self.has_account_navigation = !!settings[:account_navigation]
+    self.has_resource_selection = !!settings[:resource_selection]
+    self.has_editor_button = !!settings[:editor_button]
+    true
   end
   
   def self.standardize_url(url)
@@ -177,11 +321,35 @@ class ContextExternalTool < ActiveRecord::Base
     nil
   end
   
+  named_scope :having_setting, lambda{|setting|
+    {:conditions => {"has_#{setting.to_s}" => true} }
+  }
+  
+  def self.find_for(id, context, type)
+    tool = context.context_external_tools.having_setting(type).find_by_id(id)
+    if !tool && context.is_a?(Group)
+      context = context.context
+      tool = context.context_external_tools.having_setting(type).find_by_id(id)
+    end
+    if !tool
+      account_ids = context.account_chain_ids
+      tool = ContextExternalTool.having_setting(type).find_by_context_type_and_context_id_and_id('Account', account_ids, id)
+    end
+    raise ActiveRecord::RecordNotFound if !tool
+    tool
+  end
   named_scope :active, :conditions => ['context_external_tools.workflow_state != ?', 'deleted']
   
-  def self.serialization_excludes; [:shared_secret,:settings]; end
+  def self.find_all_for(context, type)
+    tools = []
+    if !context.is_a?(Account) && context.respond_to?(:context_external_tools)
+      tools += context.context_external_tools.having_setting(type.to_s)
+    end
+    account_ids = context.account_chain_ids
+    tools += ContextExternalTool.having_setting(type.to_s).find_all_by_context_type_and_context_id('Account', account_ids)
+  end
   
-  def self.serialization_methods; [:custom_fields_string]; end
+  def self.serialization_excludes; [:shared_secret,:settings]; end
   
   def self.process_migration(data, migration)
     tools = data['external_tools'] ? data['external_tools']: []
@@ -194,8 +362,8 @@ class ContextExternalTool < ActiveRecord::Base
     end
   end
   
-  def set_custom_fields(hash)
-    fields = settings[:custom_fields]
+  def set_custom_fields(hash, resource_type)
+    fields = resource_type ? settings[resource_type.to_sym][:custom_fields] : settings[:custom_fields]
     (fields || {}).each do |key, val|
       key = key.gsub(/[^\w]/, '_').downcase
       if key.match(/^custom_/)
@@ -204,6 +372,30 @@ class ContextExternalTool < ActiveRecord::Base
         hash["custom_#{key}"] = val
       end
     end
+  end
+  
+  def clone_for(context, dup=nil, options={})
+    if !self.cloned_item && !self.new_record?
+      self.cloned_item = ClonedItem.create(:original_item => self)
+      self.save!
+    end
+    existing = ContextExternalTool.active.find_by_context_type_and_context_id_and_id(context.class.to_s, context.id, self.id)
+    existing ||= ContextExternalTool.active.find_by_context_type_and_context_id_and_cloned_item_id(context.class.to_s, context.id, self.cloned_item_id)
+    return existing if existing && !options[:overwrite]
+    new_tool = existing
+    new_tool ||= ContextExternalTool.new
+    new_tool.context = context
+    new_tool.settings = self.settings.clone
+    [:name, :shared_secret, :url, :domain, :consumer_key, :workflow_state, :description].each do |att|
+      new_tool.write_attribute(att, self.read_attribute(att))
+    end
+    new_tool.cloned_item_id = self.cloned_item_id
+    
+    new_tool
+  end
+
+  def resource_selection_settings
+    settings[:resource_selection]
   end
   
   def self.import_from_migration(hash, context, item=nil)
@@ -217,8 +409,9 @@ class ContextExternalTool < ActiveRecord::Base
     item.url = hash[:url] unless hash[:url].blank?
     item.domain = hash[:domain] unless hash[:domain].blank?
     item.privacy_level = hash[:privacy_level] || 'name_only'
-    item.consumer_key = 'fake'
-    item.shared_secret = 'fake'
+    item.consumer_key ||= 'fake'
+    item.shared_secret ||= 'fake'
+    item.settings = hash[:settings].with_indifferent_access if hash[:settings].is_a?(Hash)
     if hash[:custom_fields].is_a? Hash
       item.settings[:custom_fields] ||= {}
       item.settings[:custom_fields].merge! hash[:custom_fields] 
@@ -239,6 +432,26 @@ class ContextExternalTool < ActiveRecord::Base
     item.save!
     context.imported_migration_items << item if context.imported_migration_items && item.new_record?
     item
+  end
+
+  private
+
+  def tool_setting(setting, hash, *keys)
+    if !hash || !hash.is_a?(Hash)
+      settings.delete setting
+      return
+    else
+      settings[setting] = {}
+    end
+
+    settings[setting][:url] = hash[:url]
+    settings[setting][:text] = hash[:text] if hash[:text]
+    keys.each { |key| settings[setting][key] = hash[key] }
+
+    # if the type needs to do some validations for specific keys
+    yield settings[setting] if block_given?
+
+    settings[setting]
   end
   
 end

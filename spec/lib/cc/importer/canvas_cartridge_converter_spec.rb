@@ -12,10 +12,10 @@ describe "Canvas Cartridge importing" do
     exporter = CC::CCExporter.new(nil, :course=>@copy_from, :user=>@from_teacher)
     manifest = CC::Manifest.new(exporter)
     @resource = CC::Resource.new(manifest, nil)
-    @migration = Object.new
-    @migration.stubs(:to_import).returns(nil)
-    @migration.stubs(:context).returns(@copy_to)
-    @migration.stubs(:add_warning).returns('')
+    @migration = ContentMigration.new
+    @migration.context = @copy_to
+    @migration.save
+    @copy_to.content_migration = @migration
   end
 
   it "should import course settings" do
@@ -132,7 +132,7 @@ describe "Canvas Cartridge importing" do
     a_2 = ag2_2.assignments.first 
     ag2_2.rules.should == "drop_lowest:2\ndrop_highest:5\nnever_drop:%s\n" % a_2.id
   end
-
+  
   it "should import external tools" do
     tool1 = @copy_from.context_external_tools.new
     tool1.url = 'http://instructure.com'
@@ -142,6 +142,11 @@ describe "Canvas Cartridge importing" do
     tool1.consumer_key = 'haha'
     tool1.shared_secret = "don't share me"
     tool1.settings[:custom_fields] = {"key1" => "value1", "key2" => "value2"}
+    tool1.settings[:user_navigation] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :extra => 'extra'}
+    tool1.settings[:course_navigation] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :default => 'disabled', :visibility => 'members', :extra => 'extra'}
+    tool1.settings[:account_navigation] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :extra => 'extra'}
+    tool1.settings[:resource_selection] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :selection_width => 100, :selection_height => 50, :extra => 'extra'}
+    tool1.settings[:editor_button] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :selection_width => 100, :selection_height => 50, :icon_url => "http://www.example.com", :extra => 'extra'}
     tool1.save!
     tool2 = @copy_from.context_external_tools.new
     tool2.domain = 'example.com'
@@ -179,6 +184,33 @@ describe "Canvas Cartridge importing" do
     t1.domain.should == nil
     t1.consumer_key.should == 'fake'
     t1.shared_secret.should == 'fake'
+    [:user_navigation, :course_navigation, :account_navigation].each do |type|
+      t1.settings[type][:url].should == "http://www.example.com"
+      t1.settings[type][:text].should == "hello"
+      t1.settings[type][:labels][:en].should == 'hello'
+      t1.settings[type][:labels]['es'].should == 'hola'
+      if type == :course_navigation
+        t1.settings[type][:default].should == 'disabled'
+        t1.settings[type][:visibility].should == 'members'
+        t1.settings[type].keys.map(&:to_s).sort.should == ['default', 'labels', 'text', 'url', 'visibility']
+      else
+        t1.settings[type].keys.map(&:to_s).sort.should == ['labels', 'text', 'url']
+      end
+    end
+    [:resource_selection, :editor_button].each do |type|
+      t1.settings[type][:url].should == "http://www.example.com"
+      t1.settings[type][:text].should == "hello"
+      t1.settings[type][:labels][:en].should == 'hello'
+      t1.settings[type][:labels]['es'].should == 'hola'
+      t1.settings[type][:selection_width].should == 100
+      t1.settings[type][:selection_height].should == 50
+      if type == :editor_button
+        t1.settings[type][:icon_url].should == 'http://www.example.com'
+        t1.settings[type].keys.map(&:to_s).sort.should == ['icon_url', 'labels', 'selection_height', 'selection_width', 'text', 'url']
+      else
+        t1.settings[type].keys.map(&:to_s).sort.should == ['labels', 'selection_height', 'selection_width', 'text', 'url']
+      end
+    end
     t1.settings[:custom_fields].should == {"key1"=>"value1", "key2"=>"value2"}
     t1.settings[:vendor_extensions].should == [] 
     
@@ -190,7 +222,15 @@ describe "Canvas Cartridge importing" do
     t2.workflow_state.should == tool2.workflow_state
     t2.consumer_key.should == 'fake'
     t2.shared_secret.should == 'fake'
-    t2.settings[:vendor_extensions].should == [{:platform=>"my.lms.com", :custom_fields=>{"key"=>"value"}}]
+    t2.settings[:user_navigation].should be_nil
+    t2.settings[:course_navigation].should be_nil
+    t2.settings[:account_navigation].should be_nil
+    t2.settings[:resource_selection].should be_nil
+    t2.settings[:editor_button].should be_nil
+    t2.settings.keys.map(&:to_s).sort.should == ['custom_fields', 'vendor_extensions']
+    t2.settings[:vendor_extensions].should == [{'platform'=>"my.lms.com", 'custom_fields'=>{"key"=>"value"}}]
+    t2.settings[:vendor_extensions][0][:platform].should == 'my.lms.com'
+    t2.settings[:vendor_extensions][0][:custom_fields].should == {"key"=>"value"}
     t2.settings[:custom_fields].should == {}
   end
   
@@ -398,14 +438,14 @@ describe "Canvas Cartridge importing" do
     mod3.add_item({ :title => 'Example 2', :type => 'external_url', :url => 'http://b.example.com/' })
     
     # attachments are migrated with just their filename as display_name, 
-    # but if a content tag has a different title the display_name should update
+    # if a content tag has a different title the display_name should not update
     att = Attachment.create!(:filename => 'boring.txt', :display_name => "Super exciting!", :uploaded_data => StringIO.new('even more boring'), :folder => Folder.unfiled_folder(@copy_from), :context => @copy_from)
     att.display_name.should == "Super exciting!"
     # create @copy_to attachment with normal display_name
     att_2 = Attachment.create!(:filename => 'boring.txt', :uploaded_data => StringIO.new('even more boring'), :folder => Folder.unfiled_folder(@copy_to), :context => @copy_to)
     att_2.migration_id = CC::CCHelper.create_key(att)
     att_2.save
-    mod4.add_item({:title => att.display_name, :type => "attachment", :id => att.id})
+    att_tag = mod4.add_item({:title => "A different title just because", :type => "attachment", :id => att.id})
     
     # create @copy_to module link with different name than attachment
     att_3 = Attachment.create!(:filename => 'filename.txt', :uploaded_data => StringIO.new('even more boring'), :folder => Folder.unfiled_folder(@copy_from), :context => @copy_from)
@@ -458,9 +498,9 @@ describe "Canvas Cartridge importing" do
     mod3_2.content_tags[1].url.should == "http://b.example.com/"
     
     mod4_2 = @copy_to.context_modules.find_by_migration_id(CC::CCHelper.create_key(mod4))
-    mod4_2.content_tags.first.title.should == att.display_name
+    mod4_2.content_tags.first.title.should == att_tag.title
     att_2.reload
-    att_2.display_name.should == att.display_name
+    att_2.display_name.should == 'boring.txt'
     
     mod4_2.content_tags.count.should == 2
     tag = mod4_2.content_tags.last
@@ -548,6 +588,27 @@ describe "Canvas Cartridge importing" do
     page_2.body.should == (body_with_link % [ @copy_to.id, @copy_to.id, @copy_to.id, @copy_to.id, @copy_to.id, mod2.id, @copy_to.id, to_att.id ]).gsub(/png">/, 'png" />')
   end
   
+  it "should import migrate inline external tool URLs in wiki pages" do
+    # make sure that the wiki page we're linking to in the test below exists
+    page = @copy_from.wiki.wiki_pages.create!(:title => "blti-link", :body => "<a href='/courses/#{@copy_from.id}/external_tools/retrieve?url=#{CGI.escape('http://www.example.com')}'>link</a>")
+    @copy_from.save!
+    
+    #export to html file
+    migration_id = CC::CCHelper.create_key(page)
+    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, migration_id)
+    #convert to json
+    doc = Nokogiri::HTML(exported_html)
+    hash = @converter.convert_wiki(doc, 'blti-link')
+    hash = hash.with_indifferent_access
+    #import into new course
+    WikiPage.import_from_migration(hash, @copy_to)
+    
+    page_2 = @copy_to.wiki.wiki_pages.find_by_migration_id(migration_id)
+    page_2.title.should == page.title
+    page_2.url.should == page.url
+    page_2.body.should match(/\/courses\/#{@copy_to.id}\/external_tools\/retrieve/)
+  end
+  
   it "should import assignments" do 
     body_with_link = %{<p>Watup? <strong>eh?</strong><a href="/courses/%s/assignments">Assignments</a></p>
 <div>
@@ -603,6 +664,63 @@ describe "Canvas Cartridge importing" do
     asmnt_2.mastery_score.should be_nil
     asmnt_2.max_score.should be_nil
     asmnt_2.min_score.should be_nil
+  end
+  
+  it "should import external tool assignments" do
+    course_with_teacher_logged_in
+    assignment_model(:course => @copy_from, :points_possible => 40, :submission_types => 'external_tool', :grading_type => 'points')
+    tag_from = @assignment.build_external_tool_tag(:url => "http://example.com/one", :new_tab => true)
+    tag_from.content_type = 'ContextExternalTool'
+    tag_from.save!
+    
+    #export to xml/html
+    migration_id = CC::CCHelper.create_key(@assignment)
+    builder = Builder::XmlMarkup.new(:indent=>2)
+    builder.assignment("identifier" => migration_id) { |a| CC::AssignmentResources.create_assignment(a, @assignment) }
+    html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(@assignment.description, "Assignment: " + @assignment.title)
+    #convert to json
+    meta_doc = Nokogiri::XML(builder.target!)
+    html_doc = Nokogiri::HTML(html)
+    hash = @converter.convert_assignment(meta_doc, html_doc)
+    hash = hash.with_indifferent_access
+    #import
+    Assignment.import_from_migration(hash, @copy_to)
+
+    asmnt_2 = @copy_to.assignments.find_by_migration_id(migration_id)
+    asmnt_2.submission_types.should == "external_tool"
+    
+    asmnt_2.external_tool_tag.should_not be_nil
+    tag_to = asmnt_2.external_tool_tag
+    tag_to.content_type.should == tag_from.content_type
+    tag_to.url.should == tag_from.url
+    tag_to.new_tab.should == tag_from.new_tab
+  end
+  
+  it "should add error for invalid external tool urls" do
+    xml = <<XML
+<assignment identifier="ia24c092694901d2a5529c142accdaf0b">
+  <title>assignment title</title>
+  <points_possible>40</points_possible>
+  <grading_type>points</grading_type>
+  <submission_types>external_tool</submission_types>
+  <external_tool_url>/one</external_tool_url>
+  <external_tool_new_tab>true</external_tool_new_tab>
+</assignment>
+XML
+    #convert to json
+    meta_doc = Nokogiri::XML(xml)
+    html_doc = Nokogiri::HTML("<html><head><title>value for title</title></head><body>haha</body></html>")
+    hash = @converter.convert_assignment(meta_doc, html_doc)
+    hash = hash.with_indifferent_access
+    #import
+    Assignment.import_from_migration(hash, @copy_to)
+
+    asmnt_2 = @copy_to.assignments.find_by_migration_id('ia24c092694901d2a5529c142accdaf0b')
+    asmnt_2.submission_types.should == "external_tool"
+    
+    # the url was invalid so it won't be there
+    asmnt_2.external_tool_tag.should be_nil
+    @migration.warnings.should == ["The url for the external tool assignment \"assignment title\" wasn't valid."]
   end
   
   it "should import announcements (discussion topics)" do

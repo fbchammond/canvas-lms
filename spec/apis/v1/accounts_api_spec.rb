@@ -20,14 +20,15 @@ require File.expand_path(File.dirname(__FILE__) + '/../api_spec_helper')
 
 describe "Accounts API", :type => :integration do
   before do
+    Pseudonym.any_instance.stubs(:works_for_account?).returns(true)
     user_with_pseudonym(:active_all => true)
     @a1 = account_model(:name => 'root')
     @a1.add_user(@user)
-    @a2 = account_model(:name => 'subby', :parent_account => @a1, :sis_source_id => 'sis1')
+    @a2 = account_model(:name => 'subby', :parent_account => @a1, :root_account => @a1, :sis_source_id => 'sis1')
     @a2.add_user(@user)
     @a3 = account_model(:name => 'no-access')
     # even if we have access to it implicitly, it's not listed
-    @a4 = account_model(:name => 'implicit-access', :parent_account => @a1)
+    @a4 = account_model(:name => 'implicit-access', :parent_account => @a1, :root_account => @a1)
   end
 
   it "should return the account list" do
@@ -63,18 +64,23 @@ describe "Accounts API", :type => :integration do
         'parent_account_id' => nil,
         'sis_account_id' => nil,
       }
+  end
 
-    # by sis id
+  it "should find accounts by sis in only this root account" do
+    Account.default.add_user(@user)
+    other_sub = account_model(:name => 'other_sub', :parent_account => Account.default, :root_account => Account.default, :sis_source_id => 'sis1')
+    other_sub.add_user(@user)
+
+    # this is scoped to Account.default
     json = api_call(:get, "/api/v1/accounts/sis_account_id:sis1",
                     { :controller => 'accounts', :action => 'show', :id => "sis_account_id:sis1", :format => 'json' })
-    json.should ==
-      {
-        'id' => @a2.id,
-        'name' => 'subby',
-        'root_account_id' => @a1.id,
-        'parent_account_id' => @a1.id,
-        'sis_account_id' => 'sis1',
-      }
+    json['id'].should == other_sub.id
+
+    # we shouldn't find the account in the other root account by sis
+    other_sub.update_attribute(:sis_source_id, 'sis2')
+    raw_api_call(:get, "/api/v1/accounts/sis_account_id:sis1",
+                    { :controller => 'accounts', :action => 'show', :id => "sis_account_id:sis1", :format => 'json' })
+    response.status.should == "404 Not Found"
   end
 
   it "should return courses for an account" do

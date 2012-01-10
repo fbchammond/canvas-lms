@@ -90,13 +90,13 @@ class RespondusAPIPort
     ip = rack_env['REMOTE_ADDR']
 
     Authlogic::Session::Base.controller = AuthlogicAdapter.new(self)
-    pseudonym_session = domain_root_account.pseudonym_session_scope.new(:unique_id => userName, :password => password)
+    pseudonym_session = domain_root_account.pseudonym_sessions.new(:unique_id => userName, :password => password)
     pseudonym_session.remote_ip = request.remote_ip
     # don't actually want to create a session, so call `valid?` rather than `save`
     if pseudonym_session.valid?
       pseudonym = pseudonym_session.attempted_record
       @user = pseudonym.login_assertions_for_user
-    elsif pseudonym_session.attempted_record.try(:account).try(:delegated_authentication?)
+    elsif domain_root_account.delegated_authentication?
       raise(NeedDelegatedAuthError)
     else
       raise(BadAuthError)
@@ -512,7 +512,7 @@ Implemented for: Canvas LMS}]
     end
 
     settings = {
-      :migration_type => 'qti_exporter',
+      :migration_type => 'qti_converter',
       :apply_respondus_settings_file => (itemType != 'qdb'),
       :skip_import_notification => true,
       :files_import_allow_rename => true,

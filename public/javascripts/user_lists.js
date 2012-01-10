@@ -46,8 +46,7 @@ I18n.scoped('user_lists', function(I18n) {
         .click(function(e){
           e.preventDefault();
           UL.showProcessing();
-          var params = {user_list: $("#user_list_textarea_container textarea").val() };
-          $.ajaxJSON(user_lists_path, 'POST', params, UL.showResults);
+          $.ajaxJSON(user_lists_path, 'POST', $form.getFormData(), UL.showResults);
         })
       .end()
       .submit(function(event) {
@@ -67,7 +66,7 @@ I18n.scoped('user_lists', function(I18n) {
         });
       });
       $form.find("#enrollment_type").change(function() {
-        $("#limit_priveleges_to_course_section_holder").showIf($(this).val() == "TeacherEnrollment" || $(this).val() == "TaEnrollment");
+        $("#limit_privileges_to_course_section_holder").showIf($(this).val() == "TeacherEnrollment" || $(this).val() == "TaEnrollment");
       }).change();
 
       $(".unenroll_user_link").click(function(event) {

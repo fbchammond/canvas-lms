@@ -19,7 +19,6 @@
 class Notification < ActiveRecord::Base
   include LocaleSelection
 
-  validates_length_of :body, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
   include Workflow
   
   TYPES_TO_SHOW_IN_FEED = ["Assignment Due Date Changed", 
@@ -476,7 +475,6 @@ class Notification < ActiveRecord::Base
     t 'names.new_student_organized_group', 'New Student Organized Group'
     t 'names.new_teacher_registration', 'New Teacher Registration'
     t 'names.new_user', 'New User'
-    t 'names.new_wiki_page', 'New Wiki Page'
     t 'names.pseudonym_registration', 'Pseudonym Registration'
     t 'names.report_generated', 'Report Generated'
     t 'names.report_generation_failed', 'Report Generation Failed'

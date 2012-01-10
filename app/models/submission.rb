@@ -39,6 +39,8 @@ class Submission < ActiveRecord::Base
   serialize :turnitin_data, Hash
   validates_presence_of :assignment_id, :user_id
   validates_length_of :body, :maximum => maximum_long_text_length, :allow_nil => true, :allow_blank => true
+  include CustomValidations
+  validates_as_url :url
   
   named_scope :with_comments, :include => [:submission_comments ]
   named_scope :after, lambda{|date|
@@ -75,7 +77,7 @@ class Submission < ActiveRecord::Base
           SELECT DISTINCT s.id AS submission_id FROM submissions AS s
           INNER JOIN assignments AS a ON a.id = s.assignment_id
           INNER JOIN courses AS c ON c.id = a.context_id AND a.context_type = 'Course'
-            AND c.workflow_state NOT IN ('aborted', 'deleted')
+            AND c.workflow_state <> 'deleted'
           INNER JOIN enrollments AS e ON e.course_id = c.id AND e.user_id = #{p.user_id}
             AND e.workflow_state = 'active' AND e.type IN ('TeacherEnrollment', 'TaEnrollment')
           INNER JOIN submission_comments AS sc ON sc.submission_id = s.id
@@ -157,8 +159,11 @@ class Submission < ActiveRecord::Base
   
   set_policy do
     given {|user| user && user.id == self.user_id }
-    can :read and can :comment and can :make_group_comment and can :read_grade and can :submit
-    
+    can :read and can :comment and can :make_group_comment and can :submit
+
+    given { |user| user && user.id == self.user_id && !self.assignment.muted? }
+    can :read_grade
+
     given {|user| self.assignment && self.assignment.context && user && self.user &&
       self.assignment.context.observer_enrollments.find_by_user_id_and_associated_user_id_and_workflow_state(user.id, self.user.id, 'active') }
     can :read and can :read_comments
@@ -205,22 +210,6 @@ class Submission < ActiveRecord::Base
       @full_url = read_attribute(:body)
     else
       @full_url = read_attribute(:url)
-    end
-  end
-
-  validates_each(:url, :allow_nil => true) do |record, attr, value|
-    begin
-      value = value.strip
-      raise ArgumentError if value.empty?
-      uri = URI.parse(value)
-      unless uri.scheme
-        value = "http://#{value}"
-        uri = URI.parse(value)
-      end
-      raise ArgumentError unless %w(http https).include?(uri.scheme)
-      record.url = value
-    rescue URI::InvalidURIError, ArgumentError
-      record.errors.add attr, 'is not a valid URL'
     end
   end
 
@@ -377,8 +366,10 @@ class Submission < ActiveRecord::Base
       self.score = self.assignment.min_score if self.assignment.min_score && self.score && self.score < self.assignment.min_score 
     end
     self.submitted_at ||= Time.now if self.has_submission? || (self.submission_type && !self.submission_type.empty?)
+    self.quiz_submission.reload if self.quiz_submission
     self.workflow_state = 'unsubmitted' if self.submitted? && !self.has_submission?
     self.workflow_state = 'graded' if self.grade && self.score && self.grade_matches_current_submission
+    self.workflow_state = 'pending_review' if self.submission_type == 'online_quiz' && self.quiz_submission && !self.quiz_submission.complete?
     if self.graded? && self.graded_at_changed? && self.assignment.available?
       self.changed_since_publish = true
     end
@@ -744,7 +735,7 @@ class Submission < ActiveRecord::Base
         opts[:comment] = t('attached_files_comment', "See attached files.")
       end
     end
-    opts[:group_comment_id] = Digest::MD5.hexdigest((opts[:unique_key] || Date.today.to_s) + (opts[:media_comment_id] || opts[:comment] || t('no_comment', "no comment")))
+    opts[:group_comment_id] = Digest::MD5.hexdigest((opts[:unique_key] || Time.zone.today.to_s) + (opts[:media_comment_id] || opts[:comment] || t('no_comment', "no comment")))
     self.save! if self.new_record?
     valid_keys = [:comment, :author, :media_comment_id, :media_comment_type, :group_comment_id, :assessment_request, :attachments, :anonymous, :hidden]
     comment = self.submission_comments.create(opts.slice(*valid_keys)) if !opts[:comment].empty?
@@ -975,5 +966,18 @@ class Submission < ActiveRecord::Base
     self.attachment = attachment
     self.processed = true
     self.save!
+  end
+
+  def comments_for(user)
+    grants_right?(user, :read_grade)? submission_comments : visible_submission_comments
+  end
+
+  def filter_attributes_for_user(hash, user, session)
+    unless grants_right?(user, :read_grade)
+      %w(score published_grade published_score grade).each do |secret_attr|
+        hash.delete secret_attr
+      end
+    end
+    hash
   end
 end

@@ -123,6 +123,14 @@ class DiscussionTopic < ActiveRecord::Base
       self.assignment.workflow_state = 'available' if self.assignment.deleted?
       self.assignment.save
     end
+
+    # make sure that if the topic has a new assignment (either by going from
+    # ungraded to graded, or from one assignment to another; we ignore the
+    # transition from graded to ungraded) we acknowledge that the users that
+    # have posted have contributed to the topic
+    if self.assignment_id && self.assignment_id != @old_assignment_id
+      posters.each{ |user| self.context_module_action(user, :contributed) }
+    end
   end
   protected :update_assignment
   
@@ -232,14 +240,30 @@ class DiscussionTopic < ActiveRecord::Base
   
   on_create_send_to_streams do
     if should_send_to_stream
-      self.participants
+      self.active_participants
     end
   end
   
   on_update_send_to_streams do
     if should_send_to_stream && (@delayed_just_posted || @content_changed || changed_state(:active, :post_delayed))
-      self.participants
+      self.active_participants
     end
+  end
+  
+  def require_initial_post?
+    self.require_initial_post || (self.root_topic && self.root_topic.require_initial_post)
+  end
+  
+  def user_ids_who_have_posted_and_admins
+    ids = DiscussionEntry.active.scoped(:select => "distinct user_id").find_all_by_discussion_topic_id(self.id).map(&:user_id)
+    ids += self.context.admin_enrollments.scoped(:select => 'user_id').map(&:user_id) if self.context.respond_to?(:admin_enrollments)
+    ids
+  end
+  memoize :user_ids_who_have_posted_and_admins
+  
+  def user_can_see_posts?(user, session=nil)
+    return false unless user
+    !self.require_initial_post || self.grants_right?(user, session, :update) || user_ids_who_have_posted_and_admins.member?(user.id) 
   end
   
   def reply_from(opts)
@@ -379,14 +403,23 @@ class DiscussionTopic < ActiveRecord::Base
   
   def context_module_action(user, action, points=nil)
     self.context_module_tag.context_module_action(user, action, points) if self.context_module_tag
-    self.assignment.context_module_tag.context_module_action(user, action, points) if self.assignment && self.assignment.context_module_tag
+    if self.for_assignment?
+      self.assignment.context_module_tag.context_module_action(user, action, points) if self.assignment.context_module_tag
+      self.ensure_submission(user) if self.assignment.context.students.include?(user) && action == :contributed
+    end
+  end
+
+  def ensure_submission(user)
+    submission = Submission.find_by_assignment_id_and_user_id(self.assignment_id, user.id)
+    return if submission && submission.submission_type == 'discussion_topic'
+    self.assignment.submit_homework(user, :submission_type => 'discussion_topic')
   end
 
   has_a_broadcast_policy
 
   set_broadcast_policy do |p|
     p.dispatch :new_discussion_topic
-    p.to { participants - [user] }
+    p.to { active_participants - [user] }
     p.whenever { |record|
       record.context.available? and
       ((record.just_created and not record.post_delayed?) || record.changed_state(:active, :post_delayed))
@@ -400,8 +433,18 @@ class DiscussionTopic < ActiveRecord::Base
     ([self.user] + context.participants).uniq.select{|u| u}
   end
   
+  def active_participants
+    if !self.context.available? && self.context.respond_to?(:participating_admins)
+      self.context.participating_admins
+    else
+      self.participants
+    end
+  end
+  
   def posters
-    [self.user] + self.discussion_entries.find(:all, :include => [:user]).map(&:user)
+    users = self.discussion_entries.find(:all, :include => [:user]).map(&:user)
+    users << self.user
+    users.uniq
   end
 
   def user_name
@@ -411,7 +454,7 @@ class DiscussionTopic < ActiveRecord::Base
   def locked_for?(user=nil, opts={})
     @locks ||= {}
     return false if opts[:check_policies] && self.grants_right?(user, nil, :update)
-    @locks[user ? user.id : 0] ||= Rails.cache.fetch(['_locked_for', self, user].cache_key, :expires_in => 1.minute) do
+    @locks[user ? user.id : 0] ||= Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
       locked = false
       if (self.delayed_post_at && self.delayed_post_at > Time.now)
         locked = {:asset_string => self.asset_string, :unlock_at => self.delayed_post_at}

@@ -20,11 +20,10 @@ class CourseSection < ActiveRecord::Base
   include Workflow
 
   attr_protected :sis_source_id, :sis_batch_id, :course_id,
-      :root_account_id, :enrollment_term_id, :sis_cross_listed_section_id, :sis_cross_listed_section_sis_batch_id
+      :root_account_id, :enrollment_term_id
   belongs_to :course
   belongs_to :nonxlist_course, :class_name => 'Course'
   belongs_to :root_account, :class_name => 'Account'
-  belongs_to :sis_cross_listed_section
   belongs_to :account
   has_many :enrollments, :include => :user, :conditions => ['enrollments.workflow_state != ?', 'deleted'], :dependent => :destroy
   has_many :students, :through => :student_enrollments, :source => :user, :order => User.sortable_name_order_by_clause
@@ -59,7 +58,7 @@ class CourseSection < ActiveRecord::Base
   end
 
   set_policy do
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage) }
+    given {|user, session| self.cached_context_grants_right?(user, session, :manage_sections) }
     can :read and can :create and can :update and can :delete
 
     given {|user, session| self.cached_context_grants_right?(user, session, :manage_students, :manage_admin_users) }
@@ -115,7 +114,7 @@ class CourseSection < ActiveRecord::Base
     # - otherwise, just use name
     # - use the method display_name to consolidate this logic
     self.name ||= self.course.name if self.default_section
-    self.name ||= "#{self.course.name} #{Date.today.to_s}"
+    self.name ||= "#{self.course.name} #{Time.zone.today.to_s}"
     self.section_code ||= self.name
     self.long_section_code ||= self.name
     if name_had_changed

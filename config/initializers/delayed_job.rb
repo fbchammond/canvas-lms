@@ -1,12 +1,3 @@
-module Delayed
-  HIGH_PRIORITY = 0
-  NORMAL_PRIORITY = 10
-  LOW_PRIORITY = 20
-  LOWER_PRIORITY = 50
-end
-
-Delayed::Job.default_priority = Delayed::NORMAL_PRIORITY
-
 # If there is a sub-hash under the 'queue' key for the database config, use that
 # as the connection for the job queue. The migration that creates the
 # delayed_jobs table is smart enough to use this connection as well.
@@ -24,38 +15,4 @@ Delayed::Worker.on_max_failures = proc do |job, err|
 
   # by default, keep failed jobs around for investigation
   false
-end
-
-class Object
-  def send_later_if_production(*args)
-    if Rails.env.production?
-      send_later(*args)
-    else
-      send(*args)
-    end
-  end
-
-  def send_later_if_production_enqueue_args(method, enqueue_args, *args)
-    if Rails.env.production?
-      send_later_enqueue_args(method, enqueue_args, *args)
-    else
-      send(method, *args)
-    end
-  end
-
-  def send_now_or_later(_when, *args)
-    if _when == :now
-      send(*args)
-    else
-      send_later(*args)
-    end
-  end
-
-  def send_now_or_later_if_production(_when, *args)
-    if _when == :now
-      send(*args)
-    else
-      send_later_if_production(*args)
-    end
-  end
 end

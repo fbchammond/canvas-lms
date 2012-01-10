@@ -36,6 +36,13 @@ class TokenInput
           $token.remove()
           @change?(@token_values())
 
+    @tokens.maxTokenWidth = =>
+      (parseInt(@tokens.css('width').replace('px', '')) - 150) + 'px'
+    @tokens.resizeTokens = (tokens) =>
+      tokens.find('div.ellipsis').css('max-width', @tokens.maxTokenWidth())
+    $(window).resize =>
+      @tokens.resizeTokens(@tokens)
+
     # key capture input
     @input = $('<input />')
       .appendTo(@fake_input)
@@ -87,7 +94,8 @@ class TokenInput
       $token = $('<li />')
       text = data?.text ? @val()
       $token.attr('id', id)
-      $text = $('<div />')
+      $text = $('<div />').addClass('ellipsis')
+      $text.attr('title', text)
       $text.text(text)
       $token.append($text)
       $close = $('<a />')
@@ -97,6 +105,9 @@ class TokenInput
         .attr('name', @node_name + '[]')
         .val(val)
       )
+      # has to happen before append, so that its unlimited width doesn't make
+      # @tokens grow (which would then keep us from limiting it)
+      @tokens.resizeTokens($token)
       @tokens.append($token)
     @val('') unless data?.no_clear
     @placeholder.hide()
@@ -349,6 +360,23 @@ class TokenSelector
           @ui_locked=false
           @clear_loading()
     , 100
+
+  add_by_user_id: (user_id, from_conversation_id) ->
+    @set_loading()
+    $.ajaxJSON @url, 'POST', { user_id: user_id, from_conversation_id: from_conversation_id },
+      (data) =>
+        @clear_loading()
+        @close()
+        user = data[0]
+        if user
+          @input.add_token
+            value: user.id
+            text: user.name
+            data: user
+      ,
+      (data) =>
+        @clear_loading()
+        @close()
 
   open: ->
     @container.show()
@@ -659,9 +687,9 @@ I18n.scoped 'conversations', (I18n) ->
     if $selected_conversation
       $selected_conversation.scrollIntoView()
     else
-      if params.user_id and params.user_name
-        $('#recipients').data('token_input').add_token value: params.user_id, text: params.user_name, data: {id: params.user_id, name: params.user_name, can_add_notes: params.can_add_notes}
+      if params.user_id
         $('#from_conversation_id').val(params.from_conversation_id)
+        $('#recipients').data('token_input').selector.add_by_user_id(params.user_id, params.from_conversation_id)
       return
 
     $form.loadingImage()
@@ -680,7 +708,7 @@ I18n.scoped 'conversations', (I18n) ->
       message = data.messages[0]
       submission = data.submissions[0]
       while message || submission
-        if message && (!submission || $.parseFromISO(message.created_at).datetime > $.parseFromISO(submission.updated_at).datetime)
+        if message && (!submission || $.parseFromISO(message.created_at).datetime > $.parseFromISO(submission.submission_comments[submission.submission_comments.length - 1]?.created_at).datetime)
           # there's another message, and the next submission (if any) is not newer than it
           $message_list.append build_message(message)
           message = data.messages[++i]
@@ -892,7 +920,8 @@ I18n.scoped 'conversations', (I18n) ->
     $comment_blank = $ul.find('.comment').detach()
     index = 0
     initially_shown = 4
-    for comment in data.submission_comments.reverse()
+    for idx in [data.submission_comments.length - 1 .. 0] by -1
+      comment = data.submission_comments[idx]
       break if index >= 10
       index++
       comment = build_submission_comment($comment_blank, comment)
@@ -1641,11 +1670,11 @@ I18n.scoped 'conversations', (I18n) ->
     token_input.fake_input.css('width', '100%')
     token_input.change = (tokens) ->
       if tokens.length > 1 or tokens[0]?.match(/^(course|group)_/)
-        $form.find('#group_conversation').attr('checked', true) if !$form.find('#group_conversation_info').is(':visible')
+        $form.find('#group_conversation').attr('checked', false) if !$form.find('#group_conversation_info').is(':visible')
         $form.find('#group_conversation_info').show()
         $form.find('#user_note_info').hide()
       else
-        $form.find('#group_conversation').attr('checked', true)
+        $form.find('#group_conversation').attr('checked', false)
         $form.find('#group_conversation_info').hide()
         $form.find('#user_note_info').showIf((user = MessageInbox.user_cache[tokens[0]]) and can_add_notes_for(user))
       inbox_resize()
@@ -1664,7 +1693,7 @@ I18n.scoped 'conversations', (I18n) ->
         scrape: (data) ->
           if typeof(data) == 'string'
             try
-              data = JSON.parse(data)
+              data = $.parseJSON(data) || []
             catch error
               data = []
             for conversation in data

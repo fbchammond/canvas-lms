@@ -20,7 +20,8 @@ class Pseudonym < ActiveRecord::Base
   include Workflow
 
   attr_accessible :user, :account, :password, :password_confirmation, :path, :path_type, :password_auto_generated, :unique_id
-  
+
+  has_many :session_persistence_tokens
   belongs_to :account
   belongs_to :user
   has_many :communication_channels, :order => 'position'
@@ -101,13 +102,18 @@ class Pseudonym < ActiveRecord::Base
     self.save!
     @send_confirmation = false
   end
-  
-  def self.custom_find_by_unique_id(unique_id, which = :first)
-    if connection.adapter_name.downcase == 'mysql'
-      find(which, :conditions => { :unique_id => unique_id, :workflow_state => 'active'})
+
+  named_scope :by_unique_id, lambda { |unique_id|
+    if connection_pool.spec.config[:adapter] == 'mysql'
+      { :conditions => {:unique_id => unique_id } }
     else
-      find(which, :conditions => ["LOWER(#{quoted_table_name}.unique_id)=? AND workflow_state='active'", unique_id.mb_chars.downcase])
+      { :conditions => ["LOWER(#{quoted_table_name}.unique_id)=?", unique_id.mb_chars.downcase] }
     end
+  }
+
+  def self.custom_find_by_unique_id(unique_id, which = :first)
+    return nil unless unique_id
+    self.active.by_unique_id(unique_id).find(which)
   end
   
   def set_password_changed
@@ -120,7 +126,7 @@ class Pseudonym < ActiveRecord::Base
   end
   
   def communication_channel
-    self.user.communication_channels.find_by_path(self.unique_id)
+    self.user.communication_channels.by_path(self.unique_id).find(:first)
   end
   
   def confirmation_code
@@ -163,12 +169,11 @@ class Pseudonym < ActiveRecord::Base
   def authentication_type
     :email_login
   end
-  
+
   def works_for_account?(account)
-    return false unless account
-    self.account_id == account.id || (!account.require_account_pseudonym? && self.account.password_authentication?)
+    true
   end
-  
+
   def save_without_updating_passwords_on_related_pseudonyms
     @dont_update_passwords_on_related_pseudonyms = true
     self.save
@@ -212,7 +217,9 @@ class Pseudonym < ActiveRecord::Base
     raise "Cannot delete system-generated pseudonyms" if !even_if_managed_password && self.managed_password?
     self.workflow_state = 'deleted'
     self.deleted_at = Time.now
-    self.save
+    result = self.save
+    self.user.try(:update_account_associations) if result
+    result
   end
   
   def never_logged_in?
@@ -248,11 +255,6 @@ class Pseudonym < ActiveRecord::Base
     self.user.email=(e)
     user.save!
     user.email
-  end
-  
-  def account_name
-    return "Instructure" if self.account == Account.default
-    self.account.name rescue "Canvas"
   end
   
   def chat
@@ -348,7 +350,8 @@ class Pseudonym < ActiveRecord::Base
     res = @ldap_result
     if res && res[:mail] && res[:mail][0]
       email = res[:mail][0]
-      cc = self.user.communication_channels.find_or_initialize_by_path_and_path_type(email, 'email')
+      cc = self.user.communication_channels.email.by_path(email).first
+      cc ||= self.user.communication_channels.build(:path => email)
       cc.workflow_state = 'active'
       cc.user = self.user
       cc.save if cc.changed?
@@ -377,9 +380,10 @@ class Pseudonym < ActiveRecord::Base
   named_scope :account_unique_ids, lambda{|account, *unique_ids|
     {:conditions => {:account_id => account.id, :unique_id => unique_ids}, :order => :unique_id}
   }
-  named_scope :active, lambda{
-    {:conditions => ['pseudonyms.workflow_state IS NULL OR pseudonyms.workflow_state != ?', 'deleted'] }
-  }
+  named_scope :active, :conditions => ['pseudonyms.workflow_state IS NULL OR pseudonyms.workflow_state != ?', 'deleted']
+  # returns pseudonyms not from account, but that can be used by account
+  named_scope :trusted_by, lambda { |account| {:conditions => ['account_id<>?', account.id]} }
+  named_scope :trusted_by_including_self, lambda { |account| {} }
 
   def self.serialization_excludes; [:crypted_password, :password_salt, :reset_password_token, :persistence_token, :single_access_token, :perishable_token, :sis_ssha]; end
 end
