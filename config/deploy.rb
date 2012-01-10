@@ -11,7 +11,7 @@ set :deploy_to, "/var/www/canvas"
 
 role :web, "root@bean.hylesanderson.edu" # Your HTTP server, Apache/etc
 role :app, "root@bean.hylesanderson.edu" # This may be the same as your `Web` server
-# role :db,  "root@bean.hylesanderson.edu", :primary => true # This is where Rails migrations will run
+role :db,  "root@bean.hylesanderson.edu", :primary => true # This is where Rails migrations will run
 
 set :use_sudo, false
 
