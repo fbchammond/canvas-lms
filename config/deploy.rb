@@ -24,6 +24,9 @@ after "deploy:update_code" do
   
   run "ln -s #{shared_path}/google2248bfbba38f2b28.html #{release_path}/public/google2248bfbba38f2b28.html"
   
+  # The Facebook icon is missing so symlink on deploy -- when the symlink fails it presumably means that the problem is fixed
+  run "ln -s #{release_path}/public/images/email_big.png #{release_path}/public/images/conversation_message_icon.png"
+  
   run "chown canvas:canvas #{release_path}/config/environment.rb"
   run "chown canvas:canvas #{release_path}/db"
   run "chown canvas:canvas #{release_path}/tmp"
