@@ -2,6 +2,7 @@ require 'bundler/capistrano'
 
 set :application, "canvas-lms"
 
+set :gateway, 'root@dog.hylesanderson.edu'
 set :scm, :git
 set :repository,  "ssh://git@dev.fbchammond.com/var/git/vendor/canvas-lms.git"
 set :branch, "hac"
@@ -9,9 +10,9 @@ set :repository_cache, "git_cache"
 set :deploy_via, :remote_cache
 set :deploy_to, "/var/www/canvas"
 
-role :web, "root@bean.hylesanderson.edu" # Your HTTP server, Apache/etc
-role :app, "root@bean.hylesanderson.edu" # This may be the same as your `Web` server
-role :db,  "root@bean.hylesanderson.edu", :primary => true # This is where Rails migrations will run
+role :web, "root@newt.hylesanderson.edu", "root@ox.hylesanderson.edu" # Your HTTP server, Apache/etc
+role :app, "root@newt.hylesanderson.edu", "root@ox.hylesanderson.edu" # This may be the same as your `Web` server
+role :db,  "root@newt.hylesanderson.edu", :primary => true # This is where Rails migrations will run
 
 set :use_sudo, false
 
