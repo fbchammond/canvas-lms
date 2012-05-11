@@ -20,6 +20,7 @@ require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 require "selenium-webdriver"
 require "socket"
 require "timeout"
+require 'coffee-script'
 require File.expand_path(File.dirname(__FILE__) + '/custom_selenium_rspec_matchers')
 require File.expand_path(File.dirname(__FILE__) + '/server')
 include I18nUtilities
@@ -49,11 +50,17 @@ module SeleniumTestsHelperMethods
     if SELENIUM_CONFIG[:host] && SELENIUM_CONFIG[:port] && !SELENIUM_CONFIG[:host_and_port]
       SELENIUM_CONFIG[:host_and_port] = "#{SELENIUM_CONFIG[:host]}:#{SELENIUM_CONFIG[:port]}"
     end
+    native = SELENIUM_CONFIG[:native_events] || false
+    browser = SELENIUM_CONFIG[:browser].try(:to_sym) || :firefox
     if !SELENIUM_CONFIG[:host_and_port]
-      browser = SELENIUM_CONFIG[:browser].try(:to_sym) || :firefox
       options = {}
-      if SELENIUM_CONFIG[:firefox_profile].present? && browser == :firefox
-        options[:profile] = Selenium::WebDriver::Firefox::Profile.from_name(SELENIUM_CONFIG[:firefox_profile])
+      if browser == :firefox
+        profile = Selenium::WebDriver::Firefox::Profile.new
+        if SELENIUM_CONFIG[:firefox_profile].present?
+          profile = Selenium::WebDriver::Firefox::Profile.from_name(SELENIUM_CONFIG[:firefox_profile])
+        end
+        profile.native_events = native
+        options[:profile] = profile
       end
       if path = SELENIUM_CONFIG[:paths].try(:[], browser)
         Selenium::WebDriver.const_get(browser.to_s.capitalize).path = path
@@ -61,9 +68,13 @@ module SeleniumTestsHelperMethods
       driver = Selenium::WebDriver.for(browser, options)
     else
       caps = SELENIUM_CONFIG[:browser].try(:to_sym) || :firefox
-      if caps == :firefox && SELENIUM_CONFIG[:firefox_profile]
-        profile = Selenium::WebDriver::Firefox::Profile.from_name SELENIUM_CONFIG[:firefox_profile]
-        caps = Selenium::WebDriver::Remote::Capabilities.firefox(:firefox_profile => profile)
+      if caps == :firefox
+        profile = Selenium::WebDriver::Firefox::Profile.new
+        if SELENIUM_CONFIG[:firefox_profile].present?
+          profile = Selenium::WebDriver::Firefox::Profile.from_name SELENIUM_CONFIG[:firefox_profile]
+        end
+      caps = Selenium::WebDriver::Remote::Capabilities.firefox(:firefox_profile => profile)
+      caps.native_events = native
       end
 
       driver = nil
@@ -82,8 +93,44 @@ module SeleniumTestsHelperMethods
       end
 
     end
-    driver.manage.timeouts.implicit_wait = 1
+    driver.manage.timeouts.implicit_wait = 3
     driver
+  end
+
+  # f means "find" this is a shortcut to finding elements
+  def f(selector, scope = nil)
+    begin
+      (scope || driver).find_element :css, selector
+    rescue
+      nil
+    end
+  end
+
+  # short for find with jquery
+  def fj(selector, scope = nil)
+    begin
+      find_with_jquery selector, scope
+    rescue
+      nil
+    end
+  end
+
+  # same as `f` except tries to find several elements instead of one
+  def ff(selector, scope = nil)
+    begin
+      (scope || driver).find_elements :css, selector
+    rescue
+      []
+    end
+  end
+
+  # same as find with jquery but tries to find several elements instead of one
+  def ffj(selector, scope = nil)
+    begin
+      find_all_with_jquery selector, scope
+    rescue
+      []
+    end
   end
 
   #this is needed for using the before_label function in I18nUtilities
@@ -148,6 +195,56 @@ module SeleniumTestsHelperMethods
     return shutdown
   end
 
+  def exec_cs(script, *args)
+    driver.execute_script(CoffeeScript.compile(script), *args)
+  end
+
+  # a varable named `callback` is injected into your function for you, just call it to signal you are done.
+  def exec_async_cs(script, *args)
+    to_compile = "var callback = arguments[arguments.length - 1]; #{CoffeeScript.compile(script)}"
+    driver.execute_async_script(script, *args)
+  end
+
+  # usage
+  # require_exec 'compiled/util/foo', 'bar', <<-CS
+  #   foo('something')
+  #   # optionally I should be able to do
+  #   bar 'something else', ->
+  #     "stuff"
+  #     callback('i made it')
+  #
+  # CS
+  #
+  # simple usage
+  # require_exec 'i18n!messages', 'i18n.t("foobar")'
+  def require_exec(*args)
+    code = args.last
+    things_to_require = {}
+    args[0...-1].each do |file_path|
+      things_to_require[file_path] = file_path.split('/').last.split('!').first
+    end
+
+    # make sure the code you pass is at least as intented as it should be
+    code = code.gsub(/^/, '          ')
+    coffee_source = <<-CS
+      _callback = arguments[arguments.length - 1];
+      cancelCallback = false
+
+      callback = ->
+        _callback.apply(this, arguments)
+        cancelCallback = true
+
+      require #{things_to_require.keys.to_json}, (#{things_to_require.values.join(', ')}) ->
+        res = do ->
+#{code}
+        _callback(res) unless cancelCallback
+    CS
+    # make it `bare` because selenium already wraps it in a function and we need to get
+    # the arguments for our callback
+    js = CoffeeScript.compile(coffee_source, :bare => true)
+    driver.execute_async_script(js)
+  end
+
   def self.start_forked_webrick_server
     setup_host_and_port
 
@@ -201,6 +298,9 @@ shared_examples_for "all selenium tests" do
   include SeleniumTestsHelperMethods
   include CustomSeleniumRspecMatchers
 
+  # set up so you can use rails urls helpers in your selenium tests
+  include ActionController::UrlWriter
+
   def selenium_driver; $selenium_driver; end
 
   alias_method :driver, :selenium_driver
@@ -244,6 +344,16 @@ shared_examples_for "all selenium tests" do
     course_with_student({:user => @user, :active_course => true, :active_enrollment => true}.merge(opts))
   end
 
+  def course_with_ta_logged_in(opts={})
+    user_logged_in(opts)
+    course_with_ta({:user => @user, :active_course => true, :active_enrollment => true}.merge(opts))
+  end
+
+  def course_with_designer_logged_in(opts={})
+    user_logged_in(opts)
+    course_with_designer({:user => @user, :active_course => true, :active_enrollment => true}.merge(opts))
+  end
+
   def course_with_admin_logged_in(opts={})
     account_admin_user({:active_user => true}.merge(opts))
     user_logged_in({:user => @user}.merge(opts))
@@ -260,6 +370,13 @@ shared_examples_for "all selenium tests" do
     user_logged_in({:user => @user}.merge(opts))
   end
 
+  def enter_student_view(opts={})
+    course = opts[:course] || @course || course(opts)
+    get "/courses/#{@course.id}/settings"
+    f(".student_view_button").click
+    wait_for_dom_ready
+  end
+
   def expect_new_page_load
     driver.execute_script("INST.still_on_old_page = true;")
     yield
@@ -267,41 +384,70 @@ shared_examples_for "all selenium tests" do
     wait_for_dom_ready
   end
 
-  def wait_for_dom_ready
-    keep_trying_until(120) { driver.execute_script("return $") != nil }
-    driver.execute_script <<-JS
-      window.seleniumDOMIsReady = false;
-      $(function(){
-        window.setTimeout(function(){
-          //by doing a setTimeout, we ensure that the execution of all js completes. then we run selenium.
-          window.seleniumDOMIsReady = true;
-        }, 1);
-      });
-    JS
+  def check_domready
     dom_is_ready = driver.execute_script "return window.seleniumDOMIsReady"
-    until (dom_is_ready) do
-      sleep 0.1
-      dom_is_ready = driver.execute_script "return window.seleniumDOMIsReady"
-    end
+    requirejs_resources_loaded = driver.execute_script "return require.resourcesDone"
+    dom_is_ready and requirejs_resources_loaded
+  end
+
+  ##
+  # waits for JavaScript to evaluate, occasionally when you click an element
+  # a bunch of JS needs to run, this basically puts the rest of your test later
+  # in the JS thread
+  def wait_for_js
+    driver.execute_script <<-JS
+      window.selenium_wait_for_js = false;
+      setTimeout(function() { window.selenium_wait_for_js = true; });
+    JS
+    keep_trying_until { driver.execute_script('return window.selenium_wait_for_js') == true }
+  end
+
+  def wait_for_dom_ready
+    driver.execute_async_script(<<-JS)
+     var callback = arguments[arguments.length - 1];
+     var pollForJqueryAndRequire = function(){
+        if (window.jQuery && window.require && window.require.resourcesDone) {
+          jQuery(function(){
+            setTimeout(callback, 1);
+          });
+        } else {
+          setTimeout(pollForJqueryAndRequire, 1);
+        }
+      }
+      pollForJqueryAndRequire();
+    JS
   end
 
   def wait_for_ajax_requests(wait_start = 0)
-    driver.execute_async_script(<<-JS)
+    result = driver.execute_async_script(<<-JS)
       var callback = arguments[arguments.length - 1];
-      if (typeof($) == 'undefined') {
+      if (window.wait_for_ajax_requests_hit_fallback) {
+        callback(0);
+      } else if (typeof($) == 'undefined') {
         callback(-1);
       } else {
+        var fallbackCallback = window.setTimeout(function() {
+          // technically, we should cancel the other timeouts that we've set up at this
+          // point, but we're going to be raising an exception anyway when this happens,
+          // so it's not a big deal.
+          window.wait_for_ajax_requests_hit_fallback = 1;
+          callback(-2);
+        }, 55000);
+        var doCallback = function(value) {
+          window.clearTimeout(fallbackCallback);
+          callback(value);
+        }
         var waitForAjaxStop = function(value) {
           $(document).bind('ajaxStop.canvasTestAjaxWait', function() {
             $(document).unbind('.canvasTestAjaxWait');
-            callback(value);
+            doCallback(value);
           });
         }
         if ($.active == 0) {
           // if there are no active requests, wait {wait_start}ms for one to start
           var timeout = window.setTimeout(function() {
             $(document).unbind('.canvasTestAjaxWait');
-            callback(0);
+            doCallback(0);
           }, #{wait_start});
           $(document).bind('ajaxStart.canvasTestAjaxWait', function() {
             window.clearTimeout(timeout);
@@ -312,6 +458,10 @@ shared_examples_for "all selenium tests" do
         }
       }
     JS
+    if result == -2
+      raise "Timed out waiting for ajax requests to finish. (This might mean there was a js error in an ajax callback.)"
+    end
+    result
   end
 
   def wait_for_animations(wait_start = 0)
@@ -370,12 +520,12 @@ shared_examples_for "all selenium tests" do
     val
   end
 
-  def find_with_jquery(selector)
-    driver.execute_script("return $('#{selector.gsub(/'/, '\\\\\'')}')[0];")
+  def find_with_jquery(selector, scope = nil)
+    driver.execute_script("return $(arguments[0], arguments[1] && $(arguments[1]))[0];", selector, scope)
   end
 
-  def find_all_with_jquery(selector)
-    driver.execute_script("return $('#{selector.gsub(/'/, '\\\\\'')}').toArray();")
+  def find_all_with_jquery(selector, scope = nil)
+    driver.execute_script("return $(arguments[0], arguments[1] && $(arguments[1])).toArray();", selector, scope)
   end
 
   # pass in an Element pointing to the textarea that is tinified.
@@ -419,10 +569,19 @@ shared_examples_for "all selenium tests" do
     JS
   end
 
+  def dismiss_alert
+    keep_trying_until do
+      alert = driver.switch_to.alert
+      alert.dismiss
+      true
+    end
+  end
+
   def in_frame(id, &block)
     saved_window_handle = driver.window_handle
     driver.switch_to.frame id
     yield
+  ensure
     driver.switch_to.window saved_window_handle
   end
 
@@ -436,12 +595,8 @@ shared_examples_for "all selenium tests" do
     driver.execute_script(%{$(#{element_jquery_finder.to_s.to_json}).trigger('mouseenter').click()})
   end
 
-  def is_checked(selector)
-    if selector.is_a?(String)
-      return driver.execute_script('return $("'+selector+'").is(":checked")')
-    else
-      return selector.attribute(:checked) == 'checked'
-    end
+  def is_checked(css_selector)
+    driver.execute_script('return $("'+css_selector+'").prop("checked")')
   end
 
   def set_value(input, value)
@@ -465,14 +620,8 @@ shared_examples_for "all selenium tests" do
     visible_dialog_element.should_not be_displayed
   end
 
-  def element_exists(selector_type, selector)
-    exists = false
-    begin
-      driver.find_element(selector_type, selector)
-      exists = true
-    rescue
-    end
-    exists
+  def element_exists(css_selector)
+    !find_all_with_jquery(css_selector).empty?
   end
 
   def first_selected_option(select_element)
@@ -481,18 +630,23 @@ shared_examples_for "all selenium tests" do
     option
   end
 
-  def datepicker_prev
+  def datepicker_prev(day_text = '15')
     datepicker = driver.find_element(:css, '#ui-datepicker-div')
     datepicker.find_element(:css, '.ui-datepicker-prev').click
-    find_with_jquery('#ui-datepicker-div a:contains(15)').click
+    find_with_jquery("#ui-datepicker-div a:contains(#{day_text})").click
     datepicker
   end
 
-  def datepicker_next
+  def datepicker_next(day_text = '15')
     datepicker = driver.find_element(:css, '#ui-datepicker-div')
     datepicker.find_element(:css, '.ui-datepicker-next').click
-    find_with_jquery('#ui-datepicker-div a:contains(15)').click
+    find_with_jquery("#ui-datepicker-div a:contains(#{day_text})").click
     datepicker
+  end
+
+  def datepicker_current(day_text = '15')
+    datepicker = driver.find_element(:css, '#ui-datepicker-div')
+    find_with_jquery("#ui-datepicker-div a:contains(#{day_text})").click
   end
 
   def stub_kaltura
@@ -513,18 +667,17 @@ shared_examples_for "all selenium tests" do
     Kaltura::ClientV3.stubs(:new).returns(kal)
   end
 
-  def get(link)
+  # you can pass an array to use the rails polymorphic_path helper, example:
+  # get [@course, @announcement] => "http://10.0.101.75:65137/courses/1/announcements/1"
+  def get(link, wait_for_dom = true)
+    link = polymorphic_path(link) if link.is_a? Array
     driver.get(app_host + link)
-    wait_for_dom_ready
+    wait_for_dom_ready if wait_for_dom
   end
 
   def refresh_page
     driver.navigate.refresh
     wait_for_dom_ready
-  end
-
-  def type_in_tiny(selector, content)
-    driver.execute_script("$('#{selector}').editorBox('execute', 'mceInsertContent',false, '#{content}')")
   end
 
   def make_full_screen
@@ -538,6 +691,19 @@ shared_examples_for "all selenium tests" do
     if w > 0 and h > 0
       driver.manage.window.move_to(0, 0)
       driver.manage.window.resize_to(w, h)
+    end
+  end
+
+  def resize_screen_to_default
+    h = driver.execute_script <<-JS
+      if (window.screen) {
+        return window.screen.availHeight;
+      }
+    return 0;
+    JS
+    if h > 0
+      driver.manage.window.move_to(0, 0)
+      driver.manage.window.resize_to(1024, h)
     end
   end
 
@@ -560,39 +726,91 @@ shared_examples_for "all selenium tests" do
     element.tag_name.should == 'a'
     temp_file = open(element.attribute('href'))
     temp_file.size.should > 0
+    temp_file
   end
 
   def assert_flash_notice_message(okay_message_regex)
     keep_trying_until do
-      text = driver.find_element(:css, "#flash_notice_message").text
+      text = driver.find_element(:id, "flash_notice_message").text
       raise "server error" if text =~ /The last request didn't work out/
       text =~ okay_message_regex
     end
   end
 
+  def assert_flash_error_message(fail_message_regex)
+    keep_trying_until do
+      text = driver.find_element(:id, "flash_error_message").text
+      raise "server error" if text =~ /The last request didn't work out/
+      text =~ fail_message_regex
+    end
+  end
+
+  ##
+  # load the simulate plugin to simulate a drag events (among other things)
+  # will only load it once even if its called multiple times
   def load_simulate_js
-    # load the simulate plugin to simulate a drag event
-    js = File.read('spec/selenium/jquery.simulate.js')
-    driver.execute_script js
+    @load_simulate_js ||= begin
+      js = File.read('spec/selenium/jquery.simulate.js')
+      driver.execute_script js
+    end
+  end
+
+  # when selenium fails you, reach for .simulate
+  # takes a CSS selector for jQuery to find the element you want to drag
+  # and then the change in x and y you want to drag
+  def drag_with_js(selector, x, y)
+    load_simulate_js
+    driver.execute_script "$('#{selector}').simulate('drag', { dx: #{x}, dy: #{y} })"
+  end
+
+  ##
+  # drags an element matching css selector `source_selector` onto an element
+  # matching css selector `target_selector`
+  #
+  # sometimes seleniums drag and drop just doesn't seem to work right this
+  # seems to be more reliable
+  def js_drag_and_drop(source_selector, target_selector)
+    source = f source_selector
+    source_location = source.location
+
+    target = f target_selector
+    target_location = target.location
+
+    dx = target_location.x - source_location.x
+    dy = target_location.y - source_location.y
+
+    drag_with_js source_selector, dx, dy
+  end
+
+  ##
+  # returns true if a form validation error message is visible, false otherwise
+  def error_displayed?
+    # after it fades out, it's still visible, just off the screen
+    driver.execute_script("return $('.error_text:visible').filter(function(){ return $(this).offset().left >= 0 }).length > 0")
   end
 
   self.use_transactional_fixtures = false
 
   append_after(:each) do
-    wait_for_ajax_requests
+    begin
+      wait_for_ajax_requests
+    rescue Selenium::WebDriver::Error::WebDriverError
+      # we want to ignore selenium errors when attempting to wait here
+    end
     ALL_MODELS.each { |m| truncate_table(m) }
   end
 
-  append_before(:each) do
-    driver.manage.timeouts.implicit_wait = 1
+  append_before (:each) do
+    driver.manage.timeouts.implicit_wait = 3
     driver.manage.timeouts.script_timeout = 60
   end
 
-  append_before(:all) do
+  append_before (:all) do
     $selenium_driver ||= setup_selenium
+    default_url_options[:host] = $app_host_and_port
   end
 
-  append_before(:all) do
+  append_before (:all) do
     unless $check_screen_dimensions
       w, h = driver.execute_script <<-JS
         if (window.screen) {
@@ -605,51 +823,67 @@ shared_examples_for "all selenium tests" do
   end
 end
 
-TEST_FILE_UUIDS = {
+  TEST_FILE_UUIDS = {
     "testfile1.txt" => "63f46f1c-dd4a-467d-a136-333f262f1366",
     "testfile1copy.txt" => "63f46f1c-dd4a-467d-a136-333f262f1366",
     "testfile2.txt" => "5d714eca-2cff-4737-8604-45ca098165cc",
     "testfile3.txt" => "72476b31-58ab-48f5-9548-a50afe2a2fe3",
     "testfile4.txt" => "38f6efa6-aff0-4832-940e-b6f88a655779",
     "testfile5.zip" => "3dc43133-840a-46c8-ea17-3e4bef74af37",
-    "graded.png" => File.read(File.dirname(__FILE__) + '/../../public/images/graded.png'
-    )}
+    "attachments.zip" => File.read(File.dirname(__FILE__) + "/../fixtures/attachments.zip"),
+    "graded.png" => File.read(File.dirname(__FILE__) + '/../../public/images/graded.png'),
+    "cc_full_test.zip" => File.read(File.dirname(__FILE__) + '/../fixtures/migration/cc_full_test.zip'),
+    "cc_ark_test.zip" => File.read(File.dirname(__FILE__) + '/../fixtures/migration/cc_ark_test.zip')
+  }
 
-def get_file(filename)
-  data = TEST_FILE_UUIDS[filename]
-  @file = Tempfile.new(filename.split(/(?=\.)/))
-  @file.write data
-  @file.close
-  fullpath = @file.path
-  filename = File.basename(@file.path)
-  if SELENIUM_CONFIG[:host_and_port]
-    driver.file_detector = proc do |args|
-      args.first if File.exist?(args.first.to_s)
+  def get_file(filename, data = nil)
+    data ||= TEST_FILE_UUIDS[filename]
+    @file = Tempfile.new(filename.split(/(?=\.)/))
+    @file.write data
+    @file.close
+    fullpath = @file.path
+    filename = File.basename(@file.path)
+    if SELENIUM_CONFIG[:host_and_port]
+      driver.file_detector = proc do |args|
+        args.first if File.exist?(args.first.to_s)
+      end
+    end
+    [filename, fullpath, data, @file]
+  end
+
+  def validate_link(link_element, breadcrumb_text)
+    expect_new_page_load { link_element.click }
+    if breadcrumb_text != nil
+      breadcrumb = driver.find_element(:id, 'breadcrumbs')
+      breadcrumb.should include_text(breadcrumb_text)
+    end
+    driver.execute_script("return INST.errorCount;").should == 0
+  end
+
+  def skip_if_ie(additional_error_text)
+    pending("skipping test, fails in IE : " + additional_error_text) if driver.browser == :internet_explorer
+  end
+
+  shared_examples_for "in-process server selenium tests" do
+    it_should_behave_like "all selenium tests"
+    prepend_before (:all) do
+      $in_proc_webserver_shutdown ||= SeleniumTestsHelperMethods.start_in_process_webrick_server
+    end
+    before do
+      HostUrl.default_host = $app_host_and_port
+      HostUrl.file_host = $app_host_and_port
     end
   end
-  [filename, fullpath, data, @file]
-end
 
-shared_examples_for "in-process server selenium tests" do
-  it_should_behave_like "all selenium tests"
-  prepend_before(:all) do
-    $in_proc_webserver_shutdown ||= SeleniumTestsHelperMethods.start_in_process_webrick_server
-  end
-  before do
-    HostUrl.default_host = $app_host_and_port
-    HostUrl.file_host = $app_host_and_port
-  end
-end
+  shared_examples_for "forked server selenium tests" do
+    it_should_behave_like "all selenium tests"
+    prepend_before (:all) do
+      $in_proc_webserver_shutdown.try(:call)
+      $in_proc_webserver_shutdown = nil
+      @forked_webserver_shutdown = SeleniumTestsHelperMethods.start_forked_webrick_server
+    end
 
-shared_examples_for "forked server selenium tests" do
-  it_should_behave_like "all selenium tests"
-  prepend_before(:all) do
-    $in_proc_webserver_shutdown.try(:call)
-    $in_proc_webserver_shutdown = nil
-    @forked_webserver_shutdown = SeleniumTestsHelperMethods.start_forked_webrick_server
+    append_after(:all) do
+      @forked_webserver_shutdown.call
+    end
   end
-
-  append_after(:all) do
-    @forked_webserver_shutdown.call
-  end
-end

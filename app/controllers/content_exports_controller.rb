@@ -23,7 +23,7 @@ class ContentExportsController < ApplicationController
   def index
     return render_unauthorized_action unless @context.grants_rights?(@current_user, nil, :read, :read_as_admin).values.all?
 
-    @exports = @context.content_exports.active
+    @exports = @context.content_exports.active.not_for_copy
     @current_export_id = nil
     if export = @context.content_exports.running.first
       @current_export_id = export.id
@@ -48,7 +48,12 @@ class ContentExportsController < ApplicationController
       export.course = @context
       export.user = @current_user
       export.workflow_state = 'created'
-      export.export_type = 'common_cartridge'
+      if params[:export_type] == 'qti'
+        export.export_type = ContentExport::QTI
+        export.selected_content = params[:copy]
+      else
+        export.export_type = ContentExport::COMMON_CARTRIDGE
+      end
       export.progress = 0
       if export.save
         export.export_course

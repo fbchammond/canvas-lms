@@ -26,11 +26,14 @@ class CourseSection < ActiveRecord::Base
   belongs_to :root_account, :class_name => 'Account'
   belongs_to :account
   has_many :enrollments, :include => :user, :conditions => ['enrollments.workflow_state != ?', 'deleted'], :dependent => :destroy
+  has_many :all_enrollments, :class_name => 'Enrollment'
   has_many :students, :through => :student_enrollments, :source => :user, :order => User.sortable_name_order_by_clause
   has_many :student_enrollments, :class_name => 'StudentEnrollment', :conditions => ['enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.workflow_state != ?', 'deleted', 'completed', 'rejected', 'inactive'], :include => :user
-  has_many :admin_enrollments, :class_name => 'Enrollment', :conditions => "(enrollments.type = 'TaEnrollment' or enrollments.type = 'TeacherEnrollment')"
+  has_many :instructor_enrollments, :class_name => 'Enrollment', :conditions => "(enrollments.type = 'TaEnrollment' or enrollments.type = 'TeacherEnrollment')"
+  has_many :admin_enrollments, :class_name => 'Enrollment', :conditions => "(enrollments.type = 'TaEnrollment' or enrollments.type = 'TeacherEnrollment' or enrollments.type = 'DesignerEnrollment')"
   has_many :users, :through => :enrollments
   has_many :course_account_associations
+  has_many :calendar_events, :as => :context
 
   before_validation :infer_defaults, :verify_unique_sis_source_id
   validates_presence_of :course_id
@@ -47,7 +50,16 @@ class CourseSection < ActiveRecord::Base
   end
 
   def participating_students
-    course.participating_students.scoped(:conditions => {:course_section_id => self.id})
+    course.participating_students.scoped(:conditions => ["enrollments.course_section_id = ?", id])
+  end
+
+  def participants
+    participating_students + 
+    course.participating_admins.scoped(:conditions => ["enrollments.course_section_id = ? OR NOT COALESCE(enrollments.limit_privileges_to_course_section, ?)", id, false])
+  end
+
+  def available?
+    course.available?
   end
 
   def touch_all_enrollments
@@ -70,6 +82,9 @@ class CourseSection < ActiveRecord::Base
 
     given {|user, session| self.course.account_membership_allows(user, session, :read_roster) }
     can :read
+
+    given {|user, session| self.cached_context_grants_right?(user, session, :manage_calendar) }
+    can :manage_calendar
 
     given {|user, session| self.enrollments.find_by_user_id(user.id) && self.cached_context_grants_right?(user, session, :read_roster) }
     can :read
@@ -99,6 +114,8 @@ class CourseSection < ActiveRecord::Base
     self.errors.add(:sis_source_id, t('sis_id_taken', "SIS ID \"%{sis_id}\" is already in use", :sis_id => self.sis_source_id))
     false
   end
+
+  alias_method :parent_event_context, :course
 
   def section_code
     self.name ||= read_attribute(:section_code)

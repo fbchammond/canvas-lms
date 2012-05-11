@@ -1,8 +1,15 @@
 <% content_for :page_title, t(:page_title, "Conversations") %>
+
+<% content_for :auto_discovery do %>
+  <% if @current_user %>
+      <%= auto_discovery_link_tag(:atom, feeds_conversation_format_path(@current_user.feed_code, :atom), {:title => t('titles.rss.conversations', "Conversations Atom Feed")}) %>
+  <% end %>
+<% end %>
+
 <% add_crumb "", '#', :id => 'help_crumb' %>
 
-<% jammit_js :messages %>
-<% jammit_css :messages %>
+<% js_bundle :conversations %>
+<% jammit_css :conversations %>
 
 <div id="inbox">
   <div id="conversations">
@@ -20,17 +27,13 @@
               <li><b><%= t(:inbox_view, "VIEW") %></b></li>
             </ul>
             <ul>
-              <li class="<%= 'checked' if @scope == :inbox %>"><%= link_to t('inbox_views.inbox', "Inbox"), conversations_url %></li>
-              <li class="<%= 'checked' if @scope == :unread %>"><%= link_to t('inbox_views.unread_messages', "Unread"), conversations_unread_url %></li>
-              <li class="label_group">
-              <%= before_label t('labels.conversation_label', 'Label') %><br />
-              <% ConversationParticipant.labels.each do |label, text| %>
-                <%= link_to text, conversations_labeled_url(:label => label), :class => 'label_icon ' + label + (label == @label ? ' checked' : '') %>
-              <% end %>
-              </li>
+              <li class="<%= 'checked' if @scope == :inbox %>"><%= link_to t('inbox_views.inbox', "Inbox"), conversations_url(:filter => params[:filter]) %></li>
+              <li class="<%= 'checked' if @scope == :unread %>"><%= link_to t('inbox_views.unread_messages', "Unread"), conversations_unread_url(:filter => params[:filter]) %></li>
+              <li class="<%= 'checked' if @scope == :starred %>"><%= link_to t('inbox_views.starred_messages', "Starred"), conversations_starred_url(:filter => params[:filter]) %></li>
+              <li class="<%= 'checked' if @scope == :sent %>"><%= link_to t('inbox_views.sent_messages', "Sent"), conversations_sent_url(:filter => params[:filter]) %></li>
             </ul>
             <ul>
-              <li class="<%= 'checked' if @scope == :archived %>"><%= link_to t('inbox_views.archived_messages', "Archived"), conversations_archived_url %></li>
+              <li class="<%= 'checked' if @scope == :archived %>"><%= link_to t('inbox_views.archived_messages', "Archived"), conversations_archived_url(:filter => params[:filter]) %></li>
             </ul>
             <ul class="last">
               <li><%= link_to t('inbox_views.discussion_replies', "Discussion Replies"), discussion_replies_url %></li>
@@ -38,6 +41,13 @@
           </div>
         </li>
       </ul>
+      <div id="context_tags_filter" style="<%= hidden unless @filterable %>">
+        <label for="context_tags">
+          <%= before_label :filter, "Filter" %>
+        </label>
+        <%= text_field_tag :context_tags, nil, :finder_url => conversations_find_recipients_url %>
+      </div>
+      <div class="clear"></div>
     </div>
     <ul class="conversations">
       <li id="conversations_loader" style="<%= hidden %>">
@@ -64,7 +74,7 @@
         </li>
       </ul>
       <table>
-        <tr id="recipient_info"><th><%= label_tag :recipients, :to, :en => "To", :before => true %></th><td><%= text_field_tag :recipients, nil, :finder_url => conversations_find_recipients_url(:blank_avatar_fallback => true), :class => "recipients" %></td></tr>
+        <tr id="recipient_info"><th><%= label_tag :recipients, :to, :en => "To", :before => true %></th><td><%= text_field_tag :recipients, nil, :finder_url => conversations_find_recipients_url, :class => "recipients" %></td></tr>
         <tr><th><%= label_tag :body, :message, :en => "Message", :before => true %></th><td><%= text_area_tag :body %></td></tr>
         <tr id="group_conversation_info"><th></th><td><%= check_box_tag :group_conversation %> <%= label_tag :group_conversation, :en => "This is a group conversation. Participants will see everyone's replies" %></td></tr>
         <tr id="user_note_info"><th></th><td><%= check_box_tag :user_note, "1", false, :id => :add_to_faculty_journal %> <%= label_tag :add_to_faculty_journal, :en => "Add as a Faculty Journal entry" %></td></tr>
@@ -72,10 +82,10 @@
           <th>&nbsp;</th>
           <td>
             <% if feature_enabled?(:kaltura) %>
-              <div class="media_comment" style="display: none;" title="<%= t('titles.audio_comment', "Recorded audio comment") %>">
-                <%= image_tag "messages/audio-gray.png" %>
-                <%= t('audio_comment', %{Audio Comment}) %>
-                <a href="#" class="remove_link" style="float: right;" title="<%= t('titles.remove_audio_comment', "Remove audio comment") %>"><%= image_tag "delete_circle.png" %></a>
+              <div class="media_comment" style="display: none;" title="<%= t('titles.media_comment', "Recorded media comment") %>">
+                <%= image_tag "messages/media-gray.png" %>
+                <%= t('media_comment', %{Media Comment}) %>
+                <a href="#" class="remove_link" style="float: right;" title="<%= t('titles.remove_media_comment', "Remove media comment") %>"><%= image_tag "delete_circle.png" %></a>
                 <div class="clear"></div>
               </div>
               <input type="hidden" name="media_comment_id" id="media_comment_id">
@@ -91,7 +101,7 @@
             </ul>
             <a id="action_add_attachment" href="#" title="<%= t('titles.add_attachment', "Add an attachment") %>"><%= image_tag "messages/attach-blue.png" %> <%= t('links.add_attachment', %{Attach}) %></a>
             <% if feature_enabled?(:kaltura) %>
-              <a id="action_media_comment" href="#" title="<%= t('titles.record_audio_comment', "Record an audio comment") %>"><%= image_tag "messages/audio-blue.png" %> <%= t('links.audio_comment', %{Record}) %></a>
+              <a id="action_media_comment" href="#" title="<%= t('titles.record_media_comment', "Record an audio or video comment") %>"><%= image_tag "messages/media-blue.png" %> <%= t('links.media_comment', %{Record}) %></a>
             <% end %>
             <div style="float: right">
               <input type="hidden" name="from_conversation_id" id="from_conversation_id">
@@ -104,16 +114,17 @@
     <ul class="messages">
     </ul>
   </div>
+  <div class="spin_holder"></div>
 </div>
 <ul style="display:none">
   <li id="conversation_blank">
-    <%= link_to t('inbox_actions.add_label', "Add Label"), conversation_url('{{ id }}', :conversation => {:label => 'last'}), :title =>  t('inbox_actions.add_label', "Add Label"), :class => 'action_add_label label_icon' %>
-    <%= link_to t('inbox_actions.remove_label', "Remove Label"), conversation_url('{{ id }}', :conversation => {:label => ''}), :title => t('inbox_actions.remove_label', "Remove Label"), :class => 'action_remove_label label_icon' %>
     <%= link_to t('inbox_actions.mark_as_unread', "Mark as Unread"), conversation_url('{{ id }}', :conversation => {:workflow_state => "unread"}), :title => t('inbox_actions.mark_as_unread', "Mark as Unread"), :class => :action_mark_as_unread %>
     <%= link_to t('inbox_actions.mark_as_read', "Mark as Read"), conversation_url('{{ id }}', :conversation => {:workflow_state => "read"}), :title => t('inbox_actions.mark_as_read', "Mark as Read"), :class => :action_mark_as_read %>
+    <%= link_to t('inbox_actions.star', "Star"), conversation_url('{{ id }}', :conversation => {:starred => true}), :title =>  t('inbox_actions.star', "Star"), :class => :action_star %>
+    <%= link_to t('inbox_actions.unstar', "Unstar"), conversation_url('{{ id }}', :conversation => {:starred => false}), :title => t('inbox_actions.unstar', "Unstar"), :class => :action_unstar %>
     <span class="date"></span>
     <img class="attachments" src="/images/messages/attach-gray.png" title="<%= t('has_attachments', 'This conversation has one or more attachments') %>">
-    <img class="media_objects" src="/images/messages/audio-gray.png" title="<%= t('has_audio', 'This conversation has one or more audio comments') %>">
+    <img class="media_objects" src="/images/messages/media-gray.png" title="<%= t('has_media', 'This conversation has one or more media comments') %>">
     <span class="audience"></span>
     <span class="count"></span>
     <p></p>
@@ -128,8 +139,8 @@
     <input type="checkbox" />
     <ul class='message_attachments'>
       <li class='media_object_blank'>
-        <a href="#" class="instructure_inline_media_comment audio_comment no-underline" title="<%= t('titles.play_audio_comment', "Play audio comment") %>">
-          <%= image_tag "messages/audio-gray.png" %> 
+        <a href="#" class="instructure_inline_media_comment media_comment no-underline" title="<%= t('titles.play_media_comment', "Play media comment") %>">
+          <%= image_tag "messages/media-gray.png" %>
           <span class="media_comment_id" style="display: none;"></span>
           <span class='title'></span>
         </a>
@@ -168,6 +179,7 @@
         </a>
       </li>
     </ul>
+    <input type="checkbox" />
   </li>
 </ul>
 <div id="conversation_actions">
@@ -176,13 +188,8 @@
     <ul>
       <li><%= link_to t('inbox_actions.mark_as_unread', "Mark as Unread"), conversation_url('{{ id }}', :conversation => {:workflow_state => "unread"}), :id => 'action_mark_as_unread', :class => :action_mark_as_unread %></li>
       <li><%= link_to t('inbox_actions.mark_as_read', "Mark as Read"), conversation_url('{{ id }}', :conversation => {:workflow_state => "read"}), :id => 'action_mark_as_read', :class => :action_mark_as_read %></li>
-      <li class="label_group">
-      <%= before_label t('labels.conversation_label', 'Label') %><br />
-      <% ConversationParticipant.labels.each do |label, text| %>
-        <%= link_to text, conversation_url('{{ id }}', :conversation => {:label => label}), :class => 'action_add_label label_icon ' + label, :title => text %>
-      <% end %>
-      <%= link_to t('inbox_actions.no_label', "None"), conversation_url('{{ id }}', :conversation => {:label => ''}), :class => 'action_remove_label label_icon none', :title => t('inbox_actions.no_label', "None") %>
-      </li>
+      <li><%= link_to t('inbox_actions.unstar', "Unstar"), conversation_url('{{ id }}', :conversation => {:starred => false}), :id => 'action_unstar', :class => :action_unstar %></li>
+      <li><%= link_to t('inbox_actions.star', "Star"), conversation_url('{{ id }}', :conversation => {:starred => true}), :id => 'action_star', :class => :action_star %></li>
     </ul>
     <ul>
       <li><%= link_to t('inbox_actions.unsubscribe', "Unsubscribe"), conversation_url('{{ id }}', :conversation => {:subscribed => 0}), :id => :action_unsubscribe %></li>
@@ -200,34 +207,14 @@
   <p>
     <%= t :add_recipients_instructions, "People you add to the conversation will see all previous messages." %>
   </p>
-  <%= text_field_tag :recipients, nil, :id => 'add_recipients', :finder_url => conversations_find_recipients_url(:blank_avatar_fallback => true), :class => "recipients", :style => "width: 370px" %>
+  <%= text_field_tag :recipients, nil, :id => 'add_recipients', :finder_url => conversations_find_recipients_url, :class => "recipients", :style => "width: 370px" %>
 </form>
 
 <% form_tag conversations_url, :id => 'forward_message_form' do %>
   <table>
-    <tr id="recipient_info"><th><%= label_tag :forward_recipients, :to, :en => "To", :before => true %></th><td><%= text_field_tag :recipients, nil, :id => :forward_recipients, :finder_url => conversations_find_recipients_url(:blank_avatar_fallback => true), :class => "recipients" %></td></tr>
+    <tr id="recipient_info"><th><%= label_tag :forward_recipients, :to, :en => "To", :before => true %></th><td><%= text_field_tag :recipients, nil, :id => :forward_recipients, :finder_url => conversations_find_recipients_url, :class => "recipients" %></td></tr>
     <tr><th><%= label_tag :body, :message, :en => "Message", :before => true %></th><td><%= text_area_tag :body, nil, :id => :forward_body %></td></tr>
   </table>
   <ul class="messages"></ul>
   <input type="hidden" name="group_conversation" value="1" />
-<% end %>
-
-<% js_block do %>
-  <script type="text/javascript">
-    MessageInbox.user_id = <%= @current_user.id %>;
-    MessageInbox.user_cache = <%= raw @user_cache.to_json %>;
-    MessageInbox.contexts = <%= raw @contexts.to_json %>;
-    MessageInbox.initial_conversations = <%= raw @conversations_json.to_json %>;
-    MessageInbox.conversation_page_size = <%= @page_max %>;
-    MessageInbox.initial_conversations_count = <%= @conversations_count %>;
-    MessageInbox.scope = <%= raw @scope.to_json %>;
-    MessageInbox.label_scope = <%= raw @label.to_json %>;
-    <% # TODO: get note-enabled-ness per account, and cross reference with the recipient's associated account ids. this is already enforced in the model %>
-    MessageInbox.notes_enabled = <%= raw @current_user.associated_accounts.any?{|a| a.enable_user_notes } %>;
-    MessageInbox.can_add_notes_for_account = MessageInbox.notes_enabled && <%= raw @current_user.associated_accounts.any?{|a| a.grants_right?(@current_user, nil, :manage_students) } %>;
-    MessageInbox.conversations_per_page = <%= @page_max.to_i %>;
-    <% unless @current_user.watched_conversations_intro? %>
-    $.conversationsIntroSlideshow()
-    <% end %>
-  </script>
 <% end %>

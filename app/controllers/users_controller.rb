@@ -28,7 +28,8 @@ class UsersController < ApplicationController
   include Twitter
   include LinkedIn
   include DeliciousDiigo
-  before_filter :require_user, :only => [:grades, :delete_user_service, :create_user_service, :confirm_merge, :merge, :kaltura_session, :ignore_channel, :ignore_item, :close_notification, :mark_avatar_image, :user_dashboard, :masquerade, :external_tool]
+  before_filter :require_user, :only => [:grades, :delete_user_service, :create_user_service, :confirm_merge, :merge, :kaltura_session, :ignore_item, :close_notification, :mark_avatar_image, :user_dashboard, :masquerade, :external_tool]
+  before_filter :reject_student_view_student, :only => [:delete_user_service, :create_user_service, :confirm_merge, :merge, :user_dashboard, :masquerade]
   before_filter :require_open_registration, :only => [:new, :create]
 
   def grades
@@ -47,7 +48,9 @@ class UsersController < ApplicationController
       end
       #@prior_enrollments.concat @user.concluded_enrollments.select{|e| e.is_a?(StudentEnrollment) }
 
-      @student_enrollments = @current_enrollments.select{|e| e.is_a?(StudentEnrollment) }
+      @student_enrollments = @current_enrollments.
+        select{ |e| e.student? }.
+        inject({}){ |hash, e| hash[e.course] = e; hash }
 
       @observer_enrollments = @current_enrollments.select{|e| e.is_a?(ObserverEnrollment) && e.associated_user_id }
       @observed_enrollments = []
@@ -56,14 +59,17 @@ class UsersController < ApplicationController
       end
       @observed_enrollments = @observed_enrollments.uniq.compact
 
-      if @current_enrollments.length + @observed_enrollments.length == 1# && @prior_enrollments.empty?
-        redirect_to course_grades_url(@current_enrollments.first.course_id)
+      @teacher_enrollments = @current_enrollments.select{|e| e.instructor? }
+
+      if @student_enrollments.length + @teacher_enrollments.length + @observed_enrollments.length == 1# && @prior_enrollments.empty?
+        enrollment = @student_enrollments.first.try(:last) || @teacher_enrollments.first || @observed_enrollments.first
+        redirect_to course_grades_url(enrollment.course_id)
         return
       end
-      Enrollment.send(:preload_associations, @observed_enrollments, :course)
 
-      @teacher_enrollments = @current_enrollments.select{|e| e.admin? }
+      Enrollment.send(:preload_associations, @observed_enrollments, :course)
       #Enrollment.send(:preload_associations, @prior_enrollments, :course)
+
       @course_grade_summaries = {}
       @teacher_enrollments.each do |enrollment|
         @course_grade_summaries[enrollment.course_id] = Rails.cache.fetch(['computed_avg_grade_for', enrollment.course].cache_key) do
@@ -151,10 +157,10 @@ class UsersController < ApplicationController
   # Retrieve the list of users associated with this account.
   #
   # @example_response
-  # [
-  #   { "id": 1, "name": "Dwight Schrute", "sortable_name": "Schrute, Dwight", "short_name": "Dwight", "login_id": "dwight@example.com", "sis_user_id": "12345", "sis_login_id": null },
-  #   { "id": 2, "name": "Gob Bluth", "sortable_name": "Bluth, Gob", "short_name": "Gob Bluth", "login_id": "gob@example.com", "sis_user_id": "67890", "sis_login_id": null }
-  # ]
+  #   [
+  #     { "id": 1, "name": "Dwight Schrute", "sortable_name": "Schrute, Dwight", "short_name": "Dwight", "login_id": "dwight@example.com", "sis_user_id": "12345", "sis_login_id": null },
+  #     { "id": 2, "name": "Gob Bluth", "sortable_name": "Bluth, Gob", "short_name": "Gob Bluth", "login_id": "gob@example.com", "sis_user_id": "67890", "sis_login_id": null }
+  #   ]
   def index
     get_context
     if authorized_action(@context, @current_user, :read_roster)
@@ -196,18 +202,17 @@ class UsersController < ApplicationController
   end
 
   def masquerade
-    @user = User.find_by_id(params[:user_id])
-    if (authorized_action(@user, @real_current_user || @current_user, :become_user))
-      if request.post?
-        if @user == @real_current_user
-          session[:become_user_id] = nil
-        else
-          session[:become_user_id] = params[:user_id]
-        end
-        return_url = session[:masquerade_return_to]
-        session[:masquerade_return_to] = nil
-        return return_to(return_url, request.referer || dashboard_url)
+    @user = User.find(:first, :conditions => {:id => params[:user_id]})
+    return render_unauthorized_action(@user) unless @user.can_masquerade?(@real_current_user || @current_user, @domain_root_account)
+    if request.post?
+      if @user == @real_current_user
+        session[:become_user_id] = nil
+      else
+        session[:become_user_id] = params[:user_id]
       end
+      return_url = session[:masquerade_return_to]
+      session[:masquerade_return_to] = nil
+      return return_to(return_url, request.referer || dashboard_url)
     end
   end
 
@@ -225,8 +230,7 @@ class UsersController < ApplicationController
     if @show_recent_feedback = (@current_user.student_enrollments.active.size > 0)
       @recent_feedback = (@current_user && @current_user.recent_feedback) || []
     end
-    @account_notifications = AccountNotification.for_user_and_account(@current_user, @domain_root_account)
-    @is_default_account = @current_user.pseudonyms.active.map(&:account_id).include?(Account.default.id)
+    @announcements = AccountNotification.for_user_and_account(@current_user, @domain_root_account)
   end
 
   include Api::V1::StreamItem
@@ -333,18 +337,22 @@ class UsersController < ApplicationController
 
   def manageable_courses
     get_context
-    if authorized_action(@context, @current_user, :manage)
-      @courses = []
-      @query = (params[:course] && params[:course][:name]) || params[:term]
-      @courses = @context.manageable_courses_name_like(@query) if @context && @query
-      respond_to do |format|
-        format.json  {
-          cancel_cache_buster
-          expires_in 30.minutes
-          render :json => @courses.map{ |c| {:label => c.name, :id => c.id} }
-        }
-      end
-    end
+    return unless authorized_action(@context, @current_user, :manage)
+
+    # include concluded enrollments as well as active ones if requested
+    include_concluded = params[:include].try(:include?, 'concluded')
+    @query   = params[:course].try(:[], :name) || params[:term]
+    @courses = @query.present? ?
+      @context.manageable_courses_name_like(@query, include_concluded) :
+      @context.manageable_courses(include_concluded).limit(500)
+
+    cancel_cache_buster
+    expires_in 30.minutes
+    render :json => @courses.map { |c|
+      { :label => c.name, :id => c.id, :term => c.enrollment_term.name,
+        :enrollment_start => c.enrollment_term.start_at,
+        :account_name => c.enrollment_term.root_account.name, :account_id => c.enrollment_term.root_account.id }
+    }.to_json
   end
 
   include Api::V1::TodoItem
@@ -406,8 +414,27 @@ class UsersController < ApplicationController
     render :json => { :hidden => true }
   end
 
+  # @API
+  #
+  # Upload a file to the user's personal files section.
+  #
+  # This API endpoint is the first step in uploading a file to a user's files.
+  # See the {file:file_uploads.html File Upload Documentation} for details on
+  # the file upload workflow.
+  #
+  # Note that typically users will only be able to upload files to their
+  # own files section. Passing a user_id of +self+ is an easy shortcut
+  # to specify the current user.
+  def create_file
+    @user = api_find(User, params[:user_id])
+    @attachment = Attachment.new(:context => @user)
+    if authorized_action(@attachment, @current_user, :create)
+      api_attachment_preflight(@current_user, request)
+    end
+  end
+
   def close_notification
-    @current_user.close_notification(params[:id])
+    @current_user.close_announcement(AccountNotification.find(params[:id]))
     render :json => @current_user.to_json
   end
 
@@ -460,10 +487,10 @@ class UsersController < ApplicationController
   def show
     get_context
     @context_account = @context.is_a?(Account) ? @context : @domain_root_account
-    @user = params[:id] ? User.find(params[:id]) : @current_user
-    if current_user_is_site_admin? || authorized_action(@user, @current_user, :view_statistics)
+    @user = params[:id] && params[:id] != 'self' ? User.find(params[:id]) : @current_user
+    if authorized_action(@user, @current_user, :view_statistics)
       add_crumb(t('crumbs.profile', "%{user}'s profile", :user => @user.short_name), @user == @current_user ? profile_path : user_path(@user) )
-      @page_views = @user.page_views.paginate :page => params[:page], :order => 'created_at DESC', :per_page => 50
+      @page_views = @user.page_views.paginate :page => params[:page], :order => 'created_at DESC', :per_page => 50, :without_count => true
 
       # course_section and enrollment term will only be used if the enrollment dates haven't been cached yet;
       # maybe should just look at the first enrollment and check if it's cached to decide if we should include
@@ -529,6 +556,8 @@ class UsersController < ApplicationController
     @user ||= User.new
     @user.attributes = params[:user]
     @user.name ||= params[:pseudonym][:unique_id]
+    @user.workflow_state = notify == :self_registration && @user.registration_approval_required? ? 'pending_approval' : 'pre_registered' unless @user.registered?
+    @user.save!
 
     @pseudonym ||= @user.pseudonyms.build(:account => @context)
     # pre-populate the reverse association
@@ -544,10 +573,8 @@ class UsersController < ApplicationController
     @cc ||= @user.communication_channels.build(:path => email)
     @cc.user = @user
     @cc.workflow_state = 'unconfirmed' unless @cc.workflow_state == 'confirmed'
-    @user.workflow_state = notify == :self_registration && @user.registration_approval_required? ? 'pending_approval' : 'pre_registered' unless @user.registered?
     if @pseudonym.valid?
       @pseudonym.save_without_session_maintenance
-      @user.save!
       @cc.save!
       message_sent = false
       if notify == :self_registration
@@ -592,9 +619,17 @@ class UsersController < ApplicationController
     end
   end
 
+  # @API
+  # Modify an existing user. To modify a user's login, see the documentation for logins.
+  # @argument user[name] [Optional] The full name of the user. This name will be used by teacher for grading.
+  # @argument user[short_name] [Optional] User's name as it will be displayed in discussions, messages, and comments.
+  # @argument user[sortable_name] [Optional] User's name as used to sort alphabetically in lists.
+  # @argument user[time_zone] [Optional] The time zone for the user. Allowed time zones are listed in {http://rubydoc.info/docs/rails/2.3.8/ActiveSupport/TimeZone The Ruby on Rails documentation}.
   def update
-    @user = params[:id] ? User.find(params[:id]) : @current_user
-    rename = params[:rename]
+    @user = api_request? ?
+      api_find(User, params[:id]) :
+      params[:id] ? User.find(params[:id]) : @current_user
+    rename = params[:rename] || api_request?
     if (!rename ? authorized_action(@user, @current_user, :manage) : authorized_action(@user, @current_user, :rename))
       if rename
         params[:default_pseudonym_id] = nil
@@ -610,7 +645,7 @@ class UsersController < ApplicationController
         if @user.update_attributes(params[:user])
           flash[:notice] = t('user_updated', 'User was successfully updated.')
           format.html { redirect_to user_url(@user) }
-          format.json { render :json => @user.to_json(:methods => :default_pseudonym_id) }
+          format.json { render :json => user_json(@user, @current_user, session, [], @current_user.pseudonym.account) }
         else
           format.html { render :action => "edit" }
         end
@@ -811,9 +846,9 @@ class UsersController < ApplicationController
     return unless get_feed_context(:only => [:user])
     feed = Atom::Feed.new do |f|
       f.title = "#{@context.name} Feed"
-      f.links << Atom::Link.new(:href => dashboard_url)
+      f.links << Atom::Link.new(:href => dashboard_url, :rel => 'self')
       f.updated = Time.now
-      f.id = named_context_url(@context, :context_url)
+      f.id = user_url(@context)
     end
     @entries = []
     @context.courses.each do |context|
@@ -868,7 +903,10 @@ class UsersController < ApplicationController
         student = User.find(params[:student_id])
         enrollments = student.student_enrollments.active.all(:include => :course)
         enrollments.each do |enrollment|
-          if enrollment.course.user_is_teacher?(@teacher) && enrollment.course.enrollments_visible_to(@teacher).find_by_id(enrollment.id) && enrollment.course.grants_right?(@current_user, :read_reports)
+          should_include = enrollment.course.user_has_been_teacher?(@teacher) && 
+                           enrollment.course.enrollments_visible_to(@teacher, true).find_by_id(enrollment.id) && 
+                           enrollment.course.grants_right?(@current_user, :read_reports)
+          if should_include
             Enrollment.recompute_final_score_if_stale(enrollment.course, student) { enrollment.reload }
             @courses[enrollment.course] = teacher_activity_report(@teacher, enrollment.course, [enrollment])
           end
@@ -881,16 +919,42 @@ class UsersController < ApplicationController
 
       else # implied params[:course_id]
         course = Course.find(params[:course_id])
-        if !course.user_is_teacher?(@teacher)
+        if !course.user_has_been_teacher?(@teacher)
           flash[:error] = t('errors.user_not_teacher', "That user is not a teacher in this course")
           redirect_to_referrer_or_default(root_url)
         elsif authorized_action(course, @current_user, :read_reports)
           Enrollment.recompute_final_score_if_stale(course)
-          @courses[course] = teacher_activity_report(@teacher, course, course.enrollments_visible_to(@teacher))
+          @courses[course] = teacher_activity_report(@teacher, course, course.enrollments_visible_to(@teacher, true))
         end
       end
 
     end
+  end
+
+  def avatar_image_url
+    cancel_cache_buster
+    return redirect_to(params[:fallback] || '/images/no_pic.gif') unless service_enabled?(:avatars)
+    # TODO: remove support for specifying user ids by id, require using
+    # the encrypted version. We can't do it right away because there are
+    # a bunch of places that will have cached fragments using the old
+    # style.
+    user_id = params[:user_id].to_i
+    if params[:user_id].present? && params[:user_id].match(/-/)
+      user_id = User.user_id_from_avatar_key(params[:user_id])
+    end
+    account_avatar_setting = service_enabled?(:avatars) ? @domain_root_account.settings[:avatars] || 'enabled' : 'disabled'
+    url = Rails.cache.fetch(Cacher.avatar_cache_key(user_id, account_avatar_setting)) do
+      user = User.find_by_id(user_id) if user_id.present?
+      if user && account_avatar_setting != 'disabled'
+        user.avatar_url(nil, account_avatar_setting, "%{fallback}")
+      else
+        ''
+      end
+    end
+    fallback = User.avatar_fallback_url(params[:fallback], request)
+    redirect_to url.blank? ?
+      fallback :
+      url.sub(CGI.escape("%{fallback}"), CGI.escape(fallback))
   end
 
   protected
@@ -943,5 +1007,6 @@ class UsersController < ApplicationController
 
     data.values.sort_by { |e| e[:enrollment].user.sortable_name.downcase }
   end
+  
 
 end

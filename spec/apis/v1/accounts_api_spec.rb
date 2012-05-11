@@ -39,8 +39,7 @@ describe "Accounts API", :type => :integration do
         'id' => @a1.id,
         'name' => 'root',
         'root_account_id' => nil,
-        'parent_account_id' => nil,
-        'sis_account_id' => nil,
+        'parent_account_id' => nil
       },
       {
         'id' => @a2.id,
@@ -61,8 +60,7 @@ describe "Accounts API", :type => :integration do
         'id' => @a1.id,
         'name' => 'root',
         'root_account_id' => nil,
-        'parent_account_id' => nil,
-        'sis_account_id' => nil,
+        'parent_account_id' => nil
       }
   end
 
@@ -97,6 +95,7 @@ describe "Accounts API", :type => :integration do
       {
         'id' => @c1.id,
         'name' => 'c1',
+        'account_id' => @c1.account_id,
         'course_code' => 'c1',
         'sis_course_id' => nil,
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/course_#{@c1.uuid}.ics" },
@@ -104,6 +103,7 @@ describe "Accounts API", :type => :integration do
       {
         'id' => @c2.id,
         'name' => 'c2',
+        'account_id' => @c2.account_id,
         'course_code' => 'c2',
         'sis_course_id' => 'sis2',
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/course_#{@c2.uuid}.ics" },
@@ -117,6 +117,7 @@ describe "Accounts API", :type => :integration do
       {
         'id' => @c2.id,
         'name' => 'c2',
+        'account_id' => @c2.account_id,
         'course_code' => 'c2',
         'sis_course_id' => 'sis2',
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/course_#{@c2.uuid}.ics" },
@@ -130,6 +131,7 @@ describe "Accounts API", :type => :integration do
       {
         'id' => @c2.id,
         'name' => 'c2',
+        'account_id' => @c2.account_id,
         'course_code' => 'c2',
         'sis_course_id' => 'sis2',
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/course_#{@c2.uuid}.ics" },

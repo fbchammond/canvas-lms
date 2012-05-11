@@ -1,8 +1,10 @@
-define 'compiled/calendar/commonEventFactory', [
+define [
+  'jquery'
   'compiled/calendar/CommonEvent'
   'compiled/calendar/CommonEvent.Assignment',
   'compiled/calendar/CommonEvent.CalendarEvent'
-], (CommonEvent, Assignment, CalendarEvent) ->
+  'compiled/str/splitAssetString'
+], ($, CommonEvent, Assignment, CalendarEvent, splitAssetString) ->
 
   (data, contexts) ->
     if data == null
@@ -10,7 +12,8 @@ define 'compiled/calendar/commonEventFactory', [
       obj.allPossibleContexts = contexts
       return obj
 
-    context_code = data.context_code || data.assignment?.context_code || data.calendar_event?.context_code
+    actualContextCode = data.context_code
+    contextCode = data.effective_context_code || actualContextCode
 
     type = null
     if data.assignment || data.assignment_group_id
@@ -19,10 +22,13 @@ define 'compiled/calendar/commonEventFactory', [
       type = 'calendar_event'
 
     data = data.assignment || data.calendar_event || data
+    return null if data.hidden # e.g. parent event of section-level events
+    actualContextCode ?= data.context_code
+    contextCode ?= data.effective_context_code || data.context_code
 
     contextInfo = null
     for context in contexts
-      if context.asset_string == context_code
+      if context.asset_string == contextCode
         contextInfo = context
         break
 
@@ -31,10 +37,14 @@ define 'compiled/calendar/commonEventFactory', [
     if contextInfo == null
       return null
 
+    parts = splitAssetString(actualContextCode) if actualContextCode isnt contextCode
+    actualContextInfo = if parts and items = contextInfo[parts[0]]
+      (item for item in items when item.id is parts[1])[0]
+
     if type == 'assignment'
       obj = new Assignment(data, contextInfo)
     else
-      obj = new CalendarEvent(data, contextInfo)
+      obj = new CalendarEvent(data, contextInfo, actualContextInfo)
 
     # TODO: Improve permissions handling
     # The API is not currently telling us what permissions a user
@@ -51,9 +61,10 @@ define 'compiled/calendar/commonEventFactory', [
     # edited (but it could be deleted)
     if obj.object.workflow_state == 'locked'
       obj.can_edit = false
-    # Any scheduler events can't be edited currently (but can be deleted)
-    if obj.object.appointment_group_id
-      obj.can_edit = false
 
+    # Only the description can be edited on scheduler events,
+    # but that can always be changed whether locked or not
+    if obj.object.appointment_group_id && contextInfo.can_create_calendar_events
+      obj.can_edit = true
 
     obj

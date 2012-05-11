@@ -18,6 +18,9 @@
 
 class ImportedHtmlConverter
   include TextHelper
+
+  CONTAINER_TYPES = ['div', 'p', 'body']
+
   def self.convert(html, context, remove_outer_nodes_if_one_child = false)
     doc = Nokogiri::HTML(html || "")
     attrs = ['rel', 'href', 'src', 'data', 'value']
@@ -69,8 +72,23 @@ class ImportedHtmlConverter
             else
               node[attr] = replace_relative_file_url(rel_path, context, course_path)
             end
-          elsif relative_url?(node[attr])
-            node[attr] = replace_relative_file_url(node[attr], context, course_path)
+          elsif attr == 'href' && node['class'] && node['class'] =~ /instructure_inline_media_comment/
+            # Course copy media reference, leave it alone
+          elsif attr == 'src' && node['class'] && node['class'] =~ /equation_image/
+            # Equation image, leave it alone
+          elsif val =~ %r{\A/assessment_questions/\d+/files/\d+}
+            # The file is in the context of an AQ, leave the link alone
+          elsif val =~ %r{\A/courses/\d+/files/\d+}
+            # This points to a specific file already, leave it alone
+          else
+            begin
+              if relative_url?(node[attr])
+                node[attr] = replace_relative_file_url(node[attr], context, course_path)
+              end
+            rescue URI::InvalidURIError
+              Rails.logger.warn "attempting to translate invalid url: #{node[attr]}"
+              # leave the url as it was
+            end
           end
         end
       end
@@ -78,7 +96,10 @@ class ImportedHtmlConverter
 
     node = doc.at_css('body')
     if remove_outer_nodes_if_one_child
-      node = node.child while node.children.size == 1 && node.child.child
+      while node.children.size == 1 && node.child.child
+        break unless CONTAINER_TYPES.member? node.child.name
+        node = node.child
+      end
     end
     node.inner_html
   rescue
@@ -122,7 +143,7 @@ class ImportedHtmlConverter
     end
     unless new_url
       # the rel_path should already be escaped
-      new_url = URI::escape("#{course_path}/file_contents/#{Folder.root_folders(context).first.name}/") + rel_path
+      new_url = File.join(URI::escape("#{course_path}/file_contents/#{Folder.root_folders(context).first.name}"), rel_path)
     end
     new_url
   end
@@ -146,7 +167,7 @@ class ImportedHtmlConverter
   end
   
   def self.relative_url?(url)
-    (url.match(/[\/#\?]/) || (url.match(/\./) && !url.match(/@/))) && !url.match(/\A\w+:/) && !url.match(/\A\//)
+    URI.parse(url).relative?
   end
   
   def self.convert_text(text, context, import_source=:webct)

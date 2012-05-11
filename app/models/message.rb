@@ -309,7 +309,7 @@ class Message < ActiveRecord::Base
   end
 
   def reply_to_secure_id
-    Canvas::Security.hmac_sha1(self.id.to_s)
+    Canvas::Security.hmac_sha1(self.global_id.to_s)
   end
 
   def reply_to_address
@@ -318,13 +318,15 @@ class Message < ActiveRecord::Base
     res = self.from if self.context_type == 'ErrorReport'
     unless res
       addr, domain = HostUrl.outgoing_email_address.split(/@/)
-      res = "#{addr}+#{self.reply_to_secure_id}-#{self.id}@#{domain}"
+      res = "#{addr}+#{self.reply_to_secure_id}-#{self.global_id}@#{domain}"
     end
   end
-  
+
   def deliver
-    self.dispatch
-    
+    unless self.dispatch
+      return # don't dispatch cancelled or already-sent messages
+    end
+
     if not self.path_type
       logger.warn("Could not find a path type for #{self.inspect}")
       return
@@ -335,10 +337,10 @@ class Message < ActiveRecord::Base
       logger.warn("Could not set delivery_method from #{self.path_type}")
       return
     end
-    
+
     self.send(delivery_method)
   end
-  
+
   def self.dashboard_messages(messages)
     message_types = {}
     messages.each do |m|

@@ -25,22 +25,6 @@ describe Announcement do
   end
   
   context "broadcast policy" do
-    it "should have a broadcast policy" do
-      announcement_model
-      @a.should be_respond_to(:dispatch)
-      @a.should be_respond_to(:to)
-    end
-    
-    it "should have a single policy" do
-      announcement_model
-      @a.broadcast_policy_list.size.should eql(1)
-    end
-    
-    it "should have a policy for 'New Announcement'" do
-      announcement_model
-      @a.broadcast_policy_list.first.dispatch.should eql('New Announcement')
-    end
-    
     it "should sanitize message" do
       announcement_model
       @a.message = "<a href='#' onclick='alert(12);'>only this should stay</a>"
@@ -65,6 +49,23 @@ describe Announcement do
       dom.css('object').length.should eql(1)
       dom.css('object')[0]['data'].should eql("http://www.youtuube.com/test")
       dom.css('object')[0]['othertag'].should eql(nil)
+    end
+
+    it "should broadcast to students and observers" do
+      course_with_student(:active_all => true)
+      course_with_observer(:course => @course, :active_all => true)
+
+      notification_name = "New Announcement"
+      n = Notification.create(:name => notification_name, :category => "TestImmediately")
+      NotificationPolicy.create(:notification => n, :communication_channel => @student.communication_channel, :frequency => "immediately")
+      NotificationPolicy.create(:notification => n, :communication_channel => @observer.communication_channel, :frequency => "immediately")
+
+      @context = @course
+      announcement_model
+
+      to_users = @a.messages_sent[notification_name].map(&:user)
+      to_users.should include(@student)
+      to_users.should include(@observer)
     end
   end
 end

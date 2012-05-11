@@ -1,392 +1,110 @@
-javascript_compressor: closure
 embed_assets: off
 gzip_assets: off
 css_compressor_options:
   line_break: 0
 
-<% saved = _erbout; _erbout = '' %>
-javascripts:
-  common:
-    - public/javascripts/requireConfig.js
-    - public/javascripts/vendor/require.js
-    - public/javascripts/vendor/firebugx.js
-    - public/javascripts/datejs_to_iso_string_patch.js
-    - public/javascripts/vendor/date.js
-    - public/javascripts/vendor/handlebars.vm.js
-    - public/javascripts/vendor/jquery-1.6.4.js
-    # jquery ui modules and effects that we don't actually use are commented out to reduce payload
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.core.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.widget.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.mouse.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.position.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.draggable.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.droppable.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.resizable.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.selectable.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.sortable.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.accordion.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.autocomplete.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.button.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.dialog.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.slider.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.tabs.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.datepicker.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.ui.progressbar.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.core.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.blind.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.bounce.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.clip.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.drop.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.explode.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.fold.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.highlight.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.pulsate.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.scale.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.shake.js
-    - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.slide.js
-    # - public/javascripts/vendor/jquery-ui-1.8.16/ui/jquery.effects.transfer.js
-    - public/javascripts/instructure-jquery.ui.draggable-patch.js
-    - public/javascripts/i18n.js
-    - public/javascripts/vendor/jquery.ba-throttle-debounce.js
-    - public/javascripts/vendor/jquery.ba-tinypubsub.js
-    - public/javascripts/vendor/jquery.ba-hashchange.js
-    - public/javascripts/vendor/spin.js
-    - public/javascripts/vendor/jquery.spin.js
-    - public/javascripts/compiled/Template.js
-    - public/javascripts/compiled/handlebars_helpers.js
-    - public/javascripts/jquery.disableWhileLoading.js
-    - public/javascripts/jquery.fancyplaceholder.js
-    - public/javascripts/jquery.google-analytics.js
-    - public/javascripts/vendor/jquery.pageless.js
-    - public/javascripts/jquery.inst_tree.js
-    - public/javascripts/vendor/jquery.store.js
-    - public/javascripts/vendor/jquery.scrollTo.js
-    - public/javascripts/vendor/scribd.view.js
-    - public/javascripts/vendor/swfobject/swfobject.js
-    - public/javascripts/reminders.js
-    - public/javascripts/jquery.instructure_jquery_patches.js
-    - public/javascripts/jquery.instructure_misc_helpers.js
-    - public/javascripts/jquery.instructure_misc_plugins.js
-    - public/javascripts/jquery.instructure_date_and_time.js
-    - public/javascripts/jquery.instructure_forms.js
-    - public/javascripts/jquery.ajaxJSON.js
-    - public/javascripts/jquery.doc_previews.js
-    - public/javascripts/jquery.dropdownList.js
-    - public/javascripts/jquery.keycodes.js
-    - public/javascripts/jquery.loadingImg.js
-    - public/javascripts/jquery.rails_flash_notifications.js
-    - public/javascripts/jquery.scrollToVisible.js
-    - public/javascripts/jquery.templateData.js
-    - public/javascripts/vendor/jquery.placeholder.js
-    - public/javascripts/instructure_helper.js
-    - public/javascripts/media_comments.js
-    - public/javascripts/tinymce.editor_box.js
-    - public/javascripts/instructure.js
-    - public/javascripts/ajax_errors.js
-    - public/javascripts/page_views.js
-    - public/javascripts/compiled/license_help.js
-    - public/javascripts/wiki_sidebar.js
-    - public/javascripts/INST.js
-    - public/javascripts/jst/helpDialog.js
-    - public/javascripts/compiled/helpDialog.js
-    - public/javascripts/translations/_core_en.js
-    # CustomMenu
-    - public/javascripts/compiled/util/objectCollection.js
-    - public/javascripts/jst/courseList/wrapper.js
-    - public/javascripts/jst/courseList/content.js
-    - public/javascripts/compiled/widget/CustomList.js
-    - public/javascripts/compiled/widget/courseList.js
-    - public/javascripts/compiled/main.js
-  assignmentMuter:
-    - public/javascripts/compiled/AssignmentMuter.js
-    - public/javascripts/jst/mute_dialog.js
+# if you want use IE in dev mode and want to get around the max of 30 stylesheets
+# problem, uncomment the following lines and make sure you
+# rm -rf public/assets after you make any changes to css
+# package_assets: always
+# compress_assets: off
 
-  speed_grader:
-    - public/javascripts/vendor/jquery.elastic.js
-    - public/javascripts/vendor/ui.selectmenu.js
-    - public/javascripts/vendor/jquery.getScrollbarWidth.js
-    - public/javascripts/jquery.shake.js
-    - public/javascripts/rubric_assessment.js
-    - public/javascripts/speed_grader.js
-  file_inline:
-    - public/javascripts/file_inline.js
-  tool_inline:
-    - public/javascripts/tool_inline.js
-  site_admin:
-    - public/javascripts/site_admin.js
-  account_settings:
-    - public/javascripts/account_settings.js
-    - public/javascripts/external_tools.js
-  graphael:
-    - public/javascripts/vendor/raphael.js
-    - public/javascripts/vendor/g.raphael/g.raphael.js
-    - public/javascripts/vendor/g.raphael/g.pie.js
-    - public/javascripts/vendor/g.raphael/g.bar.js
-    - public/javascripts/vendor/g.raphael/g.dot.js
-    - public/javascripts/vendor/g.raphael/g.line.js
-  gradebook_uploads:
-    - public/javascripts/vendor/underscore.js
-    - public/javascripts/vendor/jquery.template.js
-    - public/javascripts/vendor/jquery.getScrollbarWidth.js
-    - public/javascripts/vendor/slickgrid-googlecode/slick.editors.js
-    - public/javascripts/vendor/slickgrid-googlecode/slick.grid.js
-    - public/javascripts/vendor/slickgrid-googlecode/slick.globaleditorlock.js
-    - public/javascripts/gradebook_uploads.js
-  gradebook_history:
-    - public/javascripts/gradebook-history.js
-  jobs:
-    - public/javascripts/compiled/jobs.js
-  profile:
-    - public/javascripts/compiled/util/BackoffPoller.js
-    - public/javascripts/profile.js
-    - public/javascripts/user_sortable_name.js
-    - public/javascripts/user_utils.js
-  topics:
-    - public/javascripts/topics.js
-  topic:
-    - public/javascripts/topic.js
-  account_statistics:
-    - public/javascripts/account_statistics.js
-  assignments:
-    - public/javascripts/assignments.js
-  edit_rubric:
-    - public/javascripts/edit_rubric.js
-    - public/javascripts/find_outcome.js
-  slickgrid:
-    - public/javascripts/vendor/slickgrid/lib/jquery.event.drag-2.0.min.js
-    - public/javascripts/vendor/slickgrid/slick.core.js
-    - public/javascripts/vendor/slickgrid/plugins/slick.rowselectionmodel.js
-    - public/javascripts/vendor/slickgrid/slick.grid.js
-    - public/javascripts/vendor/slickgrid/slick.editors.js
-  syllabus:
-    - public/javascripts/calendar_move.js
-    - public/javascripts/syllabus.js
-  calendar_event:
-    - public/javascripts/calendar_event.js
-  calendar:
-    - public/javascripts/calendar.js
-    - public/javascripts/calendar_move.js
-    - public/javascripts/content_locks.js
-  calendar2:
-    - public/javascripts/compiled/util/Popover.js
-    - public/javascripts/compiled/util/semanticDateRange.js
-    - public/javascripts/compiled/util/hsvToRgb.js
-    - public/javascripts/vendor/fullcalendar.js
-    - public/javascripts/compiled/calendar/EventDataSource.js
-    - public/javascripts/compiled/calendar/CommonEvent.js
-    - public/javascripts/compiled/calendar/CommonEvent.Assignment.js
-    - public/javascripts/compiled/calendar/CommonEvent.CalendarEvent.js
-    - public/javascripts/compiled/calendar/commonEventFactory.js
-    - public/javascripts/compiled/calendar/EditCalendarEventDetails.js
-    - public/javascripts/compiled/calendar/EditAssignmentDetails.js
-    - public/javascripts/compiled/calendar/EditAppointmentGroupDetails.js
-    - public/javascripts/compiled/calendar/EditEventDetailsDialog.js
-    - public/javascripts/compiled/calendar/EditAppointmentGroupDialog.js
-    - public/javascripts/compiled/calendar/ShowEventDetailsDialog.js
-    - public/javascripts/compiled/calendar/TimeBlockList.js
-    - public/javascripts/compiled/calendar/TimeBlockListManager.js
-    - public/javascripts/compiled/calendar/UndatedEventsList.js
-    - public/javascripts/compiled/calendar/calendarApp.js
-    - public/javascripts/jst/calendar/calendarApp.js
-    - public/javascripts/jst/calendar/eventDetails.js
-    - public/javascripts/jst/calendar/editEvent.js
-    - public/javascripts/jst/calendar/editCalendarEvent.js
-    - public/javascripts/jst/calendar/editAssignment.js
-    - public/javascripts/jst/calendar/editAppointmentGroup.js
-    - public/javascripts/jst/calendar/deleteItem.js
-    - public/javascripts/jst/calendar/genericSelect.js
-    - public/javascripts/jst/calendar/undatedEvents.js
-    - public/javascripts/jst/calendar/timeBlockList.js
-    - public/javascripts/jst/calendar/_timeBlock.js
-    - public/javascripts/jst/calendar/appointmentGroupList.js
-    - public/javascripts/jst/calendar/schedulerRightSideAdminSection.js
-    - public/javascripts/compiled/calendar/Calendar.js
-    - public/javascripts/compiled/calendar/Scheduler.js
-    - public/javascripts/content_locks.js
-    - public/javascripts/compiled/calendar/MiniCalendar.js
-    - public/javascripts/jst/calendar/contextList.js
-    - public/javascripts/compiled/jquery.kylemenu.js
-    - public/javascripts/compiled/calendar/sidebar.js
-    - public/javascripts/compiled/calendar/calendarApp.js
-  collaborations:
-    - public/javascripts/collaborations.js
-  discussion_replies:
-    - public/javascripts/context_inbox.js
-  context_modules:
-    - public/javascripts/context_modules.js
-  course_settings:
-    - public/javascripts/vendor/jquery.cookie.js
-    - public/javascripts/user_lists.js
-    - public/javascripts/course_settings.js
-    - public/javascripts/external_tools.js
-    - public/javascripts/grading_standards.js
-  grading_standards:
-    - public/javascripts/grading_standards.js
-  course:
-    - public/javascripts/course.js
-  section:
-    - public/javascripts/section.js
-  wiki:
-    - public/javascripts/wiki.js
-  eportfolio:
-    - public/javascripts/eportfolio.js
-  full_files:
-    - public/javascripts/full_files.js
-    - public/flash/uploadify/jquery.uploadify.v2.1.4.js
-  user_lists:
-    - public/javascripts/user_lists.js
-  datagrid:
-    - public/javascripts/datagrid.js
-  jquery_ui_menu:
-    - public/javascripts/vendor/jquery.ui.core-1.9.js
-    - public/javascripts/vendor/jquery.ui.position-1.9.js
-    - public/javascripts/vendor/jquery.ui.widget-1.9.js
-    - public/javascripts/vendor/jquery.ui.menu-1.9.js
-    - public/javascripts/vendor/jquery.ui.button-1.9.js
-    - public/javascripts/vendor/jquery.ui.popup-1.9.js
-    - public/javascripts/jquery.ui.menu.inputmenu.js
-    - public/javascripts/compiled/jquery.kylemenu.js
-  gradebook2:
-    - public/javascripts/jst/_grading_box.js
-    - public/javascripts/jst/gradebook_uploads_form.js
-    - public/javascripts/jst/re_upload_submissions_form.js
-    - public/javascripts/message_students.js
-    - public/javascripts/compiled/multi_grid.js
-    - public/javascripts/compiled/grade_calculator.js
-    - public/javascripts/jst/SetDefaultGradeDialog.js
-    - public/javascripts/compiled/gradebook2/SetDefaultGradeDialog.js
-    - public/javascripts/jst/AssignmentGroupWeightsDialog.js
-    - public/javascripts/compiled/gradebook2/AssignmentGroupWeightsDialog.js
-    - public/javascripts/jst/AssignmentDetailsDialog.js
-    - public/javascripts/compiled/AssignmentDetailsDialog.js
-    - public/javascripts/jst/CurveGradesDialog.js
-    - public/javascripts/compiled/gradebook2/CurveGradesDialog.js
-    - public/javascripts/jst/gradebook2/GradebookHeaderMenu.js
-    - public/javascripts/compiled/gradebook2/GradebookHeaderMenu.js
-    - public/javascripts/jst/_submission_detail.js
-    - public/javascripts/jst/SubmissionDetailsDialog.js
-    - public/javascripts/compiled/SubmissionDetailsDialog.js
-    - public/javascripts/jst/gradebook2/section_to_show_menu.js
-    - public/javascripts/compiled/gradebook2/Gradebook.js
-    - public/javascripts/compiled/gradebook2/SubmissionCell.js
-  gradebooks:
-    - public/javascripts/gradebooks.js
-    - public/javascripts/message_students.js
-    - public/javascripts/compiled/grade_calculator.js
-  attendance:
-    - public/javascripts/datagrid.js
-    - public/javascripts/attendance.js
-  grade_summary:
-    - public/javascripts/grade_summary.js
-    - public/javascripts/compiled/grade_calculator.js
-  groups:
-    - public/javascripts/groups.js
-  learning_outcomes:
-    - public/javascripts/learning_outcomes.js
-  learning_outcome:
-    - public/javascripts/learning_outcome.js
-  quizzes_bundle:
-    - public/javascripts/quizzes.js
-    - public/javascripts/supercalc.js
-    - public/javascripts/calcCmd.js
-    - public/javascripts/quiz_rubric.js
-  quizzes_index:
-    - public/javascripts/quiz_index.js
-    - public/javascripts/content_locks.js
-  quiz_show:
-    - public/javascripts/quiz_show.js
-    - public/javascripts/quiz_rubric.js
-    - public/javascripts/message_students.js
-  question_bank:
-    - public/javascripts/question_bank.js
-    - public/javascripts/find_outcome.js
-    - public/javascripts/jst/quiz/move_question.js
-  take_quiz:
-    - public/javascripts/quiz_timing.js
-    - public/javascripts/take_quiz.js
-  moderate_quiz:
-    - public/javascripts/quiz_timing.js
-    - public/javascripts/moderate_quiz.js
-  question_banks:
-    - public/javascripts/question_banks.js
-  sub_accounts:
-    - public/javascripts/sub_accounts.js
-  aligned_outcomes:
-    - public/javascripts/aligned_outcomes.js
-  full_assignment:
-    - public/javascripts/full_assignment.js
-    - public/javascripts/grading_standards.js
-  select_content_dialog:
-    - public/javascripts/select_content_dialog.js
-  rubric_assessment:
-    - public/javascripts/rubric_assessment.js
-  dashboard:
-    - public/javascripts/dashboard.js
-  prerequisites_lookup:
-    - public/javascripts/prerequisites_lookup.js
-  sis_import:
-    - public/javascripts/sis_import.js
-  user_notes:
-    - public/javascripts/user_notes.js
-  user_logins:
-    - public/javascripts/user_logins.js
-  user_name:
-    - public/javascripts/user_name.js
-    - public/javascripts/user_sortable_name.js
-    - public/javascripts/user_utils.js
-  user:
-    - public/javascripts/user.js
-  manage_groups:
-    - public/javascripts/manage_groups.js
-  manage_avatars:
-    - public/javascripts/manage_avatars.js
-  json2:
-    - public/javascripts/vendor/json2.js
-  content_migration:
-    - public/javascripts/content_migration.js
-  link_enrollment:
-    - public/javascripts/link_enrollment.js
-  plugins:
-    - public/javascripts/plugins.js
-  content_exports:
-    - public/javascripts/content_exports.js
-  conferences:
-    - public/javascripts/conferences.js
-  teacher_activity_report:
-    - public/javascripts/vendor/jquery.tablesorter.min.js
-    - public/javascripts/compiled/teacher_activity_report.js
-  messages:
-    - public/javascripts/compiled/messages.js
-    - public/javascripts/compiled/slideshow.js
-    - public/javascripts/compiled/conversations_intro.js
-    - public/javascripts/vendor/jquery.elastic.js
-    - public/javascripts/vendor/jquery.cookie.js
-  alerts:
-    - public/javascripts/alerts.js
-  user_sortable_name:
-    - public/javascripts/user_sortable_name.js
-    - public/javascripts/user_utils.js
-<% base_js = _erbout; _erbout = saved %>
 
 <%=
-  def conflict(key, oldval, newval)
-    if oldval.is_a?(Hash) && newval.is_a?(Hash)
-      oldval.merge(newval) { |key, oldval, newval| conflict(key, oldval, newval) }
-    elsif oldval.is_a?(Array) && newval.is_a?(Array)
-      oldval + newval
-    else
-      oldval
+  # pull in the bundles from the various plugins' config/assets.yml extension
+  # files and combine them under a plugins.<plugin> dictionary. so e.g. the
+  # stylesheets bundles from vendor/plugins/myplugin/config/assets.yml will
+  # be added under
+  #
+  # plugins:
+  #   myplugin:
+  #     stylesheets:
+  #       ...
+  #
+  # in this document. additionally, rescope bundle elements defined under public/
+  # (in the context of the plugin) as follows:
+  #
+  #  * public/stylesheets/compiled -> public/stylesheets/compiled/plugins/<plugin>
+  #  * public/* -> public/plugins/<plugin>/*
+  #
+  # i.e. public/x becomes public/plugins/myplugin/x with the exception of
+  # compiled stylesheets, where compass throws them in the more specific
+  # public/stylesheets/compiled/plugins/myplugin/
+  #
+  # to prevent this translation on a bundle element -- to request an element
+  # from canvas-lms in your bundle, for example -- prefix it with "~:". this
+  # prefix will be removed but no other changes made.
+  #
+  # similarly, a prefix of "otherplugin:" just as without a prefix, but the
+  # rescoping will target "otherplugin" rather than "myplugin". this is useful
+  # if myplugin can rely on otherplugin being installed and wishes to reuse
+  # some of the assets from otherplugin.
+  #
+  plugin_assets = {}
+  Dir.glob('vendor/plugins/*/config/assets.yml').each do |asset_file|
+    plugin = asset_file.gsub(%r{^vendor/plugins/(.*)/config/assets\.yml$}, '\\1')
+    assets = YAML.load(File.read(asset_file))
+    assets.each do |type,bundles|
+      bundles.keys.each do |bundle,entries|
+        # the bundle is temporarily renamed to a fully namespaced bundle so
+        # that we can detect and translate that namespace into an anchor in
+        # post-processing.
+        bundles["plugins/#{plugin}/#{type}/#{bundle}"] = bundles.delete(bundle).
+          map do |entry|
+            entry.gsub(%r{^public/stylesheets/compiled/}, "~:public/stylesheets/compiled/plugins/#{plugin}/").
+                  gsub(%r{^public/}, "~:public/plugins/#{plugin}/").
+                  gsub(%r{^(\w+):public/stylesheets/compiled/}, "~:public/stylesheets/compiled/plugins/\\1/").
+                  gsub(%r{^(\w+):public/}, "~:public/plugins/\\1/").
+                  gsub(%r{^~:}, '')
+          end
+      end
     end
+    plugin_assets[plugin] = assets
+  end
+  subdoc = YAML.dump('plugins' => plugin_assets).gsub(/^--- \n/, '')
+
+  # add anchors to the various bundles in the imported plugin asset definitions.
+  # these bundles will be included in the known bundle types below with a
+  # namespaced bundle name. for instance, the bar stylesheet bundle in the foo
+  # plugin will be referred under stylesheets below as "plugins/foo/bar" and
+  # use the corresponding anchor.
+  #
+  # I'd add the anchors programmatically instead of through post-processing of
+  # the serialized document, but I couldn't figure out how
+  anchors = { "stylesheets" => {} }
+  subdoc.gsub!(%r{^( {6})plugins/([^/]*)/([^/]*)/([^:]*): $}) do |match|
+    indent, plugin, type, bundle = $1, $2, $3, $4
+    namespaced_bundle = "plugins_#{plugin}_#{bundle}"
+    anchor = "#{type}_#{namespaced_bundle}"
+    anchors[type][namespaced_bundle] = anchor if anchors[type]
+    "#{indent}#{bundle}: &#{anchor}"
   end
 
-  localization_file = 'config/localization_assets.yml'
-  if File.exists?(localization_file)
-    localization_js_hash = YAML.load_file(localization_file)
-    base_js_hash = YAML.load(base_js)
-    base_js = base_js_hash.merge(localization_js_hash) { |key, oldval, newval| conflict(key, oldval, newval) }.to_yaml.sub(/---/, '')
-  end
-  base_js
+  # for some reason the serialized document outputs as
+  #
+  # plugins:
+  #   foo:
+  #     stylesheets:
+  #       bar: &anchor
+  #       - value
+  #
+  # instead of
+  #
+  # plugins:
+  #   foo:
+  #     stylesheets:
+  #       bar: &anchor
+  #         - value
+  #
+  # both are equivalent without an anchor on bar, but with an anchor on bar,
+  # the first for adds value to plugins.foo.stylesheets.bar but *not* to
+  # *anchor. the second form adds value to both.
+  subdoc.gsub!(%r{(^ {6})- (.*)$}, '\\1  - \\2')
+
+  subdoc
 %>
+
+javascripts:
 
 stylesheets:
   common:
@@ -405,7 +123,6 @@ stylesheets:
     - public/stylesheets/compiled/g_util_ui_listview.css
     - public/stylesheets/compiled/g_assignments.css
     - public/stylesheets/compiled/g_content_imports.css
-    - public/stylesheets/compiled/g_gradebook_history.css
     - public/stylesheets/compiled/g_context_inbox.css
     - public/stylesheets/compiled/g_groups.css
     - public/stylesheets/compiled/g_media_comments.css
@@ -445,10 +162,15 @@ stylesheets:
     - public/stylesheets/compiled/course_settings.css
     - public/stylesheets/compiled/external_tools.css
     - public/stylesheets/compiled/grading_standards.css
+  discussions:
+    - public/stylesheets/static/ui.selectmenu.css
+    - public/stylesheets/compiled/discussions.css
   full_files:
     - public/stylesheets/compiled/full_files.css
   datagrid:
     - public/stylesheets/compiled/datagrid.css
+  gradebook_history:
+    - public/stylesheets/compiled/gradebook_history.css
   gradebooks:
     - public/stylesheets/compiled/gradebooks.css
     - public/stylesheets/compiled/message_students.css
@@ -463,6 +185,7 @@ stylesheets:
   quizzes:
     - public/stylesheets/compiled/quizzes.css
     - public/stylesheets/compiled/message_students.css
+    - public/stylesheets/static/ui.selectmenu.css
   moderate_quiz:
     - public/stylesheets/compiled/moderate_quiz.css
   full_assignment:
@@ -491,6 +214,8 @@ stylesheets:
     - public/javascripts/vendor/slickgrid/slick.grid.css
   sub_accounts:
     - public/stylesheets/compiled/sub_accounts.css
+  user_grades:
+    - public/stylesheets/compiled/user_grades.css
   user_logins:
     - public/stylesheets/compiled/user_logins.css
   account_settings:
@@ -498,10 +223,16 @@ stylesheets:
     - public/stylesheets/compiled/external_tools.css
   select_content_dialog:
     - public/stylesheets/compiled/select_content_dialog.css
-  messages:
-    - public/stylesheets/compiled/messages.css
+  conversations:
+    - public/stylesheets/compiled/conversations.css
     - public/stylesheets/compiled/slideshow.css
-  dashboard:
-    - public/stylesheets/compiled/g_dashboard_conversations.css
   alerts:
     - public/stylesheets/compiled/alerts.css
+  edit_calendar_event_full:
+    - public/stylesheets/compiled/calendar/editCalendarEventFull.css
+  tinymce:
+    - public/javascripts/tinymce/jscripts/tiny_mce/themes/advanced/skins/default/ui.css
+    - public/stylesheets/compiled/tiny_like_ck_with_external_tools.css
+    - public/javascripts/tinymce/jscripts/tiny_mce/plugins/inlinepopups/skins/clearlooks2/window.css
+    - public/stylesheets/static/mathquill.css
+  <%= anchors["stylesheets"].map{ |(bundle,anchor)| "#{bundle}: *#{anchor}" }.join("\n  ") %>

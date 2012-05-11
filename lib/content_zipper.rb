@@ -101,8 +101,13 @@ class ContentZipper
           @submission = submission
           @context = assignment.context
           @logger.debug(" checking submission for #{(submission.user.name rescue nil)}")
-          filename = submission.user.last_name_first + (submission.late? ? " LATE " : " ") + submission.user_id.to_s
-          filename = filename.gsub(/ /, "_").gsub(/[^\w]/, "").downcase
+
+          # it's necessary to replace _\d+_ because we use that pattern to infer the user/attachment ids when teachers
+          # upload graded submissions
+          users_name = submission.user.last_name_first.gsub(/_(\d+)_/, '-\1-')
+
+          filename = users_name + (submission.late? ? " LATE " : " ") + submission.user_id.to_s
+          filename = filename.gsub(/ /, "_").gsub(/[^-\w]/, "").downcase
           content = nil
           if submission.submission_type == "online_upload"
             submission.attachments.each do |attachment|
@@ -273,8 +278,6 @@ class ContentZipper
     end
   end
   
-  protected
-
   # make a tmp directory and yield a filename under that directory to the block
   # given. the tmp directory is deleted when the block returns.
   def make_zip_tmpdir(filename)

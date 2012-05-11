@@ -1,9 +1,13 @@
-define 'compiled/calendar/EditAppointmentGroupDetails', [
-  'i18n'
+define [
+  'jquery'
+  'i18n!EditAppointmentGroupDetails'
   'compiled/calendar/TimeBlockList'
   'jst/calendar/editAppointmentGroup'
   'jst/calendar/genericSelect'
-], (I18n, TimeBlockList, editAppointmentGroupTemplate, genericSelectTemplate) ->
+  'jquery.ajaxJSON'
+  'jquery.disableWhileLoading'
+  'jquery.instructure_forms'
+], ($, I18n, TimeBlockList, editAppointmentGroupTemplate, genericSelectTemplate) ->
 
   class EditAppointmentGroupDetails
     constructor: (selector, @apptGroup, @contextChangeCB, @closeCB) ->
@@ -39,11 +43,8 @@ define 'compiled/calendar/EditAppointmentGroupDetails', [
       else
         @form.attr('action', @currentContextInfo.create_appointment_group_url)
 
-      timeBlocks = []
-      if @apptGroup.appointmentEvents
-        for appt in @apptGroup.appointmentEvents
-          timeBlocks.push [appt.start, appt.end, !appt.can_edit]
-      @timeBlockList = new TimeBlockList(@form.find(".time-block-list-body-wrapper"), @form.find(".splitter"), timeBlocks)
+      timeBlocks = ([appt.start, appt.end, true] for appt in @apptGroup.appointmentEvents || [] )
+      @timeBlockList = new TimeBlockList(@form.find(".time-block-list-body"), @form.find(".splitter"), timeBlocks)
 
       @form.find('[name="slot_duration"]').change (e) =>
         if @form.find('[name="autosplit_option"]').is(":checked")
@@ -74,6 +75,17 @@ define 'compiled/calendar/EditAppointmentGroupDetails', [
       else
         @form.find('[name="participants_per_appointment"]').attr('disabled', true)
 
+      maxPerStudentInput = @form.find('[name="max_appointments_per_participant"]')
+      maxAppointmentsPerStudent = @apptGroup.max_appointments_per_participant || 1
+      maxPerStudentInput.val(maxAppointmentsPerStudent)
+      maxPerStudentCheckbox = @form.find('#max-per-student-option')
+      maxPerStudentCheckbox.change ->
+        maxPerStudentInput.prop('disabled', not maxPerStudentCheckbox.prop('checked'))
+      if maxAppointmentsPerStudent > 0
+        maxPerStudentCheckbox.prop('checked', true)
+      else
+        maxPerStudentInput.attr('disabled', true)
+
       if @apptGroup.workflow_state == 'active'
         @form.find("#appointment-blocks-active-button").attr('disabled', true).prop('checked', true)
 
@@ -101,8 +113,18 @@ define 'compiled/calendar/EditAppointmentGroupDetails', [
         'appointment_group[location_name]': data.location
       }
 
+      if data.max_appointments_per_participant_option
+        if data.max_appointments_per_participant < 1
+          $('[name="max_appointments_per_participant"]').errorBox(
+            I18n.t('bad_max_appts', 'You must allow at least one appointment per participant'))
+          return false
+        else
+          params['appointment_group[max_appointments_per_participant]'] = data.max_appointments_per_participant
+      else
+        params['appointment_group[max_appointments_per_participant]'] = ""
+
       params['appointment_group[new_appointments]'] = []
-      @return false unless @timeBlockList.validate()
+      return false unless @timeBlockList.validate()
       for range in @timeBlockList.blocks()
         params['appointment_group[new_appointments]'].push([
           $.dateToISO8601UTC($.unfudgeDateForProfileTimezone(range[0])),
@@ -125,8 +147,7 @@ define 'compiled/calendar/EditAppointmentGroupDetails', [
         else if data.section_id && data.section_id != 'all'
           params['appointment_group[sub_context_code]'] = data.section_id
 
-        # TODO: Provide UI for specifying these
-        params['appointment_group[max_appointments_per_participant]'] = 1
+        # TODO: Provide UI for specifying this
         params['appointment_group[min_appointments_per_participant]'] = 1
 
       onSuccess = => @closeCB(true)

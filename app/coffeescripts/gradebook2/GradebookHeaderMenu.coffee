@@ -1,10 +1,27 @@
-I18n.scoped 'gradebook2', (I18n) ->
-  class @GradebookHeaderMenu
+define [
+  'i18n!gradebook2'
+  'jquery'
+  'message_students'
+  'compiled/AssignmentDetailsDialog'
+  'compiled/AssignmentMuter'
+  'compiled/gradebook2/SetDefaultGradeDialog'
+  'compiled/gradebook2/CurveGradesDialog'
+  'jst/gradebook2/GradebookHeaderMenu'
+  'jst/re_upload_submissions_form'
+  'use!underscore'
+  'jquery.instructure_forms'
+  'jquery.instructure_jquery_patches'
+  'jquery.instructure_misc_helpers'
+  'jquery.instructure_misc_plugins'
+  'compiled/jquery.kylemenu'
+], (I18n, $, messageStudents, AssignmentDetailsDialog, AssignmentMuter, SetDefaultGradeDialog, CurveGradesDialog, gradebookHeaderMenuTemplate, re_upload_submissions_form, _) ->
+
+  class GradebookHeaderMenu
     constructor: (@assignment, @$trigger, @gradebook) ->
       templateLocals =
         assignmentUrl: "#{@gradebook.options.context_url}/assignments/#{@assignment.id}"
         speedGraderUrl: "#{@gradebook.options.context_url}/gradebook/speed_grader?assignment_id=#{@assignment.id}"
-      @$menu = $(Template 'gradebook2/GradebookHeaderMenu', templateLocals).insertAfter(@$trigger)
+      @$menu = $(gradebookHeaderMenuTemplate(templateLocals)).insertAfter(@$trigger)
       @$trigger.kyleMenu(noButton:true)
       @$menu
         # need it to be a child of #gradebook_grid (not the header cell) to get over overflow:hidden obstacles.
@@ -34,29 +51,41 @@ I18n.scoped 'gradebook2', (I18n) ->
 
     messageStudentsWho: =>
       students = ($.extend({ id: student.id, name: student.name}, student["assignment_#{@assignment.id}"]) for i, student of @gradebook.students)
+      submissionTypes = @assignment.submission_types
+      hasSubmission = true
+      if submissionTypes.length == 0
+        hasSubmission = false
+      else if submissionTypes.length == 1
+        hasSubmission = not _.include(["none", "on_paper"], submissionTypes[0])
+      options = [
+        {text: I18n.t("students_who.havent_submitted_yet", "Haven't submitted yet")}
+        {text: I18n.t("students_who.havent_been_graded", "Haven't been graded")}
+        {text: I18n.t("students_who.scored_less_than", "Scored less than"), cutoff: true}
+        {text: I18n.t("students_who.scored_more_than", "Scored more than"), cutoff: true}
+      ]
+      options.splice 0, 1 unless hasSubmission
+
       window.messageStudents
-        options: [
-          {text: I18n.t("students_who.havent_submitted_yet", "Haven't submitted yet")}
-          {text: I18n.t("students_who.scored_less_than", "Scored less than"), cutoff: true}
-          {text: I18n.t("students_who.scored_more_than", "Scored more than"), cutoff: true}
-        ]
+        options: options
         title: @assignment.name
         points_possible: @assignment.points_possible
         students: students
         callback: (selected, cutoff, students) ->
           students = $.grep students, ($student, idx) ->
             student = $student.user_data
-            if selected == I18n.t("not_submitted_yet", "Haven't submitted yet")
+            if selected == I18n.t("students_who.havent_submitted_yet", "Haven't submitted yet")
               !student.submitted_at
-            else if selected == I18n.t("scored_less_than", "Scored less than")
+            else if selected == I18n.t("students_who.havent_been_graded", "Haven't been graded")
+              !student.score?
+            else if selected == I18n.t("students_who.scored_less_than", "Scored less than")
               student.score? and student.score != "" and cutoff? and student.score < cutoff
-            else if selected == I18n.t("scored_more_than", "Scored more than")
+            else if selected == I18n.t("students_who.scored_more_than", "Scored more than")
               student.score? and student.score != "" and cutoff? and student.score > cutoff
           $.map students, (student) -> student.user_data.id
-    
+
     setDefaultGrade: =>
       new SetDefaultGradeDialog(@assignment, @gradebook)
-    
+
     curveGrades: =>
       new CurveGradesDialog(@assignment, @gradebook)
 
@@ -67,7 +96,7 @@ I18n.scoped 'gradebook2', (I18n) ->
 
     reuploadSubmissions: =>
       unless @$re_upload_submissions_form
-        GradebookHeaderMenu::$re_upload_submissions_form = $(Template('re_upload_submissions_form'))
+        GradebookHeaderMenu::$re_upload_submissions_form = $(re_upload_submissions_form())
           .dialog
             width: 400
             modal: true
@@ -82,4 +111,3 @@ I18n.scoped 'gradebook2', (I18n) ->
               false
       url = $.replaceTags @gradebook.options.re_upload_submissions_url, "assignment_id", @assignment.id
       @$re_upload_submissions_form.attr('action', url).dialog('open')
-

@@ -17,12 +17,16 @@
 #
 
 require File.expand_path(File.dirname(__FILE__) + '/../api_spec_helper')
+require File.expand_path(File.dirname(__FILE__) + '/../file_uploads_spec_helper')
 
 class TestUserApi
   include Api::V1::User
   attr_accessor :services_enabled, :context, :current_user
   def service_enabled?(service); @services_enabled.include? service; end
   def avatar_image_url(user_id); "avatar_image_url(#{user_id})"; end
+  def initialize
+    @domain_root_account = Account.default
+  end
 end
 
 describe Api::V1::User do
@@ -44,9 +48,57 @@ describe Api::V1::User do
       @test_api.services_enabled = [:avatars]
       @test_api.user_json(@student, @admin, {}, [], @course).has_key?("avatar_url").should be_false
       @test_api.user_json(@student, @admin, {}, ['avatar_url'], @course).should encompass({
-        "avatar_url" => "avatar_image_url(#{@student.id})"
+        "avatar_url" => "avatar_image_url(#{User.avatar_key(@student.id)})"
       })
     end
+
+    it 'should use the correct SIS pseudonym' do
+      @user = User.create!(:name => 'User')
+      @account2 = Account.create!
+      @user.pseudonyms.create!(:unique_id => 'abc', :account => @account2) { |p| p.sis_user_id = 'abc' }
+      @user.pseudonyms.create!(:unique_id => 'xyz', :account => Account.default) { |p| p.sis_user_id = 'xyz' }
+      @test_api.user_json(@user, @admin, {}, [], Account.default).should == {
+          'name' => 'User',
+          'sortable_name' => 'User',
+          'sis_user_id' => 'xyz',
+          'id' => @user.id,
+          'short_name' => 'User',
+          'login_id' => 'xyz',
+          'sis_login_id' => 'xyz'
+        }
+    end
+
+    it 'should use the SIS pseudonym instead of another pseudonym' do
+      @user = User.create!(:name => 'User')
+      @account2 = Account.create!
+      @user.pseudonyms.create!(:unique_id => 'abc', :account => Account.default)
+      @user.pseudonyms.create!(:unique_id => 'xyz', :account => Account.default) { |p| p.sis_user_id = 'xyz' }
+      @test_api.user_json(@user, @admin, {}, [], Account.default).should == {
+          'name' => 'User',
+          'sortable_name' => 'User',
+          'sis_user_id' => 'xyz',
+          'id' => @user.id,
+          'short_name' => 'User',
+          'login_id' => 'xyz',
+          'sis_login_id' => 'xyz'
+        }
+    end
+
+    it 'should use the correct pseudonym' do
+      @user = User.create!(:name => 'User')
+      @account2 = Account.create!
+      @user.pseudonyms.create!(:unique_id => 'abc', :account => @account2)
+      @pseudonym = @user.pseudonyms.create!(:unique_id => 'xyz', :account => Account.default)
+      @user.stubs(:find_pseudonym_for_account).with(Account.default).returns(@pseudonym)
+      @test_api.user_json(@user, @admin, {}, [], Account.default).should == {
+          'name' => 'User',
+          'sortable_name' => 'User',
+          'id' => @user.id,
+          'short_name' => 'User',
+          'login_id' => 'xyz',
+        }
+    end
+
 
     def test_context(mock_context, context_to_pass)
       mock_context.expects(:account).returns(mock_context)
@@ -145,7 +197,7 @@ describe "Users API", :type => :integration do
       'sis_user_id' => 'sis-user-id',
       'sis_login_id' => 'pvuser@example.com',
       'login_id' => 'pvuser@example.com',
-      'avatar_url' => "http://www.example.com/images/users/#{@student.id}",
+      'avatar_url' => "http://www.example.com/images/users/#{User.avatar_key(@student.id)}",
     }
   end
 
@@ -164,7 +216,7 @@ describe "Users API", :type => :integration do
       'short_name' => 'new guy',
       'login_id' => nil,
       'primary_email' => nil,
-      'avatar_url' => "http://www.example.com/images/users/#{new_user.id}",
+      'avatar_url' => "http://www.example.com/images/users/#{User.avatar_key(new_user.id)}",
     }
 
     get("/courses/#{@course.id}/students")
@@ -179,10 +231,8 @@ describe "Users API", :type => :integration do
       'sortable_name' => 'User',
       'short_name' => 'User',
       'primary_email' => 'nobody@example.com',
-      'sis_user_id' => nil,
-      'sis_login_id' => nil,
       'login_id' => 'nobody@example.com',
-      'avatar_url' => "http://www.example.com/images/users/#{@admin.id}",
+      'avatar_url' => "http://www.example.com/images/users/#{User.avatar_key(@admin.id)}",
       'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@admin.uuid}.ics" },
     }
   end
@@ -198,7 +248,7 @@ describe "Users API", :type => :integration do
       'short_name' => 'Student',
       'primary_email' => 'pvuser@example.com',
       'login_id' => 'pvuser@example.com',
-      'avatar_url' => "http://www.example.com/images/users/#{@student.id}",
+      'avatar_url' => "http://www.example.com/images/users/#{User.avatar_key(@student.id)}",
       'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@student.uuid}.ics" },
     }
   end
@@ -221,10 +271,14 @@ describe "Users API", :type => :integration do
     json.size.should == 2
     json.each { |j| j['url'].should == "http://www.example.com/courses/1" }
     json[0]['created_at'].should be > json[1]['created_at']
+    response.headers['Link'].should match /next/
+    response.headers['Link'].should_not match /last/
     json = api_call(:get, "/api/v1/users/sis_user_id:sis-user-id/page_views?page=2",
                        { :controller => "page_views", :action => "index", :user_id => 'sis_user_id:sis-user-id', :format => 'json', :page => '2' })
     json.size.should == 1
     json.each { |j| j['url'].should == "http://www.example.com/courses/1" }
+    response.headers['Link'].should_not match /next/
+    response.headers['Link'].should_not match /last/
   end
 
   it "shouldn't find users in other root accounts by sis id" do
@@ -250,15 +304,14 @@ describe "Users API", :type => :integration do
 
   describe "user account listing" do
     it "should return users for an account" do
-      @account = @user.account
+      @account = Account.default
       users = []
       [['Test User1', 'test@example.com'], ['Test User2', 'test2@example.com'], ['Test User3', 'test3@example.com']].each_with_index do |u, i|
-        users << User.create(:name => u[0])
-        users[i].pseudonyms.create(:unique_id => u[1], :password => '123456', :password_confirmation => '123456')
-        users[i].pseudonym.update_attribute(:sis_user_id, (i + 1) * 100)
-        users[i].pseudonym.update_attribute(:account_id, @account.id)
+        users << User.create!(:name => u[0])
+        users[i].pseudonyms.create!(:unique_id => u[1], :account => @account) { |p| p.sis_user_id = u[1] }
       end
       @account.all_users.scoped(:order => :sortable_name).each_with_index do |user, i|
+        next unless users.find { |u| u == user }
         json = api_call(:get, "/api/v1/accounts/#{@account.id}/users",
                { :controller => 'users', :action => 'index', :account_id => @account.id.to_param, :format => 'json' },
                { :per_page => 1, :page => i + 1 })
@@ -269,7 +322,7 @@ describe "Users API", :type => :integration do
           'id' => user.id,
           'short_name' => user.short_name,
           'login_id' => user.pseudonym.unique_id,
-          'sis_login_id' => user.pseudonym.sis_user_id ? user.pseudonym.unique_id : nil
+          'sis_login_id' => user.pseudonym.sis_user_id
         }]
       end
     end
@@ -377,6 +430,73 @@ describe "Users API", :type => :integration do
       errors = JSON.parse(response.body)['errors']
       errors.length.should eql 1
       errors['unique_id'].length.should be > 0
+    end
+  end
+
+  describe "user account updates" do
+    before do
+      @admin = account_admin_user
+      course_with_student(:user => user_with_pseudonym(:name => 'Student', :username => 'student@example.com'))
+      @student = @user
+      @student.pseudonym.update_attribute(:sis_user_id, 'sis-user-id')
+      @user = @admin
+      @path = "/api/v1/users/#{@student.id}"
+      @path_options = { :controller => 'users', :action => 'update', :format => 'json', :id => @student.id.to_param }
+      user_with_pseudonym(:user => @user, :username => 'admin@example.com')
+    end
+    context "an admin user" do
+      it "should be able to update a user" do
+        json = api_call(:put, @path, @path_options, {
+          :user => {
+            :name => 'Tobias Funke',
+            :short_name => 'Tobias',
+            :sortable_name => 'Funke, Tobias',
+            :time_zone => 'America/Juneau'
+          }
+        })
+        user = User.find(json['id'])
+        json.should == {
+          'name' => 'Tobias Funke',
+          'sortable_name' => 'Funke, Tobias',
+          'sis_user_id' => 'sis-user-id',
+          'id' => user.id,
+          'short_name' => 'Tobias',
+          'login_id' => 'student@example.com',
+          'sis_login_id' => 'student@example.com'
+        }
+        user.time_zone.should eql 'America/Juneau'
+      end
+    end
+
+    context "an unauthorized user" do
+      it "should receive a 401" do
+        user
+        raw_api_call(:put, @path, @path_options, {
+          :user => { :name => 'Gob Bluth' }
+        })
+        response.code.should eql '401'
+      end
+    end
+  end
+
+  context "user files" do
+    it_should_behave_like "file uploads api with folders"
+
+    def preflight(preflight_params)
+      api_call(:post, "/api/v1/users/self/files",
+        { :controller => "users", :action => "create_file", :format => "json", :user_id => 'self', },
+        preflight_params)
+    end
+
+    def context
+      @user
+    end
+
+    it "should not allow uploading to other users" do
+      user2 = User.create!
+      api_call(:post, "/api/v1/users/#{user2.id}/files",
+        { :controller => "users", :action => "create_file", :format => "json", :user_id => user2.to_param, },
+        { :name => "my_essay.doc" }, {}, :expected_status => 401)
     end
   end
 end

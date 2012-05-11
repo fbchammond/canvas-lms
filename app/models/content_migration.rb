@@ -25,6 +25,8 @@ class ContentMigration < ActiveRecord::Base
   belongs_to :attachment
   belongs_to :overview_attachment, :class_name => 'Attachment'
   belongs_to :exported_attachment, :class_name => 'Attachment'
+  belongs_to :source_course, :class_name => 'Course'
+  has_one :content_export
   has_a_broadcast_policy
   serialize :migration_settings
   before_save :infer_defaults
@@ -51,7 +53,7 @@ class ContentMigration < ActiveRecord::Base
           'web_links' => false,
           'wikis' => false
   }
-  attr_accessible :context, :migration_settings, :user
+  attr_accessible :context, :migration_settings, :user, :source_course, :copy_options
 
   workflow do
     state :created
@@ -72,13 +74,13 @@ class ContentMigration < ActiveRecord::Base
     p.whenever {|record|
       record.changed_state(:exported) && !record.migration_settings[:skip_import_notification]
     }
-    
+
     p.dispatch :migration_import_finished
     p.to { [user] }
     p.whenever {|record|
       record.changed_state(:imported) && !record.migration_settings[:skip_import_notification]
     }
-    
+
     p.dispatch :migration_import_failed
     p.to { [user] }
     p.whenever {|record|
@@ -107,19 +109,19 @@ class ContentMigration < ActiveRecord::Base
       end
     end
   end
-  
+
   def migration_ids_to_import=(val)
     migration_settings[:migration_ids_to_import] = val
   end
-  
+
   def infer_defaults
     migration_settings[:to_scrape] ||= DEFAULT_TO_EXPORT
   end
-  
+
   def process_to_scrape(hash)
     migrate_only = migration_settings[:to_scrape] || DEFAULT_TO_EXPORT
     hash.each do |key, arg|
-      migrate_only[key] = arg == '1' ? true : false if arg 
+      migrate_only[key] = arg == '1' ? true : false if arg
       if key == 'calendar_events' && migrate_only[key]
         migrate_only['calendar_start'] = 1.year.ago.strftime(DATE_FORMAT)
         migrate_only['calendar_end'] = 1.year.from_now.strftime(DATE_FORMAT)
@@ -127,7 +129,7 @@ class ContentMigration < ActiveRecord::Base
     end
     migration_settings[:to_scrape] = migrate_only
   end
-  
+
   def zip_path=(val)
     migration_settings[:export_archive_path] = val
   end
@@ -149,11 +151,11 @@ class ContentMigration < ActiveRecord::Base
   def course_archive_download_url=(url)
     migration_settings[:course_archive_download_url] = url
   end
-  
+
   def root_account
     self.context.root_account rescue nil
   end
-  
+
   def plugin_type
     if plugin = Canvas::Plugin.find(migration_settings['migration_type'])
       plugin.metadata(:select_text) || plugin.name
@@ -186,8 +188,9 @@ class ContentMigration < ActiveRecord::Base
       begin
         if Canvas::Migration::Worker.const_defined?(plugin.settings['worker'])
           self.workflow_state = :exporting
-          Canvas::Migration::Worker.const_get(plugin.settings['worker']).enqueue(self)
+          job = Canvas::Migration::Worker.const_get(plugin.settings['worker']).enqueue(self)
           self.save
+          job
         else
           raise NameError
         end
@@ -207,21 +210,37 @@ class ContentMigration < ActiveRecord::Base
       self.save
     end
   end
-  
+
   def check_quiz_id_prepender
     if !migration_settings[:id_prepender] && !migration_settings[:overwrite_questions]
       # only prepend an id if the course already has some migrated questions/quizzes
       if self.context.assessment_questions.scoped(:conditions => 'assessment_questions.migration_id IS NOT NULL').any? ||
          self.context.quizzes.scoped(:conditions => 'quizzes.migration_id IS NOT NULL').any?
-        migration_settings[:id_prepender] = self.id  
+        migration_settings[:id_prepender] = self.id
       end
     end
   end
 
   def to_import(val)
-    migration_settings[:migration_ids_to_import][:copy][val] rescue nil
+    migration_settings[:migration_ids_to_import] && migration_settings[:migration_ids_to_import][:copy] && migration_settings[:migration_ids_to_import][:copy][val]
   end
-  
+
+  def import_object?(asset_type, mig_id)
+    return false unless mig_id
+    return true unless migration_settings[:migration_ids_to_import] && migration_settings[:migration_ids_to_import][:copy] && migration_settings[:migration_ids_to_import][:copy].length > 0
+    return true if is_set?(to_import(:everything))
+
+    return true if is_set?(to_import("all_#{asset_type}"))
+
+    return false unless to_import(asset_type)
+
+    is_set?(to_import(asset_type)[mig_id])
+  end
+
+  def is_set?(option)
+    Canvas::Plugin::value_to_boolean option
+  end
+
   def import_content
     self.workflow_state = :importing
     self.save
@@ -259,6 +278,81 @@ class ContentMigration < ActiveRecord::Base
     end
   end
   handle_asynchronously :import_content, :priority => Delayed::LOW_PRIORITY, :max_attempts => 1
+
+  def copy_options
+    self.migration_settings[:copy_options]
+  end
+
+  def copy_options=(options)
+    self.migration_settings[:copy_options] = options
+  end
+
+  def for_course_copy?
+    !!self.source_course
+  end
+
+  def copy_course
+    self.workflow_state = :pre_processing
+    self.progress = 0
+    self.migration_settings[:skip_import_notification] = true
+    self.save
+
+    begin
+      ce = ContentExport.new
+      ce.content_migration = self
+      ce.selected_content = copy_options
+      ce.course = self.source_course
+      ce.export_type = ContentExport::COURSE_COPY
+      ce.user = self.user
+      ce.save!
+      self.content_export = ce
+
+      ce.export_course_without_send_later
+
+      if ce.workflow_state == 'exported_for_course_copy'
+        # use the exported attachment as the import archive
+        self.attachment = ce.attachment
+        migration_settings[:migration_ids_to_import] ||= {:copy=>{}}
+        migration_settings[:migration_ids_to_import][:copy][:everything] = true
+        if copy_options[:shift_dates]
+          migration_settings[:migration_ids_to_import][:copy][:shift_dates] = copy_options[:shift_dates]
+          migration_settings[:migration_ids_to_import][:copy][:old_start_date] = copy_options[:old_start_date]
+          migration_settings[:migration_ids_to_import][:copy][:old_end_date] = copy_options[:old_end_date]
+          migration_settings[:migration_ids_to_import][:copy][:new_start_date] = copy_options[:new_start_date]
+          migration_settings[:migration_ids_to_import][:copy][:new_end_date] = copy_options[:new_end_date]
+          migration_settings[:migration_ids_to_import][:copy][:day_substitutions] = copy_options[:day_substitutions]
+        end
+
+        self.save
+        worker = Canvas::Migration::Worker::CCWorker.new
+        worker.migration_id = self.id
+        worker.perform
+        self.reload
+        if self.workflow_state == 'exported'
+          self.workflow_state = :pre_processed
+          self.progress = 10
+
+          self.context.copy_attachments_from_course(self.source_course, :content_export => ce, :content_migration => self)
+          self.progress = 20
+
+          self.import_content_without_send_later
+        end
+      else
+        self.workflow_state = :failed
+        migration_settings[:last_error] = "ContentExport failed to export course."
+        self.save
+      end
+    rescue => e
+      self.workflow_state = :failed
+      er = ErrorReport.log_exception(:content_migration, e)
+      migration_settings[:last_error] = "ErrorReport:#{er.id}"
+      logger.error e
+      self.save
+      raise e
+    ensure
+    end
+  end
+  handle_asynchronously :copy_course, :priority => Delayed::LOW_PRIORITY, :max_attempts => 1
   
   named_scope :for_context, lambda{|context|
     {:conditions => {:context_id => context.id, :context_type => context.class.to_s} }
@@ -275,7 +369,7 @@ class ContentMigration < ActiveRecord::Base
 
   def download_exported_data
     raise "No exported data to import" unless self.exported_attachment
-    config = Setting.from_config('external_migration')
+    config = Setting.from_config('external_migration') || {}
     @exported_data_zip = self.exported_attachment.open(
       :need_local_file => true,
       :temp_folder => config[:data_folder])
@@ -289,6 +383,24 @@ class ContentMigration < ActiveRecord::Base
   def clear_migration_data
     @zip_file.close if @zip_file
     @zip_file = nil
+  end
+
+  def progress
+    return nil if self.workflow_state == 'created'
+    mig_prog = read_attribute(:progress) || 0
+    if self.source_course
+      # this is for a course copy so it needs to combine the progress of the export and import
+      # The export will count for 40% of progress
+      # The importing step (so the value of progress on this object)will be 60%
+      mig_prog = mig_prog * 0.6
+
+      if self.content_export
+        export_prog = self.content_export.progress || 0
+        mig_prog += export_prog * 0.4
+      end
+    end
+
+    mig_prog
   end
 
   def fast_update_progress(val)

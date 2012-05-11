@@ -74,7 +74,7 @@ describe AssignmentGroupsController, :type => :integration do
     a3 = @course.assignments.create!(:title => "test3", :assignment_group => group2, :points_possible => 8)
     a4 = @course.assignments.create!(:title => "test4", :assignment_group => group2, :points_possible => 9)
 
-    rubric_model(:user => @user, :context => @course,
+    rubric_model(:user => @user, :context => @course, :points_possible => 12,
                                      :data => larger_rubric_data)
 
     a3.create_rubric_association(:rubric => @rubric, :purpose => 'grading', :use_for_grading => true)
@@ -95,13 +95,14 @@ describe AssignmentGroupsController, :type => :integration do
         'assignments' => [
           {
             'id' => a3.id,
+            'assignment_group_id' => group2.id,
             'course_id' => @course.id,
             'due_at' => nil,
             'muted' => false,
             'name' => 'test3',
             'description' => nil,
             'position' => 1,
-            'points_possible' => 8,
+            'points_possible' => 12,
             'needs_grading_count' => 0,
             "submission_types" => [
               "none",
@@ -109,6 +110,11 @@ describe AssignmentGroupsController, :type => :integration do
             'grading_type' => 'points',
             'use_rubric_for_grading' => true,
             'free_form_criterion_comments' => false,
+            'html_url' => course_assignment_url(@course, a3),
+            'rubric_settings' => {
+              'points_possible' => 12,
+              'free_form_criterion_comments' => false,
+            },
             'rubric' => [
               {'id' => 'crit1', 'points' => 10, 'description' => 'Crit1',
                 'ratings' => [
@@ -124,9 +130,11 @@ describe AssignmentGroupsController, :type => :integration do
                 ],
               },
             ],
+            'group_category_id' => nil
           },
           {
             'id' => a4.id,
+            'assignment_group_id' => group2.id,
             'course_id' => @course.id,
             'due_at' => nil,
             'muted' => false,
@@ -139,6 +147,8 @@ describe AssignmentGroupsController, :type => :integration do
               "none",
             ],
             'grading_type' => 'points',
+            'group_category_id' => nil,
+            'html_url' => course_assignment_url(@course, a4),
           },
         ],
       },
@@ -151,6 +161,7 @@ describe AssignmentGroupsController, :type => :integration do
         'assignments' => [
           {
             'id' => a1.id,
+            'assignment_group_id' => group1.id,
             'course_id' => @course.id,
             'due_at' => nil,
             'muted' => false,
@@ -163,9 +174,12 @@ describe AssignmentGroupsController, :type => :integration do
               "none",
             ],
             'grading_type' => 'points',
+            'group_category_id' => nil,
+            'html_url' => course_assignment_url(@course, a1),
           },
           {
             'id' => a2.id,
+            'assignment_group_id' => group1.id,
             'course_id' => @course.id,
             'due_at' => nil,
             'muted' => false,
@@ -178,6 +192,8 @@ describe AssignmentGroupsController, :type => :integration do
               "none",
             ],
             'grading_type' => 'points',
+            'group_category_id' => nil,
+            'html_url' => course_assignment_url(@course, a2),
           },
         ],
       },

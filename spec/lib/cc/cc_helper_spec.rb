@@ -41,6 +41,15 @@ describe CC::CCHelper do
       @exporter.media_object_infos[@obj.id][:asset][:id].should == 'one'
     end
 
+    it "should not touch media links on course copy" do
+      @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user, :for_course_copy=>true)
+      orig = <<-HTML
+      <p><a id='media_comment_abcde' class='instructure_inline_media_comment'>this is a media comment</a></p>
+      HTML
+      translated = @exporter.html_content(orig)
+      translated.should == orig
+    end
+
     it "should translate media links using an alternate flavor" do
       @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user, :media_object_flavor => 'flash video')
       translated = @exporter.html_content(<<-HTML)
@@ -48,6 +57,22 @@ describe CC::CCHelper do
       HTML
       @exporter.media_object_infos[@obj.id].should_not be_nil
       @exporter.media_object_infos[@obj.id][:asset][:id].should == 'two'
+    end
+
+    it "should ignore media links with no media comment id" do
+      @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user, :media_object_flavor => 'flash video')
+      html = %{<a class="youtubed instructure_inline_media_comment" href="http://www.youtube.com/watch?v=dCIP3x5mFmw">McDerp Enterprises</a>}
+      translated = @exporter.html_content(html)
+      translated.should == html
+    end
+
+    it "should export html with a utf-8 charset" do
+      @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user)
+      html = %{<div>My Title\302\240</div>}
+      exported = @exporter.html_page(html, "my title page")
+      doc = Nokogiri::HTML(exported)
+      doc.encoding.should == 'utf-8'
+      doc.at_css('html body div').to_s.should == "<div>My Title\302\240</div>"
     end
   end
 end

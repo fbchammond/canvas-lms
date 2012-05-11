@@ -13,7 +13,7 @@ module I18nExtraction
       s
     end
 
-    TRANSLATE_CALLS = [:t, :ot, :mt, :translate, :before_label]
+    TRANSLATE_CALLS = [:t, :ot, :mt, :translate, :before_label, :jt]
     LABEL_CALLS = [:label, :blabel, :label_tag, :_label_symbol_translation]
     ALL_CALLS = TRANSLATE_CALLS + LABEL_CALLS + [:label_with_symbol_translation]
 
@@ -71,23 +71,31 @@ module I18nExtraction
       default = process_default_translation(args.shift, key)
 
       options = if args.first.is_a?(Sexp)
-        if args.first.sexp_type != :hash
-          raise "translate options must be a hash: #{key.inspect} on line #{line}"
+        if method == :jt
+          if args.first.sexp_type != :str
+            raise "jt options must be a javascript string: #{key.inspect} on line #{line}"
+          end
+          str = args.shift.last
+          str.scan(/['"]?(\w+)['"]?:/).flatten.map(&:to_sym)
+        else
+          if args.first.sexp_type != :hash
+            raise "translate options must be a hash: #{key.inspect} on line #{line}"
+          end
+          hash = args.shift
+          hash.shift
+          (0...(hash.size/2)).map{ |i|
+            process hash[i * 2 + 1]
+            raise "option keys must be strings or symbols on line #{line}" unless [:lit, :str].include?(hash[i * 2].sexp_type)
+            hash[i * 2].last.to_sym
+          }
         end
-        hash = args.shift
-        hash.shift
-        (0...(hash.size/2)).map{ |i|
-          process hash[i * 2 + 1]
-          raise "option keys must be strings or symbols on line #{line}" unless [:lit, :str].include?(hash[i * 2].sexp_type)
-          hash[i * 2].last.to_sym
-        }
       else
         []
       end
 
       # single word count/pluralization fu
       if default.is_a?(String) && default =~ /\A[\w\-]+\z/ && options.include?(:count)
-        default = {:one => "1 #{default}", :other => "%{count} #{default.pluralize}"}
+        default = infer_pluralization_hash(default)
       end
 
       (default.is_a?(String) ? {nil => default} : default).each_pair do |k, str|
@@ -98,7 +106,7 @@ module I18nExtraction
             raise "interpolation value not provided for #{match[0].to_sym.inspect} (#{sub_key.inspect}) on line #{line}"
           end
         end
-        add_translation sub_key, str, (:remove_whitespace if @in_html_view && method != :mt)
+        add_translation sub_key, str, (:remove_whitespace if @in_html_view && ![:mt, :jt].include?(method))
       end
     end
 
@@ -170,8 +178,11 @@ module I18nExtraction
       if exp.sexp_type == :hash
         exp.shift
         hash = Hash[*exp.map{ |e| process_possible_string_concat(e, :allow_symbols => true) }]
-        if (hash.keys - [:one, :other, :zero]).size > 0
+        pluralization_keys = hash.keys
+        if (pluralization_keys - allowed_pluralization_keys).size > 0
           raise "invalid :count sub-key(s) #{exp.inspect} on line #{exp.line}"
+        elsif required_pluralization_keys & pluralization_keys != required_pluralization_keys
+          raise "not all required :count sub-key(s) provided on line #{exp.line} (expected #{required_pluralization_keys.join(', ')})"
         elsif hash.values.any?{ |v| !v.is_a?(String) }
           raise "invalid en count default(s) #{exp.inspect} on line #{exp.line}"
         end

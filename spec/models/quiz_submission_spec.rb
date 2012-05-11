@@ -48,15 +48,40 @@ describe QuizSubmission do
     course_with_student(:active_all => true)
     @quiz = @course.quizzes.create!
     qs = @quiz.generate_submission(@user)
-    qs.workflow_state = 'complete'
-    qs.submission_data = [{ :points => 0, :text => "", :correct => "undefined", :question_id => -1 }]
-    qs.with_versioning(true, &:save)
+    qs.submission_data = { "foo" => "bar1" }
+    qs.grade_submission
 
     qs = @quiz.generate_submission(@user)
-    qs.submission_data = { "foo" => "bar" } # simulate k/v pairs we store for quizzes in progress
-    qs.save
+    qs.backup_submission_data({ "foo" => "bar2" }) # simulate k/v pairs we store for quizzes in progress
+    qs.reload.attempt.should == 2
     lambda {qs.update_scores}.should raise_error
     lambda {qs.update_scores(:submission_version_number => 1) }.should_not raise_error
+
+    qs.reload
+    qs.should be_untaken
+    qs.score.should be_nil
+  end
+
+  it "should keep kept_score up-to-date when score changes while quiz is being re-taken" do
+    course_with_student(:active_all => true)
+    @quiz = @course.quizzes.create!(:scoring_policy => 'keep_highest')
+    qs = @quiz.generate_submission(@user)
+    qs.submission_data = { "foo" => "bar1" }
+    qs.grade_submission
+    qs.kept_score.should == 0
+
+    qs = @quiz.generate_submission(@user)
+    qs.backup_submission_data({ "foo" => "bar2" }) # simulate k/v pairs we store for quizzes in progress
+    qs.reload
+
+    qs.update_scores(:submission_version_number => 1, :fudge_points => 3)
+    qs.reload
+
+    qs.should be_untaken
+    # score is nil because the current attempt is still in progress
+    # but kept_score is 3 because that's the higher score of the previous attempt
+    qs.score.should be_nil
+    qs.kept_score.should == 3
   end
 
   it "should not allowed grading on an already-graded submission" do
@@ -76,6 +101,113 @@ describe QuizSubmission do
     end
     res.should eql(false)
   end
+  
+  context "explicitly setting grade" do
+    
+    before(:each) do
+      course_with_student
+      @quiz = @course.quizzes.create!
+      @quiz.generate_quiz_data
+      @quiz.published_at = Time.now
+      @quiz.workflow_state = 'available'
+      @quiz.scoring_policy == "keep_highest"
+      @quiz.save!
+      @assignment = @quiz.assignment
+      @quiz_sub = @quiz.generate_submission @user, false
+      @quiz_sub.workflow_state = "complete"
+      @quiz_sub.save!
+      @quiz_sub.score = 5
+      @quiz_sub.fudge_points = 0
+      @quiz_sub.kept_score = 5
+      @quiz_sub.with_versioning(true, &:save!)
+      @submission = @quiz_sub.submission 
+    end
+    
+    it "it should adjust the fudge points" do
+      @assignment.grade_student(@user, {:grade => 3})
+      
+      @quiz_sub.reload
+      @quiz_sub.score.should == 3
+      @quiz_sub.kept_score.should == 3
+      @quiz_sub.fudge_points.should == -2
+      @quiz_sub.manually_scored.should_not be_true
+      
+      @submission.reload
+      @submission.score.should == 3
+      @submission.grade.should == "3"
+    end
+    
+    it "should use the explicit grade even if it isn't the highest score" do
+      @quiz_sub.score = 4.0
+      @quiz_sub.attempt = 2
+      @quiz_sub.with_versioning(true, &:save!)
+      
+      @quiz_sub.reload
+      @quiz_sub.score.should == 4
+      @quiz_sub.kept_score.should == 5
+      @quiz_sub.manually_scored.should_not be_true
+      @submission.reload
+      @submission.score.should == 5
+      @submission.grade.should == "5"
+      
+      @assignment.grade_student(@user, {:grade => 3})
+      @quiz_sub.reload
+      @quiz_sub.score.should == 3
+      @quiz_sub.kept_score.should == 3
+      @quiz_sub.fudge_points.should == -1
+      @quiz_sub.manually_scored.should be_true
+      @submission.reload
+      @submission.score.should == 3
+      @submission.grade.should == "3"
+    end
+    
+    it "should not have manually_scored set when updated normally" do
+      @quiz_sub.score = 4.0
+      @quiz_sub.attempt = 2
+      @quiz_sub.with_versioning(true, &:save!)
+      @assignment.grade_student(@user, {:grade => 3})
+      @quiz_sub.reload
+      @quiz_sub.manually_scored.should be_true
+      
+      @quiz_sub.update_scores(:fudge_points => 2)
+      
+      @quiz_sub.reload
+      @quiz_sub.score.should == 2
+      @quiz_sub.kept_score.should == 5
+      @quiz_sub.manually_scored.should_not be_true
+      @submission.reload
+      @submission.score.should == 5
+      @submission.grade.should == "5"
+    end
+    
+    it "should add a version to the submission" do
+      @assignment.grade_student(@user, {:grade => 3})
+      @submission.reload
+      @submission.versions.count.should == 2
+      @submission.score.should == 3
+      @assignment.grade_student(@user, {:grade => 6})
+      @submission.reload
+      @submission.versions.count.should == 3
+      @submission.score.should == 6
+    end
+
+    it "should only update the last completed quiz submission" do
+      @quiz_sub.score = 4.0
+      @quiz_sub.attempt = 2
+      @quiz_sub.with_versioning(true, &:save!)
+      @quiz.generate_submission(@user)
+      @assignment.grade_student(@user, {:grade => 3})
+
+      @quiz_sub.reload.score.should be_nil
+      @quiz_sub.kept_score.should == 3
+      @quiz_sub.manually_scored.should be_false
+
+      last_version = @quiz_sub.versions.current.reload.model
+      last_version.score.should == 3
+      last_version.kept_score.should == 3
+      last_version.manually_scored.should be_true
+    end
+  end
 
   it "should know if it is overdue" do
     now = Time.now
@@ -93,6 +225,20 @@ describe QuizSubmission do
     q.save!
     q.overdue?.should eql(true)
     q.overdue?(true).should eql(true)
+  end
+
+  it "should know if it is extendable" do
+    now = Time.now.utc
+    q = @quiz.quiz_submissions.new
+    q.end_at = now
+
+    q.extendable?.should be_true
+    q.end_at = now - 1.minute
+    q.extendable?.should be_true
+    q.end_at = now - 30.minutes
+    q.extendable?.should be_true
+    q.end_at = now - 90.minutes
+    q.extendable?.should be_false
   end
 
   it "should calculate score based on quiz scoring policy" do
@@ -152,6 +298,10 @@ describe QuizSubmission do
       })
       @quiz_submission.submission.workflow_state.should eql 'graded'
     end
+
+    it "should increment the assignment needs_grading_count for pending_review state" do
+      @quiz.assignment.reload.needs_grading_count.should == 1
+    end
   end
 
   describe "with multiple essay questions" do
@@ -194,6 +344,35 @@ describe QuizSubmission do
         "question_score_#{@questions[1].id}" => "0"
       })
       @quiz_submission.submission.workflow_state.should eql 'graded'
+    end
+  end
+
+  describe "formula questions" do
+    before do
+      @quiz = @course.quizzes.create!(:title => "formula quiz")
+      @quiz.quiz_questions.create! :question_data => {
+        :name => "Question",
+        :question_type => "calculated_question",
+        :answer_tolerance => 2.0,
+        :formulas => [[0, "2*z"]],
+        :variables => [["variable_0", {:scale => 0, :min => 1.0, :max => 10.0, :name => 'z'}]],
+        :answers => [["answer_0", {
+          :weight => 100,
+          :variables => [["variable_0", {:value => 2.0, :name => 'z'}]],
+          :answer_text => "4.0"
+        }]],
+        :question_text => "2 * [z] is ?"
+      }
+      @quiz.generate_quiz_data(:persist => true)
+    end
+
+    it "should respect the answer_tolerance" do
+      submission = @quiz.generate_submission(@user)
+      submission.submission_data = {
+        "question_#{@quiz.quiz_questions.first.id}" => 3.0, # off by 1
+      }
+      submission.grade_submission
+      submission.instance_variable_get(:@user_answers).first[:correct].should be_true
     end
   end
 
@@ -381,6 +560,18 @@ describe QuizSubmission do
       lambda {
         QuizSubmission.score_question(q, { "question_1_8238a0de6965e6b81a8b9bba5eacd3e2" => "bleh" })
       }.should_not raise_error
+    end
+  end
+
+  context "permissions" do
+    it "should allow read to observers" do
+      course_with_student(:active_all => true)
+      @observer = user
+      oe = @course.enroll_user(@observer, 'ObserverEnrollment', :enrollment_state => 'active')
+      oe.update_attribute(:associated_user, @user)
+      @quiz = @course.quizzes.create!
+      qs = @quiz.generate_submission(@user)
+      qs.grants_right?(@observer, nil, :read).should be_true
     end
   end
 end

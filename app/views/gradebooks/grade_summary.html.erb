@@ -1,5 +1,5 @@
 <% 
-  jammit_js :grade_summary, :rubric_assessment
+  js_bundle :grade_summary, :rubric_assessment
   jammit_css :grade_summary 
   content_for :page_title, join_title(t(:page_title, "Grades for %{student}", :student => @student.name), @context.name)
   editable = @current_user == @student && !@no_calculations
@@ -19,7 +19,7 @@
         <%= before_label(:total, "Total") %> <%= raw(number_to_percentage(100, :precision => 0).sub(/100/, '<span class="grade"></span>')) %>
         <% if @context.grading_standard_enabled? %>
           <span class="final_letter_grade">
-            (<span class="grade">-</span>)
+            (<span class="grade" id="final_letter_grade_text">-</span>)
           </span>
         <% end %>
       </div>
@@ -52,7 +52,24 @@
     <% end %>
   </div>
 <% end %>
-<h2><%= t('headers.grades', "Grades For %{student}", :student => @student.name) %></h2>
+
+<h2>
+<% ot('headers.grades', "Grades For %{student}", :student => capture { %>
+ <% if !@observed_students || @observed_students.keys.length <= 1 %>
+   <%= @student.name %>
+ <% else %>
+  <select id="observer_user_url">
+    <% @observed_students.each do |student, enrollments| %>
+      <%
+        next unless enrollments.all? { |e| e.grants_right?(@current_user, nil, :read_grades) }
+        url = context_url(@context, :context_student_grades_url, student.id)
+      %>
+      <option value="<%= url %>" <%= 'selected' if student == @student %>><%= student.name %></option>
+    <% end %>
+  </select>
+ <% end %>
+<% }) %>
+</h2>
 <% if @courses_with_grades.length > 1 %>
   <div style="margin-left: 10px;">
   <%= t(:for_course, "For the course,") %>
@@ -73,6 +90,9 @@
   </div>
   <% js_block do %>
     <script>
+    require([
+      'jquery' /* $ */
+    ], function($) {
       $(document).ready(function() {
         $("#course_url").change(function() {
           if(location.href != $(this).val()) {
@@ -80,6 +100,7 @@
           }
         });
       });
+    });
     </script>
   <% end %>
 <% end %>
@@ -102,7 +123,7 @@
      # so this wouldn't hit the query cache)
      submission.assignment = assignment if submission
      visible_rubric_assessments = []
-     visible_rubric_assessments = submission.rubric_assessments.select{|a| a.grants_rights?(@current_user, :read)[:read]}.sort_by{|a| [a.assessment_type == 'grading' ? '0' : '1', a.assessor_name] } if submission
+     visible_rubric_assessments = submission.rubric_assessments.select{|a| a.grants_rights?(@current_user, :read)[:read]}.sort_by{|a| [a.assessment_type == 'grading' ? '0' : '1', a.assessor_name] } if submission && !assignment.muted?
   %>
   <tr class="student_assignment <%= 'assignment_graded' if submission && submission.grade && !assignment.muted? %> <%= assignment.special_class ? ("hard_coded " + assignment.special_class) : "editable" %>" data-muted="<%= assignment.muted? %>" id="<%= "submission_" + assignment.id.to_s %>">
     <td class="title">
@@ -144,13 +165,28 @@
             <% end %>
           </span>
           <% if assignment.grading_type == 'letter_grade' %>
-            <span class="score_value" style="font-size: 0.8em; color: #aaa; <%= hidden unless submission && submission.published_score %>"><%= submission.published_score rescue nbsp %></span>
+            <span class="score_value" style="font-size: 0.8em; color: #aaa;">
+              <% unless assignment.muted? || submission.nil? %>
+                <%= submission.published_score %>
+                (<%= submission.published_grade %>)
+              <% end %>
+            </span>
           <% end %>
           <%= "%" if assignment.special_class %>
         </span>
         <div style="display: none;">
-          <span class="original_score"><%= if assignment.muted? then "" else submission.published_score end rescue "" %></span>
-          <span class="score"><%= if assignment.muted? then "" else submission.published_score end rescue "" %></span>
+          <span class="original_score">
+            <% unless assignment.muted? || submission.nil? %>
+              <%= submission.published_score %>
+              <%= assignment.grading_type == 'letter_grade' ? "(#{submission.published_grade})" : '' %>
+            <% end %>
+          </span>
+          <span class="score">
+            <% unless assignment.muted? || submission.nil? %>
+              <%= submission.published_score %>
+              <%= assignment.grading_type == 'letter_grade' ? "(#{submission.published_grade})" : '' %>
+            <% end %>
+          </span>
           <span class="assignment_group_id"><%= assignment.assignment_group_id rescue "" %></span>
           <span class="assignment_id"><%= assignment.id.to_s %></span>
           <span class="group_weight"><%= assignment.group_weight rescue "" %></span>
@@ -183,8 +219,8 @@
         <%= image_tag "rubric.png" %>
       </a>
       <% if turnitin_enabled %>
-        <% 
-          turntitin = nil 
+        <%
+          turntitin = nil
           url = '#'
           if can_do(submission, @current_user, :view_turnitin_report)
             if submission.submission_type == 'online_text_entry'

@@ -100,6 +100,33 @@ describe SubmissionsController do
       assigns[:submission].should_not be_nil
       assigns[:submission].url.should eql("http://www.google.com")
     end
+
+    context "group comments" do
+      before do
+        course_with_student_logged_in(:active_all => true)
+        @u1 = @user
+        student_in_course(:course => @course)
+        @u2 = @user
+        @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_text_entry", :group_category => GroupCategory.create!(:name => "groups", :context => @course), :grade_group_students_individually => true)
+        @group = @assignment.group_category.groups.create!(:name => 'g1')
+        @group.users << @u1
+        @group.users << @user
+      end
+
+      it "should not send a comment to the entire group by default" do
+        post 'create', :course_id => @course.id, :assignment_id => @assignment.id, :submission => {:submission_type => 'online_text_entry', :body => 'blah', :comment => "some comment"}
+        subs = @assignment.submissions
+        subs.size.should == 2
+        subs.all.sum{ |s| s.submission_comments.size }.should eql 1
+      end
+
+      it "should send a comment to the entire group if requested" do
+        post 'create', :course_id => @course.id, :assignment_id => @assignment.id, :submission => {:submission_type => 'online_text_entry', :body => 'blah', :comment => "some comment", :group_comment => '1'}
+        subs = @assignment.submissions
+        subs.size.should == 2
+        subs.all.sum{ |s| s.submission_comments.size }.should eql 2
+      end
+    end
   end
   
   describe "PUT update" do
@@ -131,8 +158,26 @@ describe SubmissionsController do
       assigns[:submission].submission_comments.length.should eql(1)
       assigns[:submission].submission_comments[0].comment.should eql("some comment")
     end
+
+    it "should comment as the current user for all submissions in the group" do
+      course_with_student_logged_in(:active_all => true)
+      @u1 = @user
+      student_in_course(:course => @course)
+      @u2 = @user
+      @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "discussion_topic", :group_category => GroupCategory.create!(:name => "groups", :context => @course), :grade_group_students_individually => true)
+      @group = @assignment.group_category.groups.create!(:name => 'g1')
+      @group.users << @u1
+      @group.users << @user
+      put 'update', :course_id => @course.id, :assignment_id => @assignment.id, :id => @u1.id, :submission => {:comment => "some comment", :group_comment => '1'}
+      subs = @assignment.submissions
+      subs.size.should == 2
+      subs.each do |s|
+        s.submission_comments.size.should == 1
+        s.submission_comments.first.author.should == @u1
+      end
+    end
     
-    it "should allow attaching comments to the comment" do
+    it "should allow attaching files to the comment" do
       course_with_student_logged_in(:active_all => true)
       @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_url,online_upload")
       @submission = @assignment.submit_homework(@user)

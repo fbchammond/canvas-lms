@@ -16,7 +16,14 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-I18n.scoped('user_logins', function(I18n) {
+define([
+  'i18n!user_logins',
+  'jquery' /* $ */,
+  'jquery.instructure_forms' /* formSubmit, fillFormData, formErrors */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jquery.instructure_misc_plugins' /* confirmDelete, showIf */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */
+], function(I18n, $) {
 $(document).ready(function() {
   var $form = $("#edit_pseudonym_form");
   var passwordable_account_ids = $("#passwordable_account_ids").text().split(",");
@@ -47,25 +54,23 @@ $(document).ready(function() {
         var $login = $(this).data('unique_id_text').parents(".login");
       } else {
         var $login = $("#login_information .login.blank").clone(true);
-        $("#login_information .add_holder").before($login.show());
-        data.pseudonym.account_name = $(this).data('account_name') || $(this).find(".default_account_name").text();
+        $("#login_information .add_holder").before($login);
+        $login.removeClass('blank');
+        $login.show();
+        data.account_name = $(this).data('account_name');
       }
       $login.fillTemplateData({
-        data: data.pseudonym,
+        data: data,
         hrefValues: ['id', 'account_id']
       });
-      if($.inArray(data.pseudonym.account_id.toString(), passwordable_account_ids) != -1) {
-        $login.find(".links").addClass('passwordable');
-      }
+      $login.find(".links").addClass('passwordable');
       $("#login_information .login .delete_pseudonym_link").show();
+			$.flashMessage(I18n.t('save_succeeded', 'Save successful'));
     },
     error: function(data) {
       $(this).find("button").attr('disabled', false)
         .filter(".submit_button").text(I18n.t('errors.save_failed', "Save Failed"));
     }
-  });
-  $("#edit_pseudonym_form .account_id_select").change(function() {
-    $("#edit_pseudonym_form").find("tr.password").showIf($.inArray($(this).val(), passwordable_account_ids) != -1);
   });
   $("#edit_pseudonym_form .cancel_button").click(function() {
     $form.dialog('close');
@@ -132,6 +137,8 @@ $(document).ready(function() {
     $form.fillFormData({'pseudonym[unique_id]': ''});
     $form.dialog('option', 'title', I18n.t('titles.add_login', 'Add Login'))
       .find(".submit_button").text(I18n.t('buttons.add_login', "Add Login"));
+    $form.addClass('passwordable');
+    $form.find("tr.password").show();
     $form.find(".account_id").show();
     $form.find(".account_id_select").change();
     $form.data('unique_id_text', null);

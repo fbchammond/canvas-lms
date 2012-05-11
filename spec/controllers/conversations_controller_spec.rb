@@ -19,17 +19,19 @@
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
 describe ConversationsController do
-  def conversation(num_other_users = 1)
+  def conversation(opts = {})
+    num_other_users = opts[:num_other_users] || 1
+    course = opts[:course] || @course
     user_ids = num_other_users.times.map{
       u = User.create
-      enrollment = @course.enroll_student(u)
+      enrollment = course.enroll_student(u)
       enrollment.workflow_state = 'active'
       enrollment.save
       u.associated_accounts << Account.default
       u.id
     }
     @conversation = @user.initiate_conversation(user_ids)
-    @conversation.add_message('test')
+    @conversation.add_message(opts[:message] || 'test')
     @conversation
   end
 
@@ -44,11 +46,18 @@ describe ConversationsController do
       course_with_student_logged_in(:active_all => true)
       conversation
 
+      term = EnrollmentTerm.create! :name => "Fall"
+      term.root_account_id = @course.root_account_id
+      term.save!
+      @course.update_attributes! :enrollment_term => term
+
       get 'index'
       response.should be_success
       assigns[:conversations_json].map{|c|c[:id]}.should == @user.conversations.map(&:conversation_id)
       assigns[:contexts][:courses].to_a.map{|p|p[1]}.
         reduce(true){|truth, con| truth and con.has_key?(:url)}.should be_true
+      assigns[:contexts][:courses][@course.id][:term].should == "Fall"
+      assigns[:filterable].should be_true
     end
 
     it "should work for an admin as well" do
@@ -60,6 +69,76 @@ describe ConversationsController do
       get 'index'
       response.should be_success
       assigns[:conversations_json].map{|c|c[:id]}.should == @user.conversations.map(&:conversation_id)
+    end
+
+    it "should return all sent conversations" do
+      course_with_student_logged_in(:active_all => true)
+      @c1 = conversation
+      @c2 = conversation
+      @c3 = conversation
+      @c3.update_attribute :workflow_state, 'archived'
+
+      get 'index', :scope => 'sent'
+      response.should be_success
+      assigns[:conversations_json].size.should eql 3
+    end
+
+    it "should return conversations matching the specified filter" do
+      course_with_student_logged_in(:active_all => true)
+      @c1 = conversation
+      @other_course = course(:active_all => true)
+      enrollment = @other_course.enroll_student(@user)
+      enrollment.workflow_state = 'active'
+      enrollment.save!
+      @user.reload
+      @c2 = conversation(:num_other_users => 1, :course => @other_course)
+
+      get 'index', :filter => @other_course.asset_string
+      response.should be_success
+      assigns[:conversations_json].size.should eql 1
+      assigns[:conversations_json][0][:id].should == @c2.conversation_id
+    end
+
+    it "should hide the filter UI if some conversations have not been tagged yet" do
+      course_with_student_logged_in(:active_all => true)
+      conversation
+      Conversation.update_all "tags = NULL"
+      ConversationParticipant.update_all "tags = NULL"
+      ConversationMessageParticipant.update_all "tags = NULL"
+
+      # create some more that are tagged
+      conversation
+      conversation
+
+      get 'index'
+      response.should be_success
+      assigns[:filterable].should be_false
+    end
+
+    it "should not allow student view student to load inbox" do
+      course_with_teacher_logged_in(:active_all => true)
+      @fake_student = @course.student_view_student
+      session[:become_user_id] = @fake_student.id
+
+      get 'index'
+      assert_unauthorized
+    end
+
+    it "should filter conversations when masquerading" do
+      a = Account.default
+      @student = user_with_pseudonym(:active_all => true)
+      course_with_student(:active_all => true, :account => a, :user => @student)
+      @student.associated_accounts << a
+      @student.initiate_conversation([user.id]).add_message('test1', :root_account_id => a.id)
+      @student.initiate_conversation([user.id]).add_message('test2') # no root account, so teacher can't see it
+
+      course_with_teacher_logged_in(:active_all => true, :account => a)
+      a.add_user(@user)
+      session[:become_user_id] = @student.id
+
+      get 'index'
+      response.should be_success
+      assigns[:conversations_json].size.should eql 1
     end
   end
 
@@ -109,60 +188,88 @@ describe ConversationsController do
       assigns[:conversation].messages.first.forwarded_message_ids.should eql(@conversation.messages.first.id.to_s)
     end
 
-    it "should create one conversation shared by all recipients" do
-      old_count = Conversation.count
+    context "group conversations" do
+      before do
+        @old_count = Conversation.count
+  
+        course_with_teacher_logged_in(:active_all => true)
+  
+        @new_user1 = User.create
+        @course.enroll_student(@new_user1).accept!
+  
+        @new_user2 = User.create
+        @course.enroll_student(@new_user2).accept!
+      end
 
-      course_with_teacher_logged_in(:active_all => true)
+      ["1", "true", "yes", "on"].each do |truish|
+        it "should create a conversation shared by all recipients if group_conversation=#{truish.inspect}" do
+          post 'create', :recipients => [@new_user1.id.to_s, @new_user2.id.to_s], :body => "yo", :group_conversation => truish
+          response.should be_success
+    
+          Conversation.count.should eql(@old_count + 1)
+        end
+      end
 
-      new_user1 = User.create
-      enrollment1 = @course.enroll_student(new_user1)
-      enrollment1.workflow_state = 'active'
-      enrollment1.save
-
-      new_user2 = User.create
-      enrollment2 = @course.enroll_student(new_user2)
-      enrollment2.workflow_state = 'active'
-      enrollment2.save
-
-      post 'create', :recipients => [new_user1.id.to_s, new_user2.id.to_s], :body => "yo", :group_conversation => true
-      response.should be_success
-
-      Conversation.count.should eql(old_count + 1)
+      [nil, "", "0", "false", "no", "off", "wat"].each do |falsish|
+        it "should create one conversation per recipient if group_conversation=#{falsish.inspect}" do
+          post 'create', :recipients => [@new_user1.id.to_s, @new_user2.id.to_s], :body => "yo", :group_conversation => falsish
+          response.should be_success
+    
+          Conversation.count.should eql(@old_count + 2)
+        end
+      end
     end
 
-    it "should create one conversation per recipient if not a group conversation" do
-      old_count = Conversation.count
-
+    it "should correctly infer context tags" do
       course_with_teacher_logged_in(:active_all => true)
+      @course1 = @course
+      @course2 = course(:active_all => true)
+      @course2.enroll_teacher(@user).accept
+      @group1 = @course1.groups.create!
+      @group2 = @course1.groups.create!
+      @group1.users << @user
+      @group2.users << @user
 
       new_user1 = User.create
-      enrollment1 = @course.enroll_student(new_user1)
+      enrollment1 = @course1.enroll_student(new_user1)
       enrollment1.workflow_state = 'active'
       enrollment1.save
+      @group1.users << new_user1
+      @group2.users << new_user1
 
       new_user2 = User.create
-      enrollment2 = @course.enroll_student(new_user2)
+      enrollment2 = @course1.enroll_student(new_user2)
       enrollment2.workflow_state = 'active'
       enrollment2.save
+      @group1.users << new_user2
+      @group2.users << new_user2
 
-      post 'create', :recipients => [new_user1.id.to_s, new_user2.id.to_s], :body => "yo"
+      new_user3 = User.create
+      enrollment3 = @course2.enroll_student(new_user3)
+      enrollment3.workflow_state = 'active'
+      enrollment3.save
+
+      post 'create', :recipients => [@course2.asset_string + "_students", @group1.asset_string], :body => "yo", :group_conversation => true
       response.should be_success
 
-      Conversation.count.should eql(old_count + 2)
+      c = Conversation.first
+      c.tags.sort.should eql [@course1.asset_string, @course2.asset_string, @group1.asset_string].sort
+      # course1 inferred from group1, course2 inferred from synthetic context,
+      # group1 explicit, group2 not present (even though it's shared by everyone)
     end
   end
 
   describe "POST 'update'" do
     it "should update the conversation" do
       course_with_student_logged_in(:active_all => true)
-      conversation(2).update_attribute(:workflow_state, "unread")
+      conversation(:num_other_users => 2).update_attribute(:workflow_state, "unread")
 
-      post 'update', :id => @conversation.conversation_id, :conversation => {:subscribed => "0", :workflow_state => "archived", :label => "red"}
+      post 'update', :id => @conversation.conversation_id, :conversation => {:subscribed => "0", :workflow_state => "archived", :starred => "1"}
       response.should be_success
       @conversation.reload
       @conversation.subscribed?.should be_false
       @conversation.should be_archived
-      @conversation.label.should eql 'red'
+      @conversation.starred.should be_true
     end
   end
 
@@ -199,7 +306,7 @@ describe ConversationsController do
   describe "POST 'add_recipients'" do
     it "should add recipients" do
       course_with_student_logged_in(:active_all => true)
-      conversation(2)
+      conversation(:num_other_users => 2)
 
       new_user = User.create
       enrollment = @course.enroll_student(new_user)
@@ -207,7 +314,23 @@ describe ConversationsController do
       enrollment.save
       post 'add_recipients', :conversation_id => @conversation.conversation_id, :recipients => [new_user.id.to_s]
       response.should be_success
-      @conversation.participants.size.should == 4 # includes @user
+      @conversation.reload.participants.size.should == 4 # includes @user
+    end
+
+    it "should correctly infer context tags" do
+      course_with_student_logged_in(:active_all => true)
+      conversation(:num_other_users => 2)
+
+      @group = @course.groups.create!
+      @conversation.participants.each{ |user| @group.users << user }
+      2.times{ @group.users << User.create }
+
+      post 'add_recipients', :conversation_id => @conversation.conversation_id, :recipients => [@group.asset_string]
+      response.should be_success
+
+      c = Conversation.first
+      c.tags.sort.should eql [@course.asset_string, @group.asset_string]
+      # course inferred (when created), group explicit
     end
   end
 
@@ -252,6 +375,116 @@ describe ConversationsController do
       response.body.should include(@course.name)
       response.body.should include(group.name)
       response.body.should include(other.name)
+    end
+
+    it "should not sort by rank if a search term is not used" do
+      course_with_student_logged_in(:active_all => true)
+      @user.update_attribute(:name, 'billy')
+      other = User.create(:name => 'bob')
+      @course.enroll_student(other).tap{ |e| e.workflow_state = 'active'; e.save! }
+
+      group = @course.groups.create(:name => 'group')
+      group.users << other
+
+      get 'find_recipients', :context => @course.asset_string, :per_page => '1', :type => 'user'
+      response.should be_success
+      response.body.should include('billy')
+      response.body.should_not include('bob')
+    end
+
+    it "should sort by rank if a search term is used" do
+      course_with_student_logged_in(:active_all => true)
+      @user.update_attribute(:name, 'billy')
+      other = User.create(:name => 'bob')
+      @course.enroll_student(other).tap{ |e| e.workflow_state = 'active'; e.save! }
+
+      group = @course.groups.create(:name => 'group')
+      group.users << other
+
+      get 'find_recipients', :search => 'b', :per_page => '1', :type => 'user'
+      response.should be_success
+      response.body.should include('bob')
+      response.body.should_not include('billy')
+    end
+  end
+
+  describe "GET 'public_feed.atom'" do
+    it "should require authorization" do
+      course_with_student
+      conversation
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code + "x"
+      assigns[:problem].should eql("The verification code is invalid.")
+    end
+
+    it "should return basic feed attributes" do
+      course_with_student
+      conversation
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.title.should == "Conversations Feed"
+      feed.links.first.href.should match(/conversations/)
+    end
+
+    it "should include message entries" do
+      course_with_student
+      conversation
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      assigns[:entries].length.should == 1
+      response.should be_success
+    end
+
+    it "should not include messages the user is not a part of" do
+      course_with_student
+      conversation
+      student_in_course
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      assigns[:entries].should be_empty
+    end
+
+    it "should include part the message text in the title" do
+      course_with_student
+      message = "Sending a test message to some random users, in the hopes that it really works."
+      conversation(:message => message)
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.first.title.should match(/Sending a test/)
+      feed.entries.first.title.should_not match(message)
+    end
+
+    it "should include the message in the content" do
+      course_with_student
+      message = "Sending a test message to some random users, in the hopes that it really works."
+      conversation(:message => message)
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.first.content.should match(message)
+    end
+
+    it "should include context about the conversation" do
+      course_with_student(:course_name => "Message Course", :active_all => true)
+      message = "Sending a test message to some random users, in the hopes that it really works."
+      conversation(:num_other_users => 4, :message => message)
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.first.content.should match(/Message Course/)
+      feed.entries.first.content.should match(/User/)
+      feed.entries.first.content.should match(/others/)
+    end
+
+    it "should include an attachment if one exists" do
+      course_with_student
+      conversation
+      attachment = @user.conversation_attachments_folder.attachments.create!(:filename => "somefile.doc", :context => @user, :uploaded_data => StringIO.new('test'))
+      @conversation.add_message('test attachment', :attachment_ids => [attachment.id])
+      HostUrl.stubs(:context_host).returns("test.host")
+      get 'public_feed', :format => 'atom', :feed_code => @student.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.first.content.should match(/somefile\.doc/)
     end
   end
 end

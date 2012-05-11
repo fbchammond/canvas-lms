@@ -158,26 +158,23 @@ describe Group do
   end
 
   it "should grant read_roster permissions to students that can freely join or request an invitation to the group" do
-    e = course_with_teacher
-    course = e.context
-    teacher = e.user
-    e = student_in_course(:course => course)
-    student = e.user
+    course_with_teacher
+    student_in_course
 
     # default join_level == 'invitation_only' and default category is not self-signup
-    group = course.groups.create
-    group.grants_right?(student, nil, :read_roster).should be_false
+    group = @course.groups.create
+    group.grants_right?(@student, nil, :read_roster).should be_false
 
     # join_level allows requesting group membership
-    group = course.groups.create(:join_level => 'parent_context_request')
-    group.grants_right?(student, nil, :read_roster).should be_true
+    group = @course.groups.create(:join_level => 'parent_context_request')
+    group.grants_right?(@student, nil, :read_roster).should be_true
 
     # category is self-signup
-    category = course.group_categories.build
+    category = @course.group_categories.build
     category.configure_self_signup(true, false)
     category.save
-    group = course.groups.create(:group_category => category)
-    group.grants_right?(student, nil, :read_roster).should be_true
+    group = @course.groups.create(:group_category => category)
+    group.grants_right?(@student, nil, :read_roster).should be_true
   end
 
   describe "root account" do
@@ -267,6 +264,30 @@ describe Group do
 
       group = @course.groups.create(:group_category => group_category, :join_level => 'parent_context_request')
       group.allow_join_request?(student).should be_true
+    end
+  end
+
+  context "invite_user" do
+    it "should auto accept invitations" do
+      course_with_student(:active_all => true)
+
+      group_category = GroupCategory.student_organized_for(@course)
+
+      group = @course.groups.create!(:group_category => group_category)
+      gm = group.invite_user(@student)
+      gm.should be_accepted
+    end
+  end
+
+  context "request_user" do
+    it "should auto accept invitations" do
+      course_with_student(:active_all => true)
+
+      group_category = GroupCategory.student_organized_for(@course)
+
+      group = @course.groups.create!(:group_category => group_category, :join_level => 'parent_context_auto_join')
+      gm = group.request_user(@student)
+      gm.should be_accepted
     end
   end
 
@@ -379,4 +400,44 @@ describe Group do
       group.should have_common_section_with_user(user2)
     end
   end
+
+  context "tabs_available" do
+    before do
+      course_with_teacher
+      @teacher = @user
+      @group = group(:group_context => @course)
+      @group.users << @student = student_in_course(:course => @course).user
+    end
+
+    it "should let members see everything" do
+      @group.tabs_available(@student).map{|t|t[:id]}.should eql [
+        Group::TAB_HOME,
+        Group::TAB_ANNOUNCEMENTS,
+        Group::TAB_PAGES,
+        Group::TAB_PEOPLE,
+        Group::TAB_DISCUSSIONS,
+        Group::TAB_CHAT,
+        Group::TAB_FILES,
+        Group::TAB_CONFERENCES
+      ]
+    end
+
+    it "should let admins see everything" do
+      @group.tabs_available(@teacher).map{|t|t[:id]}.should eql [
+        Group::TAB_HOME,
+        Group::TAB_ANNOUNCEMENTS,
+        Group::TAB_PAGES,
+        Group::TAB_PEOPLE,
+        Group::TAB_DISCUSSIONS,
+        Group::TAB_CHAT,
+        Group::TAB_FILES,
+        Group::TAB_CONFERENCES
+      ]
+    end
+
+    it "should not let nobodies see conferences" do
+      @group.tabs_available(nil).map{|t|t[:id]}.should_not include Group::TAB_CONFERENCES
+    end
+  end
+  
 end

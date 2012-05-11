@@ -59,7 +59,7 @@ describe AssignmentsApiController, :type => :integration do
       @assignment.update_attribute(:submission_types, "online_upload,online_text_entry,online_url,media_recording")
 
       @rubric = rubric_model(:user => @user, :context => @course,
-                                       :data => larger_rubric_data,
+                                       :data => larger_rubric_data, :points_possible => 12,
                             :free_form_criterion_comments => true)
 
       @assignment.create_rubric_association(:rubric => @rubric, :purpose => 'grading', :use_for_grading => true)
@@ -72,6 +72,7 @@ describe AssignmentsApiController, :type => :integration do
       json.should == [
         {
           'id' => @assignment.id,
+          'assignment_group_id' => @assignment.assignment_group_id,
           'name' => 'some assignment',
           'course_id' => @course.id,
           'description' => nil,
@@ -89,6 +90,11 @@ describe AssignmentsApiController, :type => :integration do
             "online_url",
             "media_recording"
           ],
+          'html_url' => course_assignment_url(@course, @assignment),
+          'rubric_settings' => {
+            'points_possible' => 12,
+            'free_form_criterion_comments' => true,
+          },
           'rubric' => [
             {'id' => 'crit1', 'points' => 10, 'description' => 'Crit1',
               'ratings' => [
@@ -104,6 +110,7 @@ describe AssignmentsApiController, :type => :integration do
               ],
             },
           ],
+          "group_category_id" => nil
         },
       ]
     end
@@ -143,8 +150,10 @@ describe AssignmentsApiController, :type => :integration do
               'due_at' => '2011-01-01',
               'grading_type' => 'points', 'set_custom_field_values' => { 'test_custom' => { 'value' => '1' } } } })
 
+    assignment = Assignment.first
     json.should == {
-      'id' => Assignment.first.id,
+      'id' => assignment.id,
+      'assignment_group_id' => assignment.assignment_group_id,
       'name' => 'some assignment',
       'course_id' => @course.id,
       'description' => nil,
@@ -157,6 +166,8 @@ describe AssignmentsApiController, :type => :integration do
       'submission_types' => [
         'none',
       ],
+      'group_category_id' => nil,
+      'html_url' => course_assignment_url(@course, assignment),
     }
 
     Assignment.count.should == 1
@@ -185,6 +196,7 @@ describe AssignmentsApiController, :type => :integration do
 
     json.should == {
       'id' => @assignment.id,
+      'assignment_group_id' => @assignment.assignment_group_id,
       'name' => 'some assignment again',
       'course_id' => @course.id,
       'description' => nil,
@@ -197,6 +209,8 @@ describe AssignmentsApiController, :type => :integration do
       'submission_types' => [
         'none',
       ],
+      'group_category_id' => nil,
+      'html_url' => course_assignment_url(@course, @assignment),
     }
 
     Assignment.count.should == 1
@@ -228,8 +242,12 @@ describe AssignmentsApiController, :type => :integration do
       'topic_children' => [],
       'root_topic_id' => @topic.root_topic_id,
       'podcast_url' => nil,
+      'read_state' => 'unread',
+      'unread_count' => 0,
       'url' => "http://www.example.com/courses/#{@course.id}/discussion_topics/#{@topic.id}",
       'attachments' => [],
+      'permissions' => { 'attach' => true },
+      'discussion_type' => 'side_comment',
     }
   end
 

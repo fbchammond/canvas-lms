@@ -82,18 +82,24 @@
     <%= label :discussion_topic, :is_announcement, :en => "Make this post an announcement" %>
   </div>
   <% end %>
+  <% if topic_type == "discussion_topic" %>
+  <div>
+    <%= f.check_box :threaded, :class => 'discussion_topic_threaded' %>
+    <%= f.label :threaded, :en => "This is a threaded discussion" %>
+  </div>
+  <% end %>
   <% if can_do(@context, @current_user, :manage_content) %>
     <div style="margin-left: 20px;">
       <a href="#" class="more_options_link"><%= t('#links.more_options', %{more options}) %></a>
     </div>
     <div class="more_options_holder">
       <% if show_course_only_options?(@context) %>
-        <div style="float: left;">
+        <div style="display:inline-block;">
           <%= check_box :discussion_topic, :delay_posting, :class => "delay_posting" %>
           <%= label :discussion_topic, :delay_posting, :en => "Delay posting this message" %>
         </div>
-        <div class="delay_posting_option" style="display: none; float: left;">
-          &nbsp;<%= t('delay_until', %{until}) %> 
+        <div class="delay_posting_option" style="display:inline-block; margin-left:-5px;">
+          &nbsp;<%= t('delay_until', %{until}) %>
           <%= text_field :discussion_topic, :delayed_post_at, :style => "width: 100px;", :class => 'datetime_field delayed_post_at_value' %>
         </div>
         <div class="clear"></div>

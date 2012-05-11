@@ -6,11 +6,13 @@ describe "Canvas Cartridge importing" do
     @copy_from = course_model
     @from_teacher = @user
     @copy_to = course_model
+    @copy_to.conclude_at = nil
+    @copy_to.start_at = nil
     @copy_to.name = "alt name"
     @copy_to.course_code = "alt name"
 
-    exporter = CC::CCExporter.new(nil, :course=>@copy_from, :user=>@from_teacher)
-    manifest = CC::Manifest.new(exporter)
+    @exporter = CC::CCExporter.new(nil, :course=>@copy_from, :user=>@from_teacher, :for_course_copy => true)
+    manifest = CC::Manifest.new(@exporter)
     @resource = CC::Resource.new(manifest, nil)
     @migration = ContentMigration.new
     @migration.context = @copy_to
@@ -41,6 +43,8 @@ describe "Canvas Cartridge importing" do
     @copy_from.turnitin_comments = "Don't plagiarize"
     @copy_from.self_enrollment = true
     @copy_from.license = "cc_by_nc_nd"
+    @copy_from.locale = "es"
+    @copy_from.tab_configuration = [{"id"=>0}, {"id"=>14}, {"id"=>8}, {"id"=>5}, {"id"=>6}, {"id"=>2}, {"id"=>3, "hidden"=>true}]
     @copy_from.save!
 
     body_with_link = %{<p>Watup? <strong>eh?</strong><a href="/courses/%s/assignments">Assignments</a></p>
@@ -66,17 +70,18 @@ describe "Canvas Cartridge importing" do
     @copy_to.save!
 
     #compare settings
-    @copy_to.conclude_at.to_i.should == @copy_from.conclude_at.to_i
-    @copy_to.start_at.to_i.should == @copy_from.start_at.to_i
+    @copy_to.conclude_at.should == nil
+    @copy_to.start_at.should == nil
     @copy_to.syllabus_body.should == (body_with_link % @copy_to.id)
     @copy_to.storage_quota.should_not == @copy_from.storage_quota
-    @copy_to.name.should_not == @copy_from.name
-    @copy_to.course_code.should_not == @copy_from.course_code
+    @copy_to.name.should == 'alt name'
+    @copy_to.course_code.should == 'alt name'
     atts = Course.clonable_attributes
     atts -= Canvas::Migration::MigratorHelper::COURSE_NO_COPY_ATTS
     atts.each do |att|
       @copy_to.send(att).should == @copy_from.send(att)
     end
+    @copy_to.tab_configuration.should == @copy_from.tab_configuration
   end
 
   it "should import assignment groups" do
@@ -159,6 +164,7 @@ describe "Canvas Cartridge importing" do
     tool2.save!
 
     #export to xml
+    @exporter.for_course_copy = false
     builder = Builder::XmlMarkup.new(:indent=>2)
     @resource.create_blti_link(tool1, builder)
     builder2 = Builder::XmlMarkup.new(:indent=>2)
@@ -232,6 +238,44 @@ describe "Canvas Cartridge importing" do
     t2.settings[:vendor_extensions][0][:platform].should == 'my.lms.com'
     t2.settings[:vendor_extensions][0][:custom_fields].should == {"key"=>"value"}
     t2.settings[:custom_fields].should == {}
+  end
+  
+  it "should import multiple module links to same external tool" do
+    tool_from = @copy_from.context_external_tools.create!(:url => "http://example.com.ims/lti", :name => "test", :consumer_key => "key", :shared_secret => "secret")
+    tool_mig_id = CC::CCHelper.create_key(tool_from)
+    tool_to = @copy_to.context_external_tools.create(:url => "http://example.com.ims/lti", :name => "test", :consumer_key => "key", :shared_secret => "secret")
+    tool_to.migration_id = tool_mig_id
+    tool_to.save!
+
+    mod1 = @copy_from.context_modules.create!(:name => "some module")
+
+    tag = mod1.add_item({:title => "test", :type => 'context_external_tool', :url => "http://example.com.ims/lti"})
+    tag = mod1.add_item({:title => "test2", :type => 'context_external_tool', :url => "http://example.com.ims/lti"})
+    mod1.save!
+    
+    mod1.content_tags.count.should == 2
+
+    #export to xml
+    builder = Builder::XmlMarkup.new(:indent=>2)
+    @resource.create_module_meta(builder)
+    #convert to json
+    doc = Nokogiri::XML(builder.target!)
+    hash = @converter.convert_modules(doc)
+    #import json into new course
+    hash[0] = hash[0].with_indifferent_access
+    ContextModule.process_migration({'modules'=>hash}, @migration)
+    @copy_to.save!
+
+    mod1_2 = @copy_to.context_modules.find_by_migration_id(CC::CCHelper.create_key(mod1))
+    mod1_2.content_tags.count.should == mod1.content_tags.count
+    tag = mod1_2.content_tags.first
+    tag.content_id.should == tool_to.id
+    tag.content_type.should == 'ContextExternalTool'
+    tag.url.should == "http://example.com.ims/lti"
+    tag = mod1_2.content_tags.last
+    tag.content_id.should == tool_to.id
+    tag.content_type.should == 'ContextExternalTool'
+    tag.url.should == "http://example.com.ims/lti"
   end
   
   it "should import external feeds" do
@@ -387,7 +431,17 @@ describe "Canvas Cartridge importing" do
     rubric.title = "Rubric"
     rubric.data = [{:ratings=>[{:criterion_id=>"309_6312", :points=>5, :description=>"Full Marks", :id=>"blank", :long_description=>""}, {:criterion_id=>"309_6312", :points=>0, :description=>"No Marks", :id=>"blank_2", :long_description=>""}], :points=>5, :description=>"Description of criterion", :id=>"309_6312", :long_description=>""}, {:ignore_for_scoring=>false, :mastery_points=>3, :learning_outcome_id=>lo.id, :ratings=>[{:criterion_id=>"309_343", :points=>5, :description=>"Exceeds Expectations", :id=>"309_6516", :long_description=>""}, {:criterion_id=>"309_343", :points=>0, :description=>"Does Not Meet Expectations", :id=>"309_9962", :long_description=>""}], :points=>5, :description=>"Learning Outcome", :id=>"309_343", :long_description=>"<p>Outcome</p>"}]
     rubric.save!
-    
+    rubric.associate_with(@copy_from, @copy_from)
+
+    #create a rubric in a different course to associate with
+    new_course = course_model
+    rubric2 = new_course.rubrics.build
+    rubric2.title = "Rubric from different course"
+    rubric2.data = [{:ratings=>[{:criterion_id=>"309_6312", :points=>5, :description=>"Full Marks", :id=>"blank", :long_description=>""}, {:criterion_id=>"309_6312", :points=>0, :description=>"No Marks", :id=>"blank_2", :long_description=>""}], :points=>5, :description=>"Description of criterion", :id=>"309_6312", :long_description=>""}, {:ignore_for_scoring=>false, :mastery_points=>3, :learning_outcome_id=>lo.id, :ratings=>[{:criterion_id=>"309_343", :points=>5, :description=>"Exceeds Expectations", :id=>"309_6516", :long_description=>""}, {:criterion_id=>"309_343", :points=>0, :description=>"Does Not Meet Expectations", :id=>"309_9962", :long_description=>""}], :points=>5, :description=>"Learning Outcome", :id=>"309_343", :long_description=>"<p>Outcome</p>"}]
+    rubric2.save!
+
+    assoc = RubricAssociation.create!(:context => @copy_from, :rubric => rubric2, :association => @copy_from, :title => rubric2.title, :purpose => 'bookmark')
+
     #export to xml
     builder = Builder::XmlMarkup.new(:indent=>2)
     @resource.create_rubrics(builder)
@@ -396,15 +450,19 @@ describe "Canvas Cartridge importing" do
     hash = @converter.convert_rubrics(doc)
     #import json into new course
     hash[0] = hash[0].with_indifferent_access
+    hash[1] = hash[1].with_indifferent_access
     Rubric.process_migration({'rubrics'=>hash}, @migration)
     @copy_to.save!
-  
-    @copy_to.rubric_associations.count.should == 1
+
+    @copy_to.rubric_associations.count.should == 2
     lo_2 = @copy_to.learning_outcomes.find_by_migration_id(CC::CCHelper.create_key(lo))
     lo_2.should_not be_nil
     rubric_2 = @copy_to.rubrics.find_by_migration_id(CC::CCHelper.create_key(rubric))
     rubric_2.title.should == rubric.title
     rubric_2.data[1][:learning_outcome_id].should == lo_2.id
+
+    rubric2_2 = @copy_to.rubrics.find_by_migration_id(CC::CCHelper.create_key(rubric2))
+    rubric2_2.title.should == rubric2.title
   end
   
   it "should import modules" do 
@@ -436,6 +494,8 @@ describe "Canvas Cartridge importing" do
     
     mod3.add_item({ :title => 'Example 1', :type => 'external_url', :url => 'http://a.example.com/' })
     mod3.add_item({ :title => 'Example 2', :type => 'external_url', :url => 'http://b.example.com/' })
+    ct = mod3.add_item({ :title => 'Example 3', :type => 'external_url', :url => 'http://b.example.com/with%20space' })
+    ContentTag.update_all({:url => "http://b.example.com/with space"}, "id=#{ct.id}")
     
     # attachments are migrated with just their filename as display_name, 
     # if a content tag has a different title the display_name should not update
@@ -496,6 +556,7 @@ describe "Canvas Cartridge importing" do
     mod3_2.content_tags.length.should == 2
     mod3_2.content_tags[0].url.should == "http://a.example.com/"
     mod3_2.content_tags[1].url.should == "http://b.example.com/"
+    @migration.migration_settings[:warnings].first.first.should == %{Couldn't import the module item "Example 3" in the module "url module"}
     
     mod4_2 = @copy_to.context_modules.find_by_migration_id(CC::CCHelper.create_key(mod4))
     mod4_2.content_tags.first.title.should == att_tag.title
@@ -522,7 +583,7 @@ describe "Canvas Cartridge importing" do
 
     #export to html file
     migration_id = CC::CCHelper.create_key(page)
-    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, migration_id)
+    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, :identifier => migration_id)
     #convert to json
     doc = Nokogiri::XML(exported_html)
     hash = @converter.convert_wiki(doc, 'some-page')
@@ -569,22 +630,29 @@ describe "Canvas Cartridge importing" do
         <div><img src="http://www.instructure.com/images/header-logo.png"></div>
         <div><img src="http://www.instructure.com/images/header-logo.png"></div>
       </div>}
-    page = @copy_from.wiki.wiki_pages.create!(:title => "some page", :body => body_with_link % [ @copy_from.id, @copy_from.id, @copy_from.id, @copy_from.id, @copy_from.id, mod.id, @copy_from.id, from_att.id ])
+    page = @copy_from.wiki.wiki_pages.create!(:title => "some page", :body => body_with_link % [ @copy_from.id, @copy_from.id, @copy_from.id, @copy_from.id, @copy_from.id, mod.id, @copy_from.id, from_att.id ], :editing_roles => "teachers", :hide_from_students => true, :notify_of_update => true)
     @copy_from.save!
     
     #export to html file
     migration_id = CC::CCHelper.create_key(page)
-    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, migration_id)
+    meta_fields = {:identifier => migration_id}
+    meta_fields[:editing_roles] = page.editing_roles
+    meta_fields[:hide_from_students] = page.hide_from_students
+    meta_fields[:notify_of_update] = page.notify_of_update
+    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, meta_fields)
     #convert to json
     doc = Nokogiri::HTML(exported_html)
     hash = @converter.convert_wiki(doc, 'some-page')
     hash = hash.with_indifferent_access
     #import into new course
     WikiPage.import_from_migration(hash, @copy_to)
-    
+
     page_2 = @copy_to.wiki.wiki_pages.find_by_migration_id(migration_id)
     page_2.title.should == page.title
     page_2.url.should == page.url
+    page_2.editing_roles.should == page.editing_roles
+    page_2.hide_from_students.should == page.hide_from_students
+    page_2.notify_of_update.should == page.notify_of_update
     page_2.body.should == (body_with_link % [ @copy_to.id, @copy_to.id, @copy_to.id, @copy_to.id, @copy_to.id, mod2.id, @copy_to.id, to_att.id ]).gsub(/png" \/>/, 'png">')
   end
   
@@ -595,7 +663,7 @@ describe "Canvas Cartridge importing" do
     
     #export to html file
     migration_id = CC::CCHelper.create_key(page)
-    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, migration_id)
+    exported_html = CC::CCHelper::HtmlContentExporter.new(@copy_from, @from_teacher).html_page(page.body, page.title, :identifier => migration_id)
     #convert to json
     doc = Nokogiri::HTML(exported_html)
     hash = @converter.convert_wiki(doc, 'blti-link')

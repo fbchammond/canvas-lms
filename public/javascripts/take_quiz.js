@@ -15,10 +15,22 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-
-require(['i18n'], function(I18n) {
-
-  I18n = I18n.scoped('quizzes.take_quiz');
+define([
+  'i18n!quizzes.take_quiz',
+  'jquery' /* $ */,
+  'quiz_timing',
+  'compiled/behaviors/autoBlurActiveInput',
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.instructure_date_and_time' /* friendlyDatetime, friendlyDate */,
+  'jquery.instructure_forms' /* getFormData, errorBox */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jquery.instructure_misc_helpers' /* scrollSidebar */,
+  'jquery.rails_flash_notifications' /* flashMessage */,
+  'compiled/tinymce',
+  'tinymce.editor_box' /* editorBox */,
+  'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
+  'compiled/behaviors/quiz_selectmenu'
+], function(I18n, $, timing, autoBlurActiveInput) {
 
   var lastAnswerSelected = null;
   var quizSubmission = (function() {
@@ -179,10 +191,8 @@ require(['i18n'], function(I18n) {
   });
 
   $(function() {
-    // prevent mousewheel from changing answers on dropdowns see #6143
-    $('select').bind('mousewheel', false);
-
     $.scrollSidebar();
+    autoBlurActiveInput();
 
     if($("#preview_mode_link").length == 0) {
       window.onbeforeunload = function() {
@@ -192,7 +202,7 @@ require(['i18n'], function(I18n) {
         }
       };
       $(document).delegate('a', 'click', function(event) {
-        if($(this).closest('.ui-dialog,.mceToolbar').length > 0) { return; }
+        if($(this).closest('.ui-dialog,.mceToolbar,.ui-selectmenu').length > 0) { return; }
         if(!event.isDefaultPrevented()) {
           var url = $(this).attr('href') || "";
           var hashStripped = location.href;
@@ -249,33 +259,6 @@ require(['i18n'], function(I18n) {
       }
     });
 
-    /* the intent of this is to ensure that the class doesn't ever change while
-       the dropdown is open. in windows chrome, mouseleave events still fire
-       for ancestors when a dropdown is open, and any style changes to them
-       cause the dropdown to jump/reset. this effectively normalizes the
-       mouseenter/mouseleave behavior across platforms and browsers, but the
-       side effect is that the hover class is retained until the mouse has left
-       and the select has blurred. */
-    $questions.find('.question').bind({
-      mouseenter: function(event) {
-        var $container = $(this);
-        var $activeSelect = $container.find($(document.activeElement)).filter("select");
-        if ($activeSelect.length) $activeSelect.unbind('blur.unhoverQuestion');
-        if (!$container.hasClass('hover')) $container.addClass('hover');
-      },
-      mouseleave: function(event) {
-        var $container = $(this);
-        var $activeSelect = $container.find($(document.activeElement)).filter("select");
-        if ($activeSelect.length) {
-          $activeSelect.one('blur.unhoverQuestion', function() {
-            $(this).closest('.question').trigger('mouseleave');
-          });
-        } else {
-          $container.removeClass('hover');
-        }
-      }
-    });
-
     $questions
       .delegate(":checkbox,:radio,label", 'change mouseup', function(event) {
         var $answer = $(this).parents(".answer");
@@ -284,30 +267,24 @@ require(['i18n'], function(I18n) {
           quizSubmission.updateSubmission();
         }
       })
-      .delegate(":text,textarea", 'change blur', function(event, update) {
+      .delegate(":text,textarea", 'change', function(event, update) {
+        var $this = $(this);
+        if ($this.hasClass('numerical_question_input')) {
+          var val = parseFloat($this.val());
+          $this.val(isNaN(val) ? "" : val.toFixed(4));
+        }
         if (update !== false) {
           quizSubmission.updateSubmission();
         }
       })
       .delegate(".numerical_question_input", {
-        keypress: function(event) {
-          var string = String.fromCharCode(event.charCode || event.keyCode);
-          if(event.charCode == 0 || string == "-" || string == "." || string == "0" || parseInt(string, 10)) {
-            $(this).triggerHandler('focus');
-          } else {
+        keyup: function(event) {
+          var val = $(this).val();
+          if (val === '' || !isNaN(parseFloat(val))) {
+            $(this).triggerHandler('focus'); // makes the errorBox go away
+          } else{
             $(this).errorBox(I18n.t('errors.only_numerical_values', "only numerical values are accepted"));
-            event.preventDefault();
-            event.stopPropagation();
           }
-        },
-        'change blur': function() {
-          var val = parseFloat($(this).val());
-          if (isNaN(val)){
-            val = "";
-          } else {
-            val = val.toFixed(4);
-          }
-          $(this).val(val);
         }
       })
       .delegate(".flag_question", 'click', function() {
@@ -322,7 +299,7 @@ require(['i18n'], function(I18n) {
 
         if (tagName == "TEXTAREA") {
           val = $this.editorBox('get_code');
-        } else if (tagName == "TEXTAREA" || tagName == "SELECT" || $this.attr('type') == "text") {
+        } else if (tagName == "SELECT" || $this.attr('type') == "text") {
           val = $this.val();
         } else {
           $this.parents(".question").find(".question_input").each(function() {

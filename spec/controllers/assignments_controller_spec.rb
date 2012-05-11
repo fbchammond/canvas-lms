@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2012 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -118,6 +118,30 @@ describe AssignmentsController do
       response.should be_success
       assigns[:current_user_submission].should_not be_nil
     end
+
+    it "should redirect to discussion if assignment is linked to discussion" do
+      course_with_student_logged_in(:active_all => true)
+      course_assignment
+      @assignment.submission_types = 'discussion_topic'
+      @assignment.save!
+
+      get 'show', :course_id => @course.id, :id => @assignment.id
+      response.should be_redirect
+    end
+
+    it "should not redirect to discussion for observer if assignment is linked to discussion but read_forum is false" do
+      course_with_observer_logged_in(:active_all => true)
+      course_assignment
+      @assignment.submission_types = 'discussion_topic'
+      @assignment.save!
+
+      RoleOverride.create!(:context => @course.account, :permission => 'read_forum',
+                           :enrollment_type => "ObserverEnrollment", :enabled => false)
+
+      get 'show', :course_id => @course.id, :id => @assignment.id
+      response.should_not be_redirect
+      response.should be_success
+    end
   end
   
   describe "GET 'syllabus'" do
@@ -152,7 +176,7 @@ describe AssignmentsController do
       rescue_action_in_public!
       #controller.use_rails_error_handling!
       course_with_student(:active_all => true)
-      get 'new', :course_id => @course.id, :model_key => "agwgeaweg"
+      get 'new', :course_id => @course.id
       assert_unauthorized
     end
   end

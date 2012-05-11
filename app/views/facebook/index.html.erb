@@ -11,7 +11,7 @@
   <div style="clear: left; margin-bottom: 5px;"></div>
   <% if @messages.blank? %>
     <b><%= t :all_set, "You're all set up!" %></b>
-    <% if @user.notification_policies.any?{|p| p.communication_channel.path_type == 'facebook' } %>
+    <% if NotificationPolicy.for(@user).find(:first, :conditions => {'communication_channels.path_type' => 'facebook' }) %>
       <%= t :no_messages_notice, "As things happen in the course you'll start seeing notifications show up here letting you know about things happening in your Canvas account." %>
     <% else %>
       <%= t :configure_notification_preferences_notice, "After you *configure your notification preferences* you should start to see notifications show up here letting you know about things happening in your Canvas account.", :wrapper => '<a href="#{Facebook.app_url}/settings">\1</a>' %>
@@ -44,6 +44,11 @@
 <% end %>
 <% js_block do %>
 <script>
+require([
+  'jquery' /* $ */,
+  'jquery.instructure_misc_plugins' /* confirmDelete */
+], function($) {
+
 $(document).ready(function() {
   $("#messages").delegate('.delete_link', 'click', function(event) {
     event.preventDefault();
@@ -58,6 +63,7 @@ $(document).ready(function() {
       }
     });
   });
+});
 });
 </script>
 <% end %>

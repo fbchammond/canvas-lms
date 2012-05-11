@@ -17,6 +17,7 @@
 #
 
 require File.expand_path(File.dirname(__FILE__) + '/api_spec_helper')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper')
 
 describe "API Authentication", :type => :integration do
 
@@ -99,6 +100,31 @@ describe "API Authentication", :type => :integration do
     response.response_code.should == 401
     post "/api/v1/courses/#{@course.id}/assignments.json?api_key=#{@key.api_key}", { :assignment => { :name => 'test assignment', :points_possible => '5.3', :grading_type => 'points' } }, { :authorization => ActionController::HttpAuthentication::Basic.encode_credentials('test1@example.com', 'test123') }
     response.should be_success
+  end
+
+  context "sharding" do
+    it_should_behave_like "sharding"
+
+    it "should use developer key + basic auth access on the default shard from a different shard" do
+      @shard1.activate do
+        @account = Account.create!
+        # this will continue to be supported until we notify api users and explicitly phase it out
+        user_with_pseudonym(:active_user => true, :username => 'test1@example.com', :password => 'test123', :account => @account)
+        course_with_teacher(:user => @user, :account => @account)
+      end
+      LoadAccount.stubs(:default_domain_root_account).returns(@account)
+
+      get "/api/v1/courses.json"
+      response.response_code.should == 401
+      get "/api/v1/courses.json?api_key=#{@key.api_key}"
+      response.response_code.should == 401
+      get "/api/v1/courses.json?api_key=#{@key.api_key}", {}, { :authorization => ActionController::HttpAuthentication::Basic.encode_credentials('test1@example.com', 'failboat') }
+      response.response_code.should == 401
+      get "/api/v1/courses.json", {}, { :authorization => ActionController::HttpAuthentication::Basic.encode_credentials('test1@example.com', 'test123') }
+      response.should be_success
+      get "/api/v1/courses.json?api_key=#{@key.api_key}", {}, { :authorization => ActionController::HttpAuthentication::Basic.encode_credentials('test1@example.com', 'test123') }
+      response.should be_success
+    end
   end
 
   if Canvas.redis_enabled? # eventually we're going to have to just require redis to run the specs
@@ -372,6 +398,24 @@ describe "API Authentication", :type => :integration do
       json = JSON.parse(response.body)
       json['message'].should == "Invalid access token."
     end
+
+    context "sharding" do
+      it_should_behave_like "sharding"
+
+      it "should work for an access token from a different shard with the developer key on the default shard" do
+        @shard1.activate do
+          @account = Account.create!
+          user_with_pseudonym(:active_user => true, :username => 'test1@example.com', :password => 'test123', :account => @account)
+          course_with_teacher(:user => @user, :account => @account)
+          @token = @user.access_tokens.create!(:developer_key => DeveloperKey.default)
+          @token.developer_key.shard.should be_default
+        end
+        LoadAccount.stubs(:default_domain_root_account).returns(@account)
+
+        check_used { get "/api/v1/courses", nil, { 'Authorization' => "Bearer #{@token.token}" } }
+        JSON.parse(response.body).size.should == 1
+      end
+    end
   end
 
   describe "as_user_id" do
@@ -379,24 +423,29 @@ describe "API Authentication", :type => :integration do
       course_with_teacher(:active_all => true)
       @course1 = @course
       course_with_student(:user => @user, :active_all => true)
+      user_with_pseudonym(:user => @student, :username => "blah@example.com")
+      @student_pseudonym = @pseudonym
       @course2 = @course
     end
 
     it "should allow as_user_id" do
+      @student.pseudonyms.create!(:unique_id => 'student', :account => Account.default)
       account_admin_user(:account => Account.site_admin)
       user_with_pseudonym(:user => @user)
 
       json = api_call(:get, "/api/v1/users/self/profile?as_user_id=#{@student.id}",
                :controller => "profile", :action => "show", :user_id => 'self', :format => 'json', :as_user_id => @student.id.to_param)
       assigns['current_user'].should == @student
+      assigns['current_pseudonym'].should == @student_pseudonym
       assigns['real_current_user'].should == @user
+      assigns['real_current_pseudonym'].should == @pseudonym
       json.should == {
         'id' => @student.id,
         'name' => 'User',
         'sortable_name' => 'User',
         'short_name' => 'User',
-        'primary_email' => nil,
-        'login_id' => nil,
+        'primary_email' => "blah@example.com",
+        'login_id' => "blah@example.com",
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@student.uuid}.ics" },
       }
 
@@ -412,8 +461,8 @@ describe "API Authentication", :type => :integration do
         'name' => 'User',
         'sortable_name' => 'User',
         'short_name' => 'User',
-        'primary_email' => nil,
-        'login_id' => nil,
+        'primary_email' => "blah@example.com",
+        'login_id' => "blah@example.com",
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@student.uuid}.ics" },
       }
 
@@ -427,8 +476,8 @@ describe "API Authentication", :type => :integration do
         'name' => 'User',
         'sortable_name' => 'User',
         'short_name' => 'User',
-        'primary_email' => nil,
-        'login_id' => nil,
+        'primary_email' => "blah@example.com",
+        'login_id' => "blah@example.com",
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@student.uuid}.ics" },
       }
     end
@@ -436,20 +485,22 @@ describe "API Authentication", :type => :integration do
     it "should allow sis_user_id as an as_user_id" do
       account_admin_user(:account => Account.site_admin)
       user_with_pseudonym(:user => @user)
-      @student.pseudonyms.create!(:account => Account.default, :unique_id => "nobody_sis@example.com", :password => "secret", :password_confirmation => "secret")
-      @student.pseudonym.update_attribute(:sis_user_id, "1234")
+      @student_pseudonym.update_attribute(:sis_user_id, "1234")
 
       json = api_call(:get, "/api/v1/users/self/profile?as_user_id=sis_user_id:#{@student.pseudonym.sis_user_id}",
                :controller => "profile", :action => "show", :user_id => 'self', :format => 'json', :as_user_id => "sis_user_id:#{@student.pseudonym.sis_user_id.to_param}")
       assigns['current_user'].should == @student
+      assigns['real_current_pseudonym'].should == @pseudonym
       assigns['real_current_user'].should == @user
       json.should == {
         'id' => @student.id,
         'name' => 'User',
         'sortable_name' => 'User',
         'short_name' => 'User',
-        'primary_email' => nil,
-        'login_id' => 'nobody_sis@example.com',
+        'sis_user_id' => '1234',
+        'sis_login_id' => 'blah@example.com',
+        'primary_email' => "blah@example.com",
+        'login_id' => "blah@example.com",
         'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/user_#{@student.uuid}.ics" },
       }
     end

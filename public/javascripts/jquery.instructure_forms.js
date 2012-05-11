@@ -15,8 +15,21 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-
-I18n.scoped('instructure', function(I18n) {
+define([
+  'INST' /* INST */,
+  'i18n!instructure',
+  'jquery' /* jQuery, $ */,
+  'jquery.ajaxJSON' /* ajaxJSONPreparedFiles, ajaxJSON */,
+  'jquery.disableWhileLoading' /* disableWhileLoading */,
+  'jquery.google-analytics' /* trackEvent */,
+  'jquery.instructure_date_and_time' /* date_field, time_field, datetime_field */,
+  'jquery.instructure_jquery_patches' /* /\.scrollTop/ */,
+  'jquery.instructure_misc_helpers' /* uniqueId, /\$\.uniq/ */,
+  'jquery.instructure_misc_plugins' /* /\.log\(/ */,
+  'jquery.rails_flash_notifications' /* flashError */,
+  'tinymce.editor_box' /* editorBox */,
+  'vendor/jquery.scrollTo' /* /\.scrollTo/ */
+], function(INST, I18n, $) {
 
   // Intercepts the default form submission process.  Uses the form tag's
   // current action and method attributes to know where to submit to.
@@ -134,10 +147,11 @@ I18n.scoped('instructure', function(I18n) {
           asset_string: options.asset_string,
           intent: options.intent,
           folder_id: $.isFunction(options.folder_id) ? (options.folder_id.call($form)) : options.folder_id,
-          file_elements: $form.find("input[type='file']"),
+          file_elements: $form.find("input[type='file']:visible"),
           url: (options.upload_only ? null : action),
           uploadDataUrl: options.uploadDataUrl,
-          formData: options.postFormData ? formData : null,
+          formData: formData,
+          formDataTarget: options.formDataTarget,
           success: options.success,
           error: options.error
         });
@@ -312,7 +326,7 @@ I18n.scoped('instructure', function(I18n) {
   }
   $.ajaxFileUpload = function(options) {
     if(!options.data.authenticity_token) {
-      options.data.authenticity_token = $("#ajax_authenticity_token").text();
+      options.data.authenticity_token = ENV.AUTHENTICITY_TOKEN
     }
     $.toMultipartForm(options.data, function(params) {
       $.sendFormAsBinary({

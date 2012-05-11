@@ -45,7 +45,7 @@ describe ConversationsController, :type => :integration do
 
   context "conversations" do
     it "should return the conversation list" do
-      @c1 = conversation(@bob, :workflow_state => 'read', :label => "blue")
+      @c1 = conversation(@bob, :workflow_state => 'read')
       @c2 = conversation(@bob, @billy, :workflow_state => 'unread', :subscribed => false)
       @c3 = conversation(@jane, :workflow_state => 'archived') # won't show up, since it's archived
 
@@ -58,10 +58,12 @@ describe ConversationsController, :type => :integration do
           "workflow_state" => "unread",
           "last_message" => "test",
           "last_message_at" => @c2.last_message_at.to_json[1, 20],
+          "last_authored_message" => "test",
+          "last_authored_message_at" => @c2.last_message_at.to_json[1, 20],
           "message_count" => 1,
           "subscribed" => false,
           "private" => false,
-          "label" => nil,
+          "starred" => false,
           "properties" => ["last_author"],
           "audience" => [@billy.id, @bob.id],
           "audience_contexts" => {
@@ -79,10 +81,12 @@ describe ConversationsController, :type => :integration do
           "workflow_state" => "read",
           "last_message" => "test",
           "last_message_at" => @c1.last_message_at.to_json[1, 20],
+          "last_authored_message" => "test",
+          "last_authored_message_at" => @c1.last_message_at.to_json[1, 20],
           "message_count" => 1,
           "subscribed" => true,
           "private" => true,
-          "label" => "blue",
+          "starred" => false,
           "properties" => ["last_author"],
           "audience" => [@bob.id],
           "audience_contexts" => {
@@ -114,12 +118,12 @@ describe ConversationsController, :type => :integration do
     end
 
     it "should filter conversations by scope" do
-      @c1 = conversation(@bob, :workflow_state => 'read', :label => "blue")
-      @c2 = conversation(@bob, @billy, :workflow_state => 'unread', :subscribed => false, :label => "green")
+      @c1 = conversation(@bob, :workflow_state => 'read')
+      @c2 = conversation(@bob, @billy, :workflow_state => 'unread', :subscribed => false)
       @c3 = conversation(@jane, :workflow_state => 'read')
 
-      json = api_call(:get, "/api/v1/conversations.json?scope=labeled&label=green",
-              { :controller => 'conversations', :action => 'index', :format => 'json', :scope => 'labeled', :label => 'green' })
+      json = api_call(:get, "/api/v1/conversations.json?scope=unread",
+              { :controller => 'conversations', :action => 'index', :format => 'json', :scope => 'unread' })
       json.each { |c| c.delete("avatar_url") }
       json.should eql [
         {
@@ -127,10 +131,12 @@ describe ConversationsController, :type => :integration do
           "workflow_state" => "unread",
           "last_message" => "test",
           "last_message_at" => @c2.last_message_at.to_json[1, 20],
+          "last_authored_message" => "test",
+          "last_authored_message_at" => @c2.last_message_at.to_json[1, 20],
           "message_count" => 1,
           "subscribed" => false,
           "private" => false,
-          "label" => "green",
+          "starred" => false,
           "properties" => ["last_author"],
           "audience" => [@billy.id, @bob.id],
           "audience_contexts" => {
@@ -144,6 +150,90 @@ describe ConversationsController, :type => :integration do
           ]
         }
       ]
+    end
+
+    context "sent scope" do
+      it "should sort by last authored date" do
+        expected_times = 5.times.to_a.reverse.map{ |h| Time.parse((Time.now.utc - h.hours).to_s) }
+        ConversationMessage.any_instance.expects(:current_time_from_proper_timezone).times(5).returns(*expected_times)
+        @c1 = conversation(@bob)
+        @c2 = conversation(@bob, @billy)
+        @c3 = conversation(@jane)
+
+        @m1 = @c1.conversation.add_message(@bob, 'ohai')
+        @m2 = @c2.conversation.add_message(@bob, 'ohai')
+
+        json = api_call(:get, "/api/v1/conversations.json?scope=sent",
+                { :controller => 'conversations', :action => 'index', :format => 'json', :scope => 'sent' })
+        json.size.should eql 3
+        json[0]['id'].should eql @c3.conversation_id
+        json[0]['last_message_at'].should eql expected_times[2].to_json[1, 20]
+        json[0]['last_message'].should eql 'test'
+        json[0]['last_authored_message_at'].should eql expected_times[2].to_json[1, 20]
+        json[0]['last_authored_message'].should eql 'test'
+
+        json[1]['id'].should eql @c2.conversation_id
+        json[1]['last_message_at'].should eql expected_times[4].to_json[1, 20]
+        json[1]['last_message'].should eql 'ohai'
+        json[1]['last_authored_message_at'].should eql expected_times[1].to_json[1, 20]
+        json[1]['last_authored_message'].should eql 'test'
+
+        json[2]['id'].should eql @c1.conversation_id
+        json[2]['last_message_at'].should eql expected_times[3].to_json[1, 20]
+        json[2]['last_message'].should eql 'ohai'
+        json[2]['last_authored_message_at'].should eql expected_times[0].to_json[1, 20]
+        json[2]['last_authored_message'].should eql 'test'
+      end
+
+      it "should include conversations with at least one message by the author, regardless of workflow_state" do
+        @c1 = conversation(@bob)
+        @c2 = conversation(@bob, @billy)
+        @c2.conversation.add_message(@bob, 'ohai')
+        @c2.remove_messages([@message]) # delete my original message
+        @c3 = conversation(@jane, :workflow_state => 'archived')
+
+        json = api_call(:get, "/api/v1/conversations.json?scope=sent",
+                { :controller => 'conversations', :action => 'index', :format => 'json', :scope => 'sent' })
+        json.size.should eql 2
+        json.map{ |c| c['id'] }.sort.should eql [@c1.conversation_id, @c3.conversation_id]
+      end
+    end
+
+    it "should show the calculated audience_contexts if the tags have not been migrated yet" do
+      @c1 = conversation(@bob, @billy)
+      Conversation.update_all "tags = NULL"
+      ConversationParticipant.update_all "tags = NULL"
+      ConversationMessageParticipant.update_all "tags = NULL"
+
+      @c1.reload.tags.should be_empty
+      @c1.context_tags.should eql [@course.asset_string]
+
+      json = api_call(:get, "/api/v1/conversations.json",
+              { :controller => 'conversations', :action => 'index', :format => 'json' })
+      json.size.should eql 1
+      json.first["id"].should eql @c1.conversation_id
+      json.first["audience_contexts"].should eql({"groups" => {}, "courses" => {@course.id.to_s => []}})
+    end
+
+    it "should include starred conversations in starred scope regardless of if read or archived" do
+      @c1 = conversation(@bob, :workflow_state => 'unread', :starred => true)
+      @c2 = conversation(@billy, :workflow_state => 'read', :starred => true)
+      @c3 = conversation(@jane, :workflow_state => 'archived', :starred => true)
+
+      json = api_call(:get, "/api/v1/conversations.json?scope=starred",
+              { :controller => 'conversations', :action => 'index', :format => 'json', :scope => 'starred' })
+      json.size.should == 3
+      json.map{ |c| c["id"] }.sort.should == [@c1, @c2, @c3].map{ |c| c.conversation_id }.sort
+    end
+
+    it "should not include unstarred conversations in starred scope regardless of if read or archived" do
+      @c1 = conversation(@bob, :workflow_state => 'unread')
+      @c2 = conversation(@billy, :workflow_state => 'read')
+      @c3 = conversation(@jane, :workflow_state => 'archived')
+
+      json = api_call(:get, "/api/v1/conversations.json?scope=starred",
+              { :controller => 'conversations', :action => 'index', :format => 'json', :scope => 'starred' })
+      json.should be_empty
     end
 
     it "should mark all conversations as read" do
@@ -178,10 +268,12 @@ describe ConversationsController, :type => :integration do
             "workflow_state" => "read",
             "last_message" => "test",
             "last_message_at" => conversation.last_message_at.to_json[1, 20],
+            "last_authored_message" => "test",
+            "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
             "message_count" => 1,
             "subscribed" => true,
             "private" => true,
-            "label" => nil,
+            "starred" => false,
             "properties" => ["last_author"],
             "audience" => [@bob.id],
             "audience_contexts" => {
@@ -216,10 +308,12 @@ describe ConversationsController, :type => :integration do
             "workflow_state" => "read",
             "last_message" => "test",
             "last_message_at" => conversation.last_message_at.to_json[1, 20],
+            "last_authored_message" => "test",
+            "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
             "message_count" => 1,
             "subscribed" => true,
             "private" => false,
-            "label" => nil,
+            "starred" => false,
             "properties" => ["last_author"],
             "audience" => [@billy.id, @bob.id],
             "audience_contexts" => {
@@ -258,10 +352,12 @@ describe ConversationsController, :type => :integration do
             "workflow_state" => "read",
             "last_message" => "test",
             "last_message_at" => conversation.last_message_at.to_json[1, 20],
+            "last_authored_message" => "test",
+            "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
             "message_count" => 2, # two messages total now, though we'll only get the latest one in the response
             "subscribed" => true,
             "private" => true,
-            "label" => nil,
+            "starred" => false,
             "properties" => ["last_author"],
             "audience" => [@bob.id],
             "audience_contexts" => {
@@ -286,8 +382,8 @@ describe ConversationsController, :type => :integration do
         json = api_call(:post, "/api/v1/conversations",
                 { :controller => 'conversations', :action => 'create', :format => 'json' },
                 { :recipients => [@bob.id, @joe.id, @billy.id], :body => "test" })
-        json.size.should eql 1
-        json[0]["id"].should eql @me.conversations.first.conversation_id
+        json.size.should eql 3
+        json.map{ |c| c['id'] }.sort.should eql @me.all_conversations.map(&:conversation_id).sort
 
         @me.all_conversations.size.should eql(3)
         @me.conversations.size.should eql(1) # just the initial conversation with bob is visible to @me
@@ -298,7 +394,8 @@ describe ConversationsController, :type => :integration do
 
       it "should create a conversation with forwarded messages" do
         forwarded_message = conversation(@me, :sender => @bob).messages.first
-        attachment = forwarded_message.attachments.create(:uploaded_data => stub_png_data)
+        attachment = @me.conversation_attachments_folder.attachments.create!(:context => @me, :uploaded_data => stub_png_data)
+        forwarded_message.attachments << attachment
 
         json = api_call(:post, "/api/v1/conversations",
                 { :controller => 'conversations', :action => 'create', :format => 'json' },
@@ -316,10 +413,12 @@ describe ConversationsController, :type => :integration do
             "workflow_state" => "read",
             "last_message" => "test",
             "last_message_at" => conversation.last_message_at.to_json[1, 20],
+            "last_authored_message" => "test",
+            "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
             "message_count" => 1,
             "subscribed" => true,
             "private" => true,
-            "label" => nil,
+            "starred" => false,
             "properties" => ["last_author"],
             "audience" => [@billy.id],
             "audience_contexts" => {
@@ -336,7 +435,7 @@ describe ConversationsController, :type => :integration do
                 "id" => conversation.messages.first.id, "created_at" => conversation.messages.first.created_at.to_json[1, 20], "body" => "test", "author_id" => @me.id, "generated" => false, "media_comment" => nil, "attachments" => [],
                 "forwarded_messages" => [
                   {
-                    "id" => forwarded_message.id, "created_at" => forwarded_message.created_at.to_json[1, 20], "body" => "test", "author_id" => @bob.id, "generated" => false, "media_comment" => nil, "forwarded_messages" => [], "attachments" => [{'filename' => 'test my file? hai!&.png', 'url' => "http://www.example.com/files/#{attachment.id}/download?download_frd=1&verifier=#{attachment.uuid}", 'content-type' => 'image/png', 'display_name' => 'test my file? hai!&.png'}]
+                    "id" => forwarded_message.id, "created_at" => forwarded_message.created_at.to_json[1, 20], "body" => "test", "author_id" => @bob.id, "generated" => false, "media_comment" => nil, "forwarded_messages" => [], "attachments" => [{'filename' => 'test my file? hai!&.png', 'url' => "http://www.example.com/files/#{attachment.id}/download?download_frd=1&verifier=#{attachment.uuid}", 'content-type' => 'image/png', 'display_name' => 'test my file? hai!&.png', 'id' => attachment.id, 'size' => attachment.size}]
                   }
                 ]
               }
@@ -359,9 +458,9 @@ describe ConversationsController, :type => :integration do
       json.each { |c| c.delete("avatar_url") }
       json.should eql [
         {"id" => "course_#{@course.id}", "name" => "the course", "type" => "context", "user_count" => 6},
-        {"id" => "group_#{@group.id}", "name" => "the group", "type" => "context", "user_count" => 3, "context_name" => "the course"},
         {"id" => "section_#{@other_section.id}", "name" => "the other section", "type" => "context", "user_count" => 1, "context_name" => "the course"},
         {"id" => "section_#{@course.default_section.id}", "name" => "the section", "type" => "context", "user_count" => 5, "context_name" => "the course"},
+        {"id" => "group_#{@group.id}", "name" => "the group", "type" => "context", "user_count" => 3, "context_name" => "the course"},
         {"id" => @bob.id, "name" => "bob", "common_courses" => {@course.id.to_s => ["StudentEnrollment"]}, "common_groups" => {@group.id.to_s => ["Member"]}},
         {"id" => @joe.id, "name" => "joe", "common_courses" => {@course.id.to_s => ["StudentEnrollment"]}, "common_groups" => {@group.id.to_s => ["Member"]}},
         {"id" => @me.id, "name" => @me.name, "common_courses" => {@course.id.to_s => ["TeacherEnrollment"]}, "common_groups" => {@group.id.to_s => ["Member"]}},
@@ -565,10 +664,9 @@ describe ConversationsController, :type => :integration do
   context "conversation" do
     it "should return the conversation" do
       conversation = conversation(@bob)
-      attachment = nil
+      attachment = @me.conversation_attachments_folder.attachments.create!(:context => @me, :filename => 'test.txt', :display_name => "test.txt", :uploaded_data => StringIO.new('test'))
       media_object = nil
-      conversation.add_message("another") do |message|
-        attachment = message.attachments.create(:filename => 'test.txt', :display_name => "test.txt", :uploaded_data => StringIO.new('test'))
+      message = conversation.add_message("another", :attachment_ids => [attachment.id]) do |message|
         media_object = MediaObject.new
         media_object.media_id = '0_12345678'
         media_object.media_type = 'audio'
@@ -577,7 +675,7 @@ describe ConversationsController, :type => :integration do
         media_object.title = "test title"
         media_object.save!
         message.media_comment = media_object
-        message.save
+        message.save!
       end
 
       conversation.reload
@@ -593,10 +691,12 @@ describe ConversationsController, :type => :integration do
         "workflow_state" => "read",
         "last_message" => "another",
         "last_message_at" => conversation.last_message_at.to_json[1, 20],
+        "last_authored_message" => "another",
+        "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
         "message_count" => 2,
         "subscribed" => true,
         "private" => true,
-        "label" => nil,
+        "starred" => false,
         "properties" => ["last_author", "attachments", "media_objects"],
         "audience" => [@bob.id],
         "audience_contexts" => {
@@ -610,24 +710,26 @@ describe ConversationsController, :type => :integration do
         "messages" => [
           {
             "id" => conversation.messages.first.id,
-            "created_at" => conversation.messages.first.created_at.to_json[1, 20], 
-            "body" => "another", 
-            "author_id" => @me.id, 
-            "generated" => false, 
+            "created_at" => conversation.messages.first.created_at.to_json[1, 20],
+            "body" => "another",
+            "author_id" => @me.id,
+            "generated" => false,
             "media_comment" => {
               "media_type" => "audio",
               "media_id" => "0_12345678",
               "display_name" => "test title",
               "content-type" => "audio/mp4",
               "url" => "http://www.example.com/users/#{@me.id}/media_download?entryId=0_12345678&redirect=1&type=mp4"
-            }, 
-            "forwarded_messages" => [], 
+            },
+            "forwarded_messages" => [],
             "attachments" => [
               {
                 "filename" => "test.txt",
                 "url" => "http://www.example.com/files/#{attachment.id}/download?download_frd=1&verifier=#{attachment.uuid}",
                 "content-type" => "unknown/unknown",
                 "display_name" => "test.txt",
+                "id" => attachment.id,
+                "size" => attachment.size,
               }
             ]
           },
@@ -637,29 +739,77 @@ describe ConversationsController, :type => :integration do
       })
     end
 
-    it "should return submission and comments with the conversation in api format" do
-      submission1 = submission_model(:course => @course, :user => @bob)
-      submission2 = submission_model(:course => @course, :user => @bob)
-      conversation = conversation(@bob)
-      submission1.add_comment(:comment => "hey bob", :author => @me)
-      submission1.add_comment(:comment => "wut up teacher", :author => @bob)
-      submission2.add_comment(:comment => "my name is bob", :author => @bob)
+    it "should properly flag if starred in the response" do
+      conversation1 = conversation(@bob)
+      conversation2 = conversation(@billy, :starred => true)
 
-      json = api_call(:get, "/api/v1/conversations/#{conversation.conversation_id}",
-              { :controller => 'conversations', :action => 'show', :id => conversation.conversation_id.to_s, :format => 'json' })
-      json['submissions'].size.should == 2
-      jsub = json['submissions'][1]
-      jsub['assignment'].should be_present # includes & ['assignment']
-      jcom = jsub['submission_comments']
-      jcom.should be_present # includes & ['submission_comments']
-      jcom.size.should == 2
-      jcom[0]['author_id'].should == @me.id
-      jcom[1]['author_id'].should == @bob.id
+      json = api_call(:get, "/api/v1/conversations/#{conversation1.conversation_id}",
+              { :controller => 'conversations', :action => 'show', :id => conversation1.conversation_id.to_s, :format => 'json' })
+      json["starred"].should be_false
 
-      jsub = json['submissions'][0]
-      jcom = jsub['submission_comments']
-      jcom.size.should == 1
-      jcom[0]['author_id'].should == @bob.id
+      json = api_call(:get, "/api/v1/conversations/#{conversation2.conversation_id}",
+              { :controller => 'conversations', :action => 'show', :id => conversation2.conversation_id.to_s, :format => 'json' })
+      json["starred"].should be_true
+    end
+
+    context "submission comments" do
+      before do
+        submission1 = submission_model(:course => @course, :user => @bob)
+        submission2 = submission_model(:course => @course, :user => @bob)
+        conversation(@bob)
+        submission1.add_comment(:comment => "hey bob", :author => @me)
+        submission1.add_comment(:comment => "wut up teacher", :author => @bob)
+        submission2.add_comment(:comment => "my name is bob", :author => @bob)
+      end
+
+      it "should return submission and comments with the conversation in api format" do
+        json = api_call(:get, "/api/v1/conversations/#{@conversation.conversation_id}",
+                { :controller => 'conversations', :action => 'show', :id => @conversation.conversation_id.to_s, :format => 'json' })
+
+        json['messages'].size.should == 1
+        json['submissions'].size.should == 2
+        jsub = json['submissions'][1]
+        jsub['assignment'].should be_present # includes & ['assignment']
+        jcom = jsub['submission_comments']
+        jcom.should be_present # includes & ['submission_comments']
+        jcom.size.should == 2
+        jcom[0]['author_id'].should == @me.id
+        jcom[1]['author_id'].should == @bob.id
+
+        jsub = json['submissions'][0]
+        jcom = jsub['submission_comments']
+        jcom.size.should == 1
+        jcom[0]['author_id'].should == @bob.id
+      end
+
+      it "should interleave submission and comments in the conversation" do
+        @conversation.add_message("another message!")
+
+        json = api_call(:get, "/api/v1/conversations/#{@conversation.conversation_id}?interleave_submissions=1",
+                { :controller => 'conversations', :action => 'show', :id => @conversation.conversation_id.to_s, :format => 'json', :interleave_submissions => '1' })
+
+        json['submissions'].should be_nil
+        json['messages'].size.should eql 4
+        json['messages'][0]['body'].should eql 'another message!'
+
+        json['messages'][1]['body'].should eql 'my name is bob'
+        jsub = json['messages'][1]['submission']
+        jsub['assignment'].should be_present
+        jcom = jsub['submission_comments']
+        jcom.should be_present
+        jcom.size.should == 1
+        jcom[0]['author_id'].should == @bob.id
+
+        json['messages'][2]['body'].should eql 'wut up teacher' # most recent comment
+        jsub = json['messages'][2]['submission']
+        jcom = jsub['submission_comments']
+        jcom.size.should == 2
+        jcom[0]['author_id'].should == @me.id
+        jcom[1]['author_id'].should == @bob.id
+
+        json['messages'][3]['body'].should eql 'test'
+      end
+
     end
 
     it "should add a message to the conversation" do
@@ -678,10 +828,12 @@ describe ConversationsController, :type => :integration do
         "workflow_state" => "read",
         "last_message" => "another",
         "last_message_at" => conversation.last_message_at.to_json[1, 20],
+        "last_authored_message" => "another",
+        "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
         "message_count" => 2, # two messages total now, though we'll only get the latest one in the response
         "subscribed" => true,
         "private" => true,
-        "label" => nil,
+        "starred" => false,
         "properties" => ["last_author"],
         "audience" => [@bob.id],
         "audience_contexts" => {
@@ -714,10 +866,12 @@ describe ConversationsController, :type => :integration do
         "workflow_state" => "read",
         "last_message" => "test",
         "last_message_at" => conversation.last_message_at.to_json[1, 20],
+        "last_authored_message" => "test",
+        "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
         "message_count" => 1,
         "subscribed" => true,
         "private" => false,
-        "label" => nil,
+        "starred" => false,
         "properties" => ["last_author"],
         "audience" => [@billy.id, @bob.id, @jane.id, @joe.id, @tommy.id],
         "audience_contexts" => {
@@ -743,7 +897,7 @@ describe ConversationsController, :type => :integration do
 
       json = api_call(:put, "/api/v1/conversations/#{conversation.conversation_id}",
               { :controller => 'conversations', :action => 'update', :id => conversation.conversation_id.to_s, :format => 'json' },
-              { :conversation => {:subscribed => false, :workflow_state => 'archived', :label => 'red'} })
+              { :conversation => {:subscribed => false, :workflow_state => 'archived'} })
       conversation.reload
 
       json.should eql({
@@ -751,12 +905,41 @@ describe ConversationsController, :type => :integration do
         "workflow_state" => "archived",
         "last_message" => "test",
         "last_message_at" => conversation.last_message_at.to_json[1, 20],
+        "last_authored_message" => "test",
+        "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
         "message_count" => 1,
         "subscribed" => false,
         "private" => false,
-        "label" => 'red',
+        "starred" => false,
         "properties" => ["last_author"]
       })
+    end
+
+    it "should be able to star the conversation via update" do
+      conversation = conversation(@bob, @billy)
+
+      json = api_call(:put, "/api/v1/conversations/#{conversation.conversation_id}",
+              { :controller => 'conversations', :action => 'update', :id => conversation.conversation_id.to_s, :format => 'json' },
+              { :conversation => {:starred => true} })
+      json["starred"].should be_true
+    end
+
+    it "should be able to unstar the conversation via update" do
+      conversation = conversation(@bob, @billy, :starred => true)
+
+      json = api_call(:put, "/api/v1/conversations/#{conversation.conversation_id}",
+              { :controller => 'conversations', :action => 'update', :id => conversation.conversation_id.to_s, :format => 'json' },
+              { :conversation => {:starred => false} })
+      json["starred"].should be_false
+    end
+
+    it "should leave starryness alone when left out of update" do
+      conversation = conversation(@bob, @billy, :starred => true)
+
+      json = api_call(:put, "/api/v1/conversations/#{conversation.conversation_id}",
+              { :controller => 'conversations', :action => 'update', :id => conversation.conversation_id.to_s, :format => 'json' },
+              { :conversation => {:workflow_state => 'read'} })
+      json["starred"].should be_true
     end
 
     it "should delete messages from the conversation" do
@@ -767,16 +950,31 @@ describe ConversationsController, :type => :integration do
               { :controller => 'conversations', :action => 'remove_messages', :id => conversation.conversation_id.to_s, :format => 'json' },
               { :remove => [message.id] })
       conversation.reload
+      json.delete("avatar_url")
+      json["participants"].each{ |p|
+        p.delete("avatar_url")
+      }
       json.should eql({
         "id" => conversation.conversation_id,
         "workflow_state" => "read",
         "last_message" => "test",
         "last_message_at" => conversation.last_message_at.to_json[1, 20],
+        "last_authored_message" => "test",
+        "last_authored_message_at" => conversation.last_message_at.to_json[1, 20],
         "message_count" => 1,
         "subscribed" => true,
         "private" => true,
-        "label" => nil,
-        "properties" => ["last_author"]
+        "starred" => false,
+        "properties" => ["last_author"],
+        "audience" => [@bob.id],
+        "audience_contexts" => {
+          "groups" => {},
+          "courses" => {@course.id.to_s => ["StudentEnrollment"]}
+        },
+        "participants" => [
+          {"id" => @me.id, "name" => @me.name, "common_courses" => {}, "common_groups" => {}},
+          {"id" => @bob.id, "name" => @bob.name, "common_courses" => {@course.id.to_s => ["StudentEnrollment"]}, "common_groups" => {}}
+        ]
       })
     end
 
@@ -790,10 +988,12 @@ describe ConversationsController, :type => :integration do
         "workflow_state" => "read",
         "last_message" => nil,
         "last_message_at" => nil,
+        "last_authored_message" => nil,
+        "last_authored_message_at" => nil,
         "message_count" => 0,
         "subscribed" => true,
         "private" => true,
-        "label" => nil,
+        "starred" => false,
         "properties" => []
       })
     end

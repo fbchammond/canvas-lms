@@ -16,8 +16,36 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-var grading_scheme, readOnlyGradebook, gradebook;
-I18n.scoped('gradebook', function(I18n) {
+define([
+  'INST' /* INST */,
+  'i18n!gradebook',
+  'jquery' /* $ */,
+  'datagrid',
+  'compiled/grade_calculator',
+  'str/htmlEscape',
+  'use!underscore',
+  'jquery.ajaxJSON' /* ajaxJSONFiles, ajaxJSON */,
+  'jquery.dropdownList' /* dropdownList */,
+  'jquery.instructure_date_and_time' /* parseFromISO */,
+  'jquery.instructure_forms' /* formSubmit, getFormData, formErrors, errorBox */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/, /\.scrollTop/ */,
+  'jquery.instructure_misc_helpers' /* replaceTags, /\$\.uniq/, /\$\.size/, /\$\.store/ */,
+  'jquery.instructure_misc_plugins' /* fragmentChange, showIf */,
+  'jquery.keycodes' /* keycodes */,
+  'jquery.loadingImg' /* loadingImg, loadingImage */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */,
+  'message_students' /* messageStudents */,
+  'vendor/date' /* Date.parse */,
+  'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
+  'vendor/jquery.store' /* /\$\.store/ */,
+  'jqueryui/position' /* /\.position\(/ */,
+  'jqueryui/progressbar' /* /\.progressbar/ */
+], function(INST, I18n, $, datagrid, GradeCalculator, htmlEscape, _) {
+
+  var grading_scheme = window.grading_scheme;
+  var readOnlyGradebook = window.readOnlyGradebook;
+  var gradebook = window.gradebook;
+
   var $loading_gradebook_progressbar = $("#loading_gradebook_progressbar"),
       $default_grade_form = $("#default_grade_form"),
       $assignment_details_dialog = $("#assignment_details_dialog"),
@@ -57,8 +85,9 @@ I18n.scoped('gradebook', function(I18n) {
       }
     });
     
-    $courseSections.add('.gradebook_table .course_section').each(function() {
-      if ($(this).data('course_section_id') != sectionToShow){
+    $('.outer_student_name .course_sections, .gradebook_table .course_sections').each(function() {
+      var section_ids = $(this).data('course_section_ids').toString().split(",");
+      if (section_ids.indexOf(sectionToShow) == -1) {
         $(this).closest('tr').remove();
       } else {
         var studentId = $(this).closest('.student_header').attr('id');
@@ -178,7 +207,7 @@ I18n.scoped('gradebook', function(I18n) {
               showTooltip(I18n.t('tooltips.submission_dropped', 'This submission is dropped for grading purposes'));
             } else if(datagrid.columns[grid.cell.column].hidden) {
               var name = objectData(datagrid.cells['0,' + grid.cell.column]).title;
-              showTooltip($.htmlEscape(name) + "<br/><span style='font-size: 0.9em;'>" + I18n.t('click_to_expand', "Click to expand") + "</span>", true)
+              showTooltip(htmlEscape(name) + "<br/><span style='font-size: 0.9em;'>" + I18n.t('click_to_expand', "Click to expand") + "</span>", true)
             }
           } else if(event && event.originalEvent && event.originalEvent.type && !event.originalEvent.type.match(/mouse/)) {
             grid.cell.find(".grade").focus().css('outline', 0);
@@ -518,24 +547,36 @@ I18n.scoped('gradebook', function(I18n) {
                 for(var idx in students_hash) {
                   students.push(students_hash[idx]);
                 }
+
+                var hasSubmission = true;
+                if (!data.submission_types || data.submission_types.match(/none|on_paper/)) {
+                  hasSubmission = false;
+                }
+                var options = [
+                  {text: I18n.t('students_who.havent_submitted_yet', "Haven't submitted yet")},
+                  {text: I18n.t("students_who.havent_been_graded", "Haven't been graded")},
+                  {text: I18n.t('students_who.scored_less_than', "Scored less than"), cutoff: true},
+                  {text: I18n.t('students_who.scored_more_than', "Scored more than"), cutoff: true}
+                ];
+                if (!hasSubmission) {
+                  options.splice(0, 1)
+                }
                 
                 window.messageStudents({
-                  options: [
-                    {text: I18n.t('students_who.havent_submitted_yet', "Haven't submitted yet")},
-                    {text: I18n.t('students_who.scored_less_than', "Scored less than"), cutoff: true},
-                    {text: I18n.t('students_who.scored_more_than', "Scored more than"), cutoff: true}
-                  ],
+                  options: options,
                   title: title,
                   points_possible: data.points_possible,
                   students: students,
                   callback: function(selected, cutoff, students) {
                     students = $.grep(students, function($student, idx) {
                       var student = $student.user_data;
-                      if(selected == I18n.t('not_submitted_yet', "Haven't submitted yet")) {
+                      if(selected == I18n.t('students_who.not_submitted_yet', "Haven't submitted yet")) {
                         return !student.submitted_at;
-                      } else if(selected == I18n.t('scored_less_than', "Scored less than")) {
+                      } else if (selected == I18n.t("students_who.havent_been_graded", "Haven't been graded")) {
+                        return student.score === null;
+                      } else if(selected == I18n.t('students_who.scored_less_than', "Scored less than")) {
                         return student.score != null && student.score !== "" && cutoff != null && student.score < cutoff;
-                      } else if(selected == I18n.t('scored_more_than', "Scored more than")) {
+                      } else if(selected == I18n.t('students_who.scored_more_than', "Scored more than")) {
                         return student.score != null && student.score !== "" && cutoff != null && student.score > cutoff;
                       }
                     });
@@ -619,7 +660,7 @@ I18n.scoped('gradebook', function(I18n) {
         });
         if($td.hasClass('group_total')) {
           var type = $td.find(".assignment_title").text();
-          addOption('carat-1-w', $.htmlEscape(I18n.t('hide_all_things', 'Hide All %{things}', {'things': type})), function() {
+          addOption('carat-1-w', htmlEscape(I18n.t('hide_all_things', 'Hide All %{things}', {'things': type})), function() {
             var check_id = objectData($td).assignment_group_id;
             $(".outer_assignment_name").each(function() {
               var assignment = objectData($(this));
@@ -1188,7 +1229,7 @@ I18n.scoped('gradebook', function(I18n) {
       });
       
       // handle showing only one section
-      if ($.size(possibleSections) > 1) {  
+      if (_.size(possibleSections) > 1) {
         var sectionToShowLabel = sectionToShow ? 
           I18n.t('showing_section', 'Showing Section: %{section}', {'section': possibleSections[sectionToShow]}) : 
           I18n.t('showing_all_sections', 'Showing All Sections');
@@ -1592,7 +1633,7 @@ I18n.scoped('gradebook', function(I18n) {
               $type.append($link);
             }
             $type.append($("#submission_" + submission.submission_type + "_image").clone().removeAttr('id'));
-            $type.append(" <a href='" + attachment_url + "'>" + $.htmlEscape(I18n.t('links.download_attachment', "Download %{attachment}", {'attachment': attachment.display_name})) + "</a><br/>");
+            $type.append(" <a href='" + attachment_url + "'>" + htmlEscape(I18n.t('links.download_attachment', "Download %{attachment}", {'attachment': attachment.display_name})) + "</a><br/>");
           }
         }
       } else if(submission.submission_type == "online_text_entry") {
@@ -1652,7 +1693,7 @@ I18n.scoped('gradebook', function(I18n) {
       .find(".submission_comments").empty().end()
       .find(".comment_attachments").empty().end()
       .find(".save_buttons,.add_comment").showIf(!readOnlyGradebook).end()
-      .find(".group_comment").showIf(assignment && assignment.group_category).find(":checkbox").attr('checked', true).end().end();
+      .find(".group_comment").showIf(assignment && assignment.group_category).find(":checkbox").attr('checked', false).end().end();
 
     if(readOnlyGradebook) {
       $submission_information.find(".grade_entry").text(grade || "-");
@@ -2123,7 +2164,7 @@ I18n.scoped('gradebook', function(I18n) {
     }
     var letterGrade = "";
     if(grading_scheme) {
-      letterGrade = INST.GradeCalculator.letter_grade(grading_scheme, finalGrade);
+      letterGrade = GradeCalculator.letter_grade(grading_scheme, finalGrade);
     }
     $("#submission_" + student_id + "_final-grade")
       .css('visibility', '')

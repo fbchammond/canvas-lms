@@ -19,6 +19,7 @@
 # @API Users
 class PageViewsController < ApplicationController
   before_filter :require_user, :only => [:index]
+
   def update
     render :json => {:ok => true}
     # page view update happens in log_page_view after_filter
@@ -38,7 +39,7 @@ class PageViewsController < ApplicationController
   def index
     @user = api_find(User, params[:user_id])
     if authorized_action(@user, @current_user, :view_statistics)
-      @page_views = Api.paginate(@user.page_views, self, api_v1_user_page_views_path(:user => @user), :order => 'created_at DESC')
+      @page_views = Api.paginate(@user.page_views, self, api_v1_user_page_views_path(:user => @user), :order => 'created_at DESC', :without_count => :true)
       respond_to do |format|
         format.html do
           if params[:html_xhr]

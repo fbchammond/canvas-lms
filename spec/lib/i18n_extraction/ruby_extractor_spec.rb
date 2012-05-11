@@ -69,6 +69,9 @@ describe I18nExtraction::RubyExtractor do
   context "placeholders" do
     it "should ensure all placeholders have corresponding options" do
       lambda{ extract "t 'foo', 'i have a %{foo}'" }.should raise_error(/interpolation value not provided for :foo/)
+      extract("t 'foo', 'i have a %{foo}', :foo => 'foo'").should == {'foo' => 'i have a %{foo}'}
+      lambda{ extract "jt 'foo', 'i have a %{foo}', '{}'" }.should raise_error(/interpolation value not provided for :foo/)
+      extract("jt 'foo', 'i have a %{foo}', '{foo: a_foo}'").should == {'foo' => 'i have a %{foo}'}
     end
   end
 
@@ -83,6 +86,10 @@ describe I18nExtraction::RubyExtractor do
 
     it "should allow valid pluralization sub-keys" do
       extract("t 'foo', {:one => 'a foo', :other => 'some foos'}, :count => 1").should == {'foo' => {'one' => 'a foo', 'other' => 'some foos'}}
+    end
+
+    it "should complain if not all required pluralization sub-keys are provided" do
+      lambda{ extract("t 'foo', {:other => 'some foos'}, :count => 1") }.should raise_error(/not all required :count sub-key\(s\) provided/)
     end
 
     it "should reject invalid pluralization sub-keys" do

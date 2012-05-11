@@ -28,9 +28,10 @@ class Quiz < ActiveRecord::Base
     :show_correct_answers, :time_limit, :allowed_attempts, :scoring_policy, :quiz_type,
     :lock_at, :unlock_at, :due_at, :access_code, :anonymous_submissions, :assignment_group_id,
     :hide_results, :locked, :ip_filter, :require_lockdown_browser,
-    :require_lockdown_browser_for_results, :context
+    :require_lockdown_browser_for_results, :context, :notify_of_update
 
   attr_readonly :context_id, :context_type
+  attr_accessor :notify_of_update
   
   has_many :quiz_questions, :dependent => :destroy, :order => 'position'
   has_many :quiz_submissions, :dependent => :destroy
@@ -242,8 +243,9 @@ class Quiz < ActiveRecord::Base
         a.assignment_group_id = self.assignment_group_id
         a.saved_by = :quiz
         a.workflow_state = 'available' if a.deleted?
+        a.notify_of_update = @notify_of_update
         a.with_versioning(false) do
-          a.save
+          @notify_of_update ? a.save : a.save_without_broadcasting!
         end
         self.assignment_id = a.id
         Quiz.update_all({:assignment_id => a.id}, {:id => self.id})
@@ -291,7 +293,7 @@ class Quiz < ActiveRecord::Base
           data[:assessment_question_bank_id] = e.assessment_question_bank_id
           data[:questions] = []
         else
-          data[:questions] = e.quiz_questions.map{|q| q.data}
+          data[:questions] = e.quiz_questions.sort_by{|q| q.position}.map{|q| q.data}
         end
         data[:actual_pick_count] = e.actual_pick_count
         res = data
@@ -742,10 +744,11 @@ class Quiz < ActiveRecord::Base
     columns << t('statistics.csv_columns.submitted', 'submitted')
     columns << t('statistics.csv_columns.attempt', 'attempt') if options[:include_all_versions]
     first_question_index = columns.length
-    submissions = self.quiz_submissions.scoped(:include => (options[:include_all_versions] ? [:versions] : [])).select{|s| s.completed? && s.submission_data.is_a?(Array) && self.context.students.map(&:id).include?(s.user_id) }
+    submissions = self.quiz_submissions.scoped(:include => (options[:include_all_versions] ? [:versions] : [])).select { |s| self.context.students.map(&:id).include?(s.user_id) }
     if options[:include_all_versions]
       submissions = submissions.map(&:submitted_versions).flatten
     end
+    submissions = submissions.select{|s| s.completed? && s.submission_data.is_a?(Array) }
     submissions = submissions.sort_by(&:updated_at).reverse
     found_question_ids = {}
     quiz_datas = [quiz_data] + submissions.map(&:quiz_data)
@@ -1082,10 +1085,9 @@ class Quiz < ActiveRecord::Base
 
   def self.process_migration(data, migration, question_data)
     assessments = data['assessments'] ? data['assessments']['assessments'] : []
-    to_import = migration.to_import 'quizzes'
     assessments.each do |assessment|
       migration_id = assessment['migration_id'] || assessment['assessment_id']
-      if migration_id && (!to_import || to_import[migration_id])
+      if migration.import_object?("quizzes", migration_id)
         allow_update = false
         # allow update if we find an existing item based on this migration setting
         if item_id = migration.migration_settings[:quiz_id_to_update]
@@ -1096,6 +1098,7 @@ class Quiz < ActiveRecord::Base
           end
         end
         begin
+          assessment[:migration] = migration
           Quiz.import_from_migration(assessment, migration.context, question_data, nil, allow_update)
         rescue
           migration.add_warning(t('warnings.import_from_migration_failed', "Couldn't import the quiz \"%{quiz_title}\"", :quiz_title => assessment[:title]), $!)
@@ -1154,7 +1157,7 @@ class Quiz < ActiveRecord::Base
               QuizQuestion.import_from_migration(aq, context, item)
             end
           when "question_group"
-            QuizGroup.import_from_migration(question, context, item, question_data, i + 1)
+            QuizGroup.import_from_migration(question, context, item, question_data, i + 1, hash[:migration])
           when "text_only_question"
             qq = item.quiz_questions.new
             qq.question_data = question

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2012 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -59,14 +59,18 @@ describe Course do
       account_admin_user_with_role_changes(:membership_type => 'managesis', :role_changes => {:manage_sis => true})
       @admin2 = @admin
       course_with_teacher(:active_all => true)
+      @designer = user(:active_all => true)
+      @course.enroll_designer(@designer).accept!
 
       @course.grants_right?(@teacher, nil, :delete).should be_true
+      @course.grants_right?(@designer, nil, :delete).should be_true
       @course.grants_right?(@admin1, nil, :delete).should be_true
       @course.grants_right?(@admin2, nil, :delete).should be_false
 
       @course.complete!
 
       @course.grants_right?(@teacher, nil, :delete).should be_true
+      @course.grants_right?(@designer, nil, :delete).should be_true
       @course.grants_right?(@admin1, nil, :delete).should be_true
       @course.grants_right?(@admin2, nil, :delete).should be_false
 
@@ -74,28 +78,86 @@ describe Course do
       @course.save!
 
       @course.grants_right?(@teacher, nil, :delete).should be_false
+      @course.grants_right?(@designer, nil, :delete).should be_false
       @course.grants_right?(@admin1, nil, :delete).should be_true
       @course.grants_right?(@admin2, nil, :delete).should be_true
     end
 
-    it "should grant read_as_admin to date-completed teacher" do
-      course_with_teacher(:active_all => 1)
+    def make_date_completed
       @enrollment.start_at = 4.days.ago
       @enrollment.end_at = 2.days.ago
       @enrollment.save!
       @enrollment.state_based_on_date.should == :completed
-      @course.prior_enrollments.should == []
-      @course.grants_right?(@teacher, nil, :read_as_admin).should be_true
     end
 
-    it "should grant read_grades to date-completed student" do
-      course_with_student(:active_all => 1)
+    it "should grant read_as_admin and read_forum to date-completed teacher" do
+      course_with_teacher(:active_all => 1)
+      make_date_completed
+      @course.prior_enrollments.should == []
+      @course.grants_right?(@teacher, nil, :read_as_admin).should be_true
+      @course.grants_right?(@teacher, nil, :read_forum).should be_true
+    end
+
+    it "should grant read_as_admin and read to date-completed teacher of unpublished course" do
+      course_with_teacher(:active_all => 1)
+      @course.update_attribute(:workflow_state, 'claimed')
+      make_date_completed
+      @course.prior_enrollments.should == []
+      @course.grants_right?(@teacher, nil, :read_as_admin).should be_true
+      @course.grants_right?(@teacher, nil, :read).should be_true
+    end
+
+    it "should grant read_as_admin, read, manage, and update to date-active designer" do
+      course(:active_all => 1)
+      @designer = user(:active_all => 1)
+      @course.enroll_designer(@designer).accept!
+      @course.grants_right?(@designer, nil, :read_as_admin).should be_true
+      @course.grants_right?(@designer, nil, :read).should be_true
+      @course.grants_right?(@designer, nil, :manage).should be_true
+      @course.grants_right?(@designer, nil, :update).should be_true
+    end
+
+    it "should grant read_as_admin, read_roster, and read_prior_roster to date-completed designer" do
+      course(:active_all => 1)
+      @designer = user(:active_all => 1)
+      @enrollment = @course.enroll_designer(@designer)
+      @enrollment.accept!
       @enrollment.start_at = 4.days.ago
       @enrollment.end_at = 2.days.ago
       @enrollment.save!
       @enrollment.state_based_on_date.should == :completed
       @course.prior_enrollments.should == []
+      @course.grants_right?(@designer, nil, :read_as_admin).should be_true
+      @course.grants_right?(@designer, nil, :read_roster).should be_true
+      @course.grants_right?(@designer, nil, :read_prior_roster).should be_true
+    end
+
+    it "should grant read_as_admin and read to date-completed designer of unpublished course" do
+      course(:active_all => 1)
+      @designer = user(:active_all => 1)
+      @enrollment = @course.enroll_designer(@designer)
+      @enrollment.accept!
+      @course.update_attribute(:workflow_state, 'claimed')
+      make_date_completed
+      @course.prior_enrollments.should == []
+      @course.grants_right?(@designer, nil, :read_as_admin).should be_true
+      @course.grants_right?(@designer, nil, :read).should be_true
+    end
+
+    it "should not grant read_user_notes or view_all_grades to designer" do
+      course(:active_all => 1)
+      @designer = user(:active_all => 1)
+      @course.enroll_designer(@designer).accept!
+      @course.grants_right?(@designer, nil, :read_user_notes).should be_false
+      @course.grants_right?(@designer, nil, :view_all_grades).should be_false
+    end
+
+    it "should grant read_grades read_forum to date-completed student" do
+      course_with_student(:active_all => 1)
+      make_date_completed
+      @course.prior_enrollments.should == []
       @course.grants_right?(@student, nil, :read_grades).should be_true
+      @course.grants_right?(@student, nil, :read_forum).should be_true
     end
   end
 
@@ -227,6 +289,27 @@ describe Course do
     users = @course.paginate_users_not_in_groups([], 1)
     users.map{ |u| u.id }.should == [@user2.id, @user1.id, @user3.id]
   end
+
+  context "events_for" do
+    it "should return appropriate events" do
+      course_with_teacher(:active_all => true)
+      event1 = @course.calendar_events.create
+      event2 = @course.calendar_events.build :child_event_data => [{:start_at => "2012-01-01", :end_at => "2012-01-02", :context_code => @course.default_section.asset_string}]
+      event2.updating_user = @teacher
+      event2.save!
+      event3 = event2.child_events.first
+      appointment_group = @course.appointment_groups.create
+      appointment_group.publish!
+      assignment = @course.assignments.create!
+
+      events = @course.events_for(@teacher)
+      events.should include event1
+      events.should_not include event2
+      events.should include event3
+      events.should include appointment_group
+      events.should include assignment
+    end
+  end
 end
 
 describe Course, "enroll" do
@@ -255,6 +338,13 @@ describe Course, "enroll" do
     @te = @course.teacher_enrollments.first
     @te.user_id.should eql(@user.id)
     @te.course_id.should eql(@course.id)
+  end
+  
+  it "should be able to enroll a designer" do
+    @course.enroll_designer(@user)
+    @de = @course.designer_enrollments.first
+    @de.user_id.should eql(@user.id)
+    @de.course_id.should eql(@course.id)
   end
   
   it "should enroll a student as creation_pending if the course isn't published" do
@@ -486,6 +576,53 @@ describe Course, "gradebook_to_csv" do
     rows = FasterCSV.parse(csv)
     rows.length.should == 4
   end
+
+  it "should include muted if any assignments are muted" do
+      course(:active_all => true)
+      @user1 = user_with_pseudonym(:active_all => true, :name => 'Brian', :username => 'brianp@instructure.com')
+      student_in_course(:user => @user1)
+      @user2 = user_with_pseudonym(:active_all => true, :name => 'Cody', :username => 'cody@instructure.com')
+      student_in_course(:user => @user2)
+      @user3 = user(:active_all => true, :name => 'JT')
+      student_in_course(:user => @user3)
+      @user1.pseudonym.sis_user_id = "SISUSERID"
+      @user1.pseudonym.save!
+      @group = @course.assignment_groups.create!(:name => "Some Assignment Group", :group_weight => 100)
+      @assignment = @course.assignments.create!(:title => "Some Assignment", :points_possible => 10, :assignment_group => @group)
+      @assignment.muted = true
+      @assignment.save!
+      @assignment.grade_student(@user1, :grade => "10")
+      @assignment.grade_student(@user2, :grade => "9")
+      @assignment.grade_student(@user3, :grade => "9")
+      @assignment2 = @course.assignments.create!(:title => "Some Assignment 2", :points_possible => 10, :assignment_group => @group)
+      @course.recompute_student_scores
+      @course.reload
+
+      csv = @course.gradebook_to_csv(:include_sis_id => true)
+      csv.should_not be_nil
+      rows = FasterCSV.parse(csv)
+      rows.length.should == 6
+      rows[0][1].should == 'ID'
+      rows[0][2].should == 'SIS User ID'
+      rows[0][3].should == 'SIS Login ID'
+      rows[0][4].should == 'Section'
+      rows[1][0].should == 'Muted assignments do not impact Current and Final score columns'
+      rows[1][5].should == 'Muted'
+      rows[1][6].should == ''
+      rows[2][2].should == ''
+      rows[2][3].should == ''
+      rows[2][4].should == ''
+      rows[2][-1].should == '(read only)'
+      rows[3][1].should == @user1.id.to_s
+      rows[3][2].should == 'SISUSERID'
+      rows[3][3].should == @user1.pseudonym.unique_id
+      rows[4][1].should == @user2.id.to_s
+      rows[4][2].should be_nil
+      rows[4][3].should == @user2.pseudonym.unique_id
+      rows[5][1].should == @user3.id.to_s
+      rows[5][2].should be_nil
+      rows[5][3].should be_nil
+    end
 end
 
 describe Course, "merge_into" do
@@ -662,6 +799,48 @@ describe Course, "tabs_available" do
     tab_ids = @course.tabs_available(@user).map{|t| t[:id] }
     tab_ids.should be_include(Course::TAB_GRADES)
   end
+
+  it "should show discussion tab for observers by default" do
+    course_with_observer
+    tab_ids = @course.tabs_available(@user).map{|t| t[:id] }
+    tab_ids.should be_include(Course::TAB_DISCUSSIONS)
+  end
+
+  it "should not show discussion tab for observers without read_forum" do
+    course_with_observer
+    RoleOverride.create!(:context => @course.account, :permission => 'read_forum',
+                         :enrollment_type => "ObserverEnrollment", :enabled => false)
+    tab_ids = @course.tabs_available(@user).map{|t| t[:id] }
+    tab_ids.should_not be_include(Course::TAB_DISCUSSIONS)
+  end
+
+  it "should include tabs for active external tools" do
+    course_with_student(:active_all => true)
+
+    tools = []
+    2.times do |n|
+      tools << @course.context_external_tools.create!(
+        :url => "http://example.com/ims/lti",
+        :consumer_key => "asdf",
+        :shared_secret => "hjkl",
+        :name => "external tool #{n+1}",
+        :course_navigation => {
+          :text => "blah",
+          :url =>  "http://example.com/ims/lti",
+          :default => false,
+        }
+      )
+    end
+    t1, t2 = tools
+
+    t2.workflow_state = "deleted"
+    t2.save!
+
+    tabs = @course.tabs_available.map { |tab| tab[:id] }
+
+    tabs.should be_include(t1.asset_string)
+    tabs.should_not be_include(t2.asset_string)
+  end
 end
 
 describe Course, "backup" do
@@ -688,152 +867,6 @@ describe Course, "backup" do
   end
     
   context "merge_into_course" do
-    it "should merge content into another course" do
-      course_model
-      attachment_model
-      @old_attachment = @attachment
-      @old_topic = @course.discussion_topics.create!(:title => "some topic", :message => "<a href='/courses/#{@course.id}/files/#{@attachment.id}/download'>download this file</a>")
-      html = @old_topic.message
-      html.should match(Regexp.new("/courses/#{@course.id}/files/#{@attachment.id}/download"))
-      @old_course = @course
-      @new_course = course_model
-      @new_course.merge_into_course(@old_course, :everything => true)
-      @old_attachment.reload
-      @old_attachment.cloned_item_id.should_not be_nil
-      @new_attachment = @new_course.attachments.find_by_cloned_item_id(@old_attachment.cloned_item_id)
-      @new_attachment.should_not be_nil
-      @old_topic.reload
-      @old_topic.cloned_item_id.should_not be_nil
-      @new_topic = @new_course.discussion_topics.find_by_cloned_item_id(@old_topic.cloned_item_id)
-      @new_topic.should_not be_nil
-      html = @new_topic.message
-      html.should match(Regexp.new("/courses/#{@new_course.id}/files/#{@new_attachment.id}/download"))
-    end
-
-    it "should merge locked files and retain correct html links" do
-      course_model
-      attachment_model
-      @old_attachment = @attachment
-      @old_attachment.update_attribute(:hidden, true)
-      @old_attachment.reload.should be_hidden
-      @old_topic = @course.discussion_topics.create!(:title => "some topic", :message => "<img src='/courses/#{@course.id}/files/#{@attachment.id}/preview'>")
-      html = @old_topic.message
-      html.should match(Regexp.new("/courses/#{@course.id}/files/#{@attachment.id}/preview"))
-      @old_course = @course
-      @new_course = course_model
-      @new_course.merge_into_course(@old_course, :everything => true)
-      @old_attachment.reload
-      @old_attachment.cloned_item_id.should_not be_nil
-      @new_attachment = @new_course.attachments.find_by_cloned_item_id(@old_attachment.cloned_item_id)
-      @new_attachment.should_not be_nil
-      @old_topic.reload
-      @old_topic.cloned_item_id.should_not be_nil
-      @new_topic = @new_course.discussion_topics.find_by_cloned_item_id(@old_topic.cloned_item_id)
-      @new_topic.should_not be_nil
-      html = @new_topic.message
-      html.should match(Regexp.new("/courses/#{@new_course.id}/files/#{@new_attachment.id}/preview"))
-    end
-
-    it "should merge only selected content into another course" do
-      course_model
-      attachment_model
-      @old_attachment = @attachment
-      @old_topic = @course.discussion_topics.create!(:title => "some topic", :message => "<a href='/courses/#{@course.id}/files/#{@attachment.id}/download'>download this file</a>")
-      html = @old_topic.message
-      html.should match(Regexp.new("/courses/#{@course.id}/files/#{@attachment.id}/download"))
-      @old_course = @course
-      @new_course = course_model
-      @new_course.merge_into_course(@old_course, :all_files => true)
-      @old_attachment.reload
-      @old_attachment.cloned_item_id.should_not be_nil
-      @new_attachment = @new_course.attachments.find_by_cloned_item_id(@old_attachment.cloned_item_id)
-      @new_attachment.should_not be_nil
-      @old_topic.reload
-      @old_topic.cloned_item_id.should be_nil
-      @new_course.discussion_topics.count.should eql(0)
-    end
-
-    it "should migrate syllabus links on copy" do
-      course_model
-      @old_topic = @course.discussion_topics.create!(:title => "some topic", :message => "some text")
-      @old_course = @course
-      @old_course.syllabus_body = "<a href='/courses/#{@old_course.id}/discussion_topics/#{@old_topic.id}'>link</a>"
-      @old_course.save!
-      @new_course = course_model
-      @new_course.merge_into_course(@old_course, :course_settings => true, :all_topics => true)
-      @old_topic.reload
-      @new_topic = @new_course.discussion_topics.find_by_cloned_item_id(@old_topic.cloned_item_id)
-      @new_topic.should_not be_nil
-      @old_topic.cloned_item_id.should == @new_topic.cloned_item_id
-      @new_course.reload
-      @new_course.syllabus_body.should match(/\/courses\/#{@new_course.id}\/discussion_topics\/#{@new_topic.id}/)
-    end
-
-    it "should copy external tools" do
-      course_model
-      copy_from = @course
-      tool_from = copy_from.context_external_tools.create!(:name => "new tool", :consumer_key => "key", :shared_secret => "secret", :domain => 'example.com', :custom_fields => {'a' => '1', 'b' => '2'})
-      tool_from.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
-      tool_from.save
-      
-      course_model
-      copy_to = @course
-      copy_to.merge_into_course(copy_from, :course_settings => true, tool_from.asset_string.to_sym => true)
-      copy_to.context_external_tools.count.should == 1
-      
-      tool_to = copy_to.context_external_tools.first
-      tool_to.name.should == tool_from.name
-      tool_to.consumer_key.should == tool_from.consumer_key
-      tool_to.settings.should == tool_from.settings
-      tool_to.has_course_navigation.should == true
-    end
-
-    it "should not duplicate external tools used in modules" do
-      course_model
-      copy_from = @course
-      tool_from = copy_from.context_external_tools.create!(:name => "new tool", :consumer_key => "key", :shared_secret => "secret", :domain => 'example.com', :custom_fields => {'a' => '1', 'b' => '2'})
-      tool_from.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
-      tool_from.save
-      
-      mod1 = copy_from.context_modules.create!(:name => "some module")
-      tag = mod1.add_item({:type => 'context_external_tool', 
-                           :title => 'Example URL', 
-                           :url => "http://www.example.com",
-                           :new_tab => true})
-      tag.save
-      
-      course_model
-      copy_to = @course
-      copy_to.merge_into_course(copy_from, :course_settings => true, :all_external_tools => true, :all_modules => true)
-      copy_to.context_external_tools.count.should == 1
-      
-      tool_to = copy_to.context_external_tools.first
-      tool_to.name.should == tool_from.name
-      tool_to.consumer_key.should == tool_from.consumer_key
-      tool_to.settings.should == tool_from.settings
-      tool_to.has_course_navigation.should == true
-    end
-
-    it "should copy external tool assignments" do
-      course_model
-      copy_from = @course
-      assignment_model(:course => copy_from, :points_possible => 40, :submission_types => 'external_tool', :grading_type => 'points')
-      tag_from = @assignment.build_external_tool_tag(:url => "http://example.com/one", :new_tab => true)
-      tag_from.content_type = 'ContextExternalTool'
-      tag_from.save!
-
-      course_model
-      copy_to = @course
-      copy_to.merge_into_course(copy_from, :course_settings => true, :all_assignments => true, :all_external_tools => true)
-
-      asmnt_2 = copy_to.assignments.first
-      asmnt_2.submission_types.should == "external_tool"
-      asmnt_2.external_tool_tag.should_not be_nil
-      tag_to = asmnt_2.external_tool_tag
-      tag_to.content_type.should == tag_from.content_type
-      tag_to.url.should == tag_from.url
-      tag_to.new_tab.should == tag_from.new_tab
-    end
 
     it "should merge implied content into another course" do
       course_model
@@ -854,21 +887,6 @@ describe Course, "backup" do
       @new_topic = @new_course.discussion_topics.find_by_cloned_item_id(@old_topic.cloned_item_id)
       @new_topic.should_not be_nil
       html = @new_topic.message
-      html.should match(Regexp.new("/courses/#{@new_course.id}/files/#{@new_attachment.id}/download"))
-    end
-
-    it "should translate links to the new context" do
-      course_model
-      attachment_model
-      @old_attachment = @attachment
-      @old_topic = @course.discussion_topics.create!(:title => "some topic", :message => "<a href='/courses/#{@course.id}/files/#{@attachment.id}/download'>download this file</a>")
-      html = @old_topic.message
-      html.should match(Regexp.new("/courses/#{@course.id}/files/#{@attachment.id}/download"))
-      @old_course = @course
-      @new_course = course_model
-      @new_attachment = @old_attachment.clone_for(@new_course)
-      @new_attachment.save!
-      html = Course.migrate_content_links(@old_topic.message, @old_course, @new_course)
       html.should match(Regexp.new("/courses/#{@new_course.id}/files/#{@new_attachment.id}/download"))
     end
 
@@ -912,59 +930,6 @@ describe Course, "backup" do
       @new_attachment.should_not be_nil
       html.should match(Regexp.new("/courses/#{@new_course.id}/files/#{@new_attachment.id}/download"))
     end
-
-    it "should assign the correct parent folder when the parent folder has already been created" do
-      old_course = course_model
-      folder = Folder.root_folders(@course).first
-      folder = folder.sub_folders.create!(:context => @course, :name => 'folder_1')
-      attachment_model(:folder => folder, :filename => "dummy.txt")
-      folder = folder.sub_folders.create!(:context => @course, :name => 'folder_2')
-      folder = folder.sub_folders.create!(:context => @course, :name => 'folder_3')
-      old_attachment = attachment_model(:folder => folder, :filename => "merge.test")
-
-      new_course = course_model
-
-      new_course.merge_into_course(old_course, :everything => true)
-      old_attachment.reload
-      old_attachment.cloned_item_id.should_not be_nil
-      new_attachment = new_course.attachments.find_by_cloned_item_id(old_attachment.cloned_item_id)
-      new_attachment.should_not be_nil
-      new_attachment.full_path.should == "course files/folder_1/folder_2/folder_3/merge.test"
-      folder.reload
-      new_attachment.folder.cloned_item_id.should == folder.cloned_item_id
-    end
-
-    it "should perform day substitutions" do
-      old_course = course_model
-      old_course.assert_assignment_group
-      today = Time.now.utc
-      @assignment = old_course.assignments.build
-      @assignment.due_at = today
-      @assignment.workflow_state = 'published'
-      @assignment.save!
-      old_course.reload
-
-      new_course = course_model
-
-      new_course.merge_into_course(old_course, :everything => true, :shift_dates => true, :day_substitutions => { today.wday.to_s => (today.wday + 1).to_s})
-      new_course.reload
-      new_assignment = new_course.assignments.first
-      # new_assignment.due_at.should == today + 1.day does not work
-      (new_assignment.due_at.to_i - (today + 1.day).to_i).abs.should < 60
-    end
-
-    it "should copy a quiz when the quiz is not selected but the quiz's assignment is" do
-      course_model
-      @quiz = @course.quizzes.create!
-      @quiz.did_edit
-      @quiz.offer!
-      @quiz.assignment.should_not be_nil
-      @old_course = @course
-      @new_course = course_model
-      @new_course.merge_into_course(@old_course, "assignment_#{@quiz.assignment_id}" => true)
-      @new_quiz = @new_course.quizzes.first
-      @new_quiz.should_not be_nil
-    end
   end
   
   it "should not cross learning outcomes with learning outcome groups in the association" do
@@ -1003,61 +968,6 @@ describe Course, "backup" do
     course.has_outcomes.should == false
   end
 
-  it "should copy learning outcomes into the new course" do
-    old_course = course_model
-    lo = old_course.learning_outcomes.new
-    lo.context = old_course
-    lo.short_description = "Lone outcome"
-    lo.description = "<p>Descriptions are boring</p>"
-    lo.workflow_state = 'active'
-    lo.data = {:rubric_criterion=>{:mastery_points=>3, :ratings=>[{:description=>"Exceeds Expectations", :points=>5}, {:description=>"Meets Expectations", :points=>3}, {:description=>"Does Not Meet Expectations", :points=>0}], :description=>"First outcome", :points_possible=>5}}
-    lo.save!
-    
-    old_root = LearningOutcomeGroup.default_for(old_course)
-    old_root.add_item(lo)
-    
-    lo_g = old_course.learning_outcome_groups.new
-    lo_g.context = old_course
-    lo_g.title = "Lone outcome group"
-    lo_g.description = "<p>Groupage</p>"
-    lo_g.save!
-    old_root.add_item(lo_g)
-    
-    lo2 = old_course.learning_outcomes.new
-    lo2.context = old_course
-    lo2.short_description = "outcome in group"
-    lo2.workflow_state = 'active'
-    lo2.data = {:rubric_criterion=>{:mastery_points=>2, :ratings=>[{:description=>"e", :points=>50}, {:description=>"me", :points=>2}, {:description=>"Does Not Meet Expectations", :points=>0.5}], :description=>"First outcome", :points_possible=>5}}
-    lo2.save!
-    lo_g.add_item(lo2)
-    old_root.reload
-    
-    # copy outcomes into new course
-    new_course = course_model
-    new_root = LearningOutcomeGroup.default_for(new_course)
-    new_course.merge_into_course(old_course, :all_outcomes => true)
-    
-    new_course.learning_outcomes.count.should == old_course.learning_outcomes.count
-    new_course.learning_outcome_groups.count.should == old_course.learning_outcome_groups.count
-    new_root.sorted_content.count.should == old_root.sorted_content.count
-    
-    lo_2 = new_root.sorted_content.first
-    lo_2.short_description.should == lo.short_description
-    lo_2.description.should == lo.description
-    lo_2.data.should == lo.data
-    
-    lo_g_2 = new_root.sorted_content.last
-    lo_g_2.title.should == lo_g.title
-    lo_g_2.description.should == lo_g.description
-    lo_g_2.sorted_content.length.should == 1
-    lo_g_2.root_learning_outcome_group_id.should == new_root.id
-    lo_g_2.learning_outcome_group_id.should == new_root.id
-    
-    lo_2 = lo_g_2.sorted_content.first
-    lo_2.short_description.should == lo2.short_description
-    lo_2.description.should == lo2.description
-    lo_2.data.should == lo2.data
-  end
 end
 
 def course_to_backup
@@ -2410,6 +2320,14 @@ describe Course, "manageable_by_user" do
     Course.manageable_by_user(user.id).map{ |c| c.id }.should be_include(course.id)
   end
 
+  it "should include courses the user is actively enrolled in as a designer" do
+    course = Course.create
+    user = user_with_pseudonym
+    course.enroll_designer(user).accept
+
+    Course.manageable_by_user(user.id).map{ |c| c.id }.should be_include(course.id)
+  end
+
   it "should not include courses the user is enrolled in when the enrollment is non-active" do
     course = Course.create
     user = user_with_pseudonym
@@ -2483,7 +2401,7 @@ describe Course, "conclusions" do
     @course.grants_rights?(@user, nil, :read, :participate_as_student).should == {:read => true, :participate_as_student => false}
   end
 
-  context "appointment cancellation" do
+  context "appointment cancelation" do
     before do
       course_with_student(:active_all => true)
       @ag = @course.appointment_groups.create(:title => "test", :new_appointments => [['2010-01-01 13:00:00', '2010-01-01 14:00:00'], ["#{Time.now.year + 1}-01-01 13:00:00", "#{Time.now.year + 1}-01-01 14:00:00"]])
@@ -2617,6 +2535,53 @@ describe Course, "section_visibility" do
       html.should == orig
     end
   end
+
+  it "should be marshal-able" do
+    c = Course.new(:name => 'c1')
+    Marshal.dump(c)
+    c.save!
+    Marshal.dump(c)
+  end
+end
+
+describe Course, ".import_from_migration" do
+  before do
+    attachment_model(:uploaded_data => stub_file_data('test.m4v', 'asdf', 'video/mp4'))
+    course_with_teacher
+  end
+
+  it "should wait for media objects on canvas cartridge import" do
+    migration = mock(:migration_settings => { 'worker_class' => 'CC::Importer::Canvas::Converter' }.with_indifferent_access)
+    MediaObject.expects(:add_media_files).with([@attachment], true)
+    @course.import_media_objects([@attachment], migration)
+  end
+
+  it "should not wait for media objects on other import" do
+    migration = mock(:migration_settings => { 'worker_class' => 'CC::Importer::Standard::Converter' }.with_indifferent_access)
+    MediaObject.expects(:add_media_files).with([@attachment], false)
+    @course.import_media_objects([@attachment], migration)
+  end
+
+  it "should know when it has open course imports" do
+    # no course imports
+    @course.should_not have_open_course_imports
+
+    # created course import
+    @course.course_imports.create!
+    @course.should have_open_course_imports
+
+    # started course import
+    @course.course_imports.first.update_attribute(:workflow_state, 'started')
+    @course.should have_open_course_imports
+
+    # completed course import
+    @course.course_imports.first.update_attribute(:workflow_state, 'completed')
+    @course.should_not have_open_course_imports
+
+    # failed course import
+    @course.course_imports.first.update_attribute(:workflow_state, 'failed')
+    @course.should_not have_open_course_imports
+  end
 end
 
 describe Course, "enrollments" do
@@ -2633,5 +2598,135 @@ describe Course, "enrollments" do
     @course.root_account = a2
     @course.save!
     @course.student_enrollments(true).map(&:root_account_id).should eql [a2.id]
+  end
+end
+
+describe Course, "user_is_teacher?" do
+  it "should be true for teachers" do
+    course = Course.create
+    teacher = user_with_pseudonym
+    course.enroll_teacher(teacher).accept
+    course.user_is_teacher?(teacher).should be_true
+  end
+
+  it "should be false for designers" do
+    course = Course.create
+    ta = user_with_pseudonym
+    course.enroll_ta(ta).accept
+    course.user_is_teacher?(ta).should be_true
+  end
+
+  it "should be false for designers" do
+    course = Course.create
+    designer = user_with_pseudonym
+    course.enroll_designer(designer).accept
+    course.user_is_teacher?(designer).should be_false
+  end
+end
+
+describe Course, "user_has_been_teacher?" do
+  it "should be true for teachers, past or present" do
+    e = course_with_teacher(:active_all => true)
+    @course.user_has_been_teacher?(@teacher).should be_true
+
+    e.conclude
+    e.reload.workflow_state.should == "completed"
+    @course.user_has_been_teacher?(@teacher).should be_true
+
+    @course.complete
+    @course.user_has_been_teacher?(@teacher).should be_true
+  end
+end
+
+describe Course, "user_has_been_student?" do
+  it "should be true for students, past or present" do
+    e = course_with_student(:active_all => true)
+    @course.user_has_been_student?(@student).should be_true
+
+    e.conclude
+    e.reload.workflow_state.should == "completed"
+    @course.user_has_been_student?(@student).should be_true
+
+    @course.complete
+    @course.user_has_been_student?(@student).should be_true
+  end
+end
+
+describe Course, "student_view_student" do
+  before(:each) do
+    course_with_teacher(:active_all => true)
+  end
+
+  it "should create and return the student view student for a course" do
+    expect { @course.student_view_student }.to change(User, :count).by(1)
+  end
+
+  it "should find and return the student view student on successive calls" do
+    @course.student_view_student
+    expect { @course.student_view_student }.to change(User, :count).by(0)
+  end
+
+  it "should create enrollments for each section" do
+    @section2 = @course.course_sections.create!
+    expect { @fake_student = @course.student_view_student }.to change(Enrollment, :count).by(2)
+    @fake_student.enrollments.all?{|e| e.fake_student?}.should be_true
+  end
+
+  it "should sync enrollments after being created" do
+    @course.student_view_student
+    @section2 = @course.course_sections.create!
+    expect { @course.student_view_student }.to change(Enrollment, :count).by(1)
+  end
+
+  it "should create a pseudonym for the fake student" do
+    expect { @fake_student = @course.student_view_student }.to change(Pseudonym, :count).by(1)
+    @fake_student.pseudonyms.should_not be_empty
+  end
+
+  it "should allow two different student view users for two different courses" do
+    @course1 = @course
+    @teacher1 = @teacher
+    course_with_teacher(:active_all => true)
+    @course2 = @course
+    @teacher2 = @teacher
+
+    @fake_student1 = @course1.student_view_student
+    @fake_student2 = @course2.student_view_student
+
+    @fake_student1.id.should_not eql @fake_student2.id
+    @fake_student1.pseudonym.id.should_not eql @fake_student2.pseudonym.id
+  end
+end
+
+describe Course do
+  describe "user_list_search_mode_for" do
+    it "should be open for anyone if open registration is turned on" do
+      account = Account.default
+      account.settings = { :open_registration => true }
+      account.save!
+      course
+      @course.user_list_search_mode_for(nil).should == :open
+      @course.user_list_search_mode_for(user).should == :open
+    end
+
+    it "should be preferred for account admins" do
+      account = Account.default
+      course
+      @course.user_list_search_mode_for(nil).should == :closed
+      @course.user_list_search_mode_for(user).should == :closed
+      user
+      account.add_user(@user)
+      @course.user_list_search_mode_for(@user).should == :preferred
+    end
+
+    it "should be preferred if delegated authentication is configured" do
+      account = Account.default
+      account.settings = { :open_registration => true }
+      account.account_authorization_configs.create!(:auth_type => 'cas')
+      account.save!
+      course
+      @course.user_list_search_mode_for(nil).should == :preferred
+      @course.user_list_search_mode_for(user).should == :preferred
+    end
   end
 end

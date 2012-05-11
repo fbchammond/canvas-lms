@@ -1,6 +1,6 @@
 require File.expand_path(File.dirname(__FILE__) + '/common')
 
-shared_examples_for "grading standards selenium tests" do
+describe "grading standards" do
   it_should_behave_like "in-process server selenium tests"
   
   it "should allow creating/deleting grading standards" do
@@ -32,6 +32,7 @@ shared_examples_for "grading standards selenium tests" do
   end
   
   it "should allow setting a grading standard for an assignment" do
+    skip_if_ie("Out of memory")
     course_with_teacher_logged_in
     
     @assignment = @course.assignments.create!(:title => "new assignment")
@@ -77,7 +78,7 @@ shared_examples_for "grading standards selenium tests" do
     driver.find_element(:css, ".edit_course_link").click
     form = driver.find_element(:css, "#course_form")
     form.find_element(:css, "#course_grading_standard_enabled").click
-    form.find_element(:css, "#course_grading_standard_enabled").attribute(:checked).should eql('true')
+    is_checked('#course_form #course_grading_standard_enabled').should be_true
     
     form.find_element(:css, ".edit_letter_grades_link").displayed?.should be_true
     form.find_element(:css, ".edit_letter_grades_link").click
@@ -110,7 +111,7 @@ shared_examples_for "grading standards selenium tests" do
     driver.switch_to.default_content
     keep_trying_until { !dialog.displayed? }
     
-    form.find_element(:css, "#course_grading_standard_enabled").attribute(:checked).should be_nil
+    is_checked('#course_form #course_grading_standard_enabled').should be_false
   end
 
   it "should extend ranges to fractional values at the boundary with the next range" do
@@ -122,8 +123,11 @@ shared_examples_for "grading standards selenium tests" do
     @assignment = @course.assignments.create!(:title => "new assignment", :points_possible => 1000, :assignment_group => @course.assignment_groups.first, :grading_type => 'points')
     @assignment.grade_student(student, :grade => 899)
     get "/courses/#{@course.id}/grades/#{student.id}"
+    grading_scheme = driver.execute_script "return grading_scheme"
+    grading_scheme[2][0].should == 'B+'
+    driver.execute_script("return INST.GradeCalculator.letter_grade(grading_scheme, 89.9)").should == 'B+'
     driver.find_element(:css, '#right-side .final_grade .grade').text.should == '89.9'
-    driver.find_element(:css, '#right-side .final_letter_grade .grade').text.should == 'B+'
+    driver.find_element(:css, '#final_letter_grade_text').text.should == 'B+'
   end
 
   it "should allow editing the standard again without reloading the page" do
@@ -140,9 +144,5 @@ shared_examples_for "grading standards selenium tests" do
     wait_for_ajax_requests
     @standard.reload.data.length.should == 3
   end
-end
-
-describe "grading standards Windows-Firefox-Tests" do
-  it_should_behave_like "grading standards selenium tests"
 end
 

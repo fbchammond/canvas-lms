@@ -51,6 +51,13 @@ module Canvas
     @redis_enabled ||= Setting.from_config('redis').present?
   end
 
+  def self.reconnect_redis
+    @redis = nil
+    if Rails.cache && Rails.cache.respond_to?(:reconnect)
+      Rails.cache.reconnect
+    end
+  end
+
   def self.cache_store_config
     cache_store_config = {
       'cache_store' => 'mem_cache_store',
@@ -106,5 +113,25 @@ module Canvas
       # TODO: use ps to grab this
       [ 0, 0 ]
     end
+  end
+
+  # can be called by plugins to allow reloading of that plugin in dev mode
+  # pass in the path to the plugin directory
+  # e.g., in the vendor/plugins/<plugin_name>/init.rb:
+  #     Canvas.reloadable_plugin(File.dirname(__FILE__))
+  def self.reloadable_plugin(dirname)
+    return unless Rails.env.development?
+    base_path = File.expand_path(dirname)
+    ActiveSupport::Dependencies.load_once_paths.reject! { |p|
+      p[0, base_path.length] == base_path
+    }
+  end
+
+  def self.revision
+    return @revision unless @revision.nil?
+    if File.file?(Rails.root+"VERSION")
+      @revision = File.readlines(Rails.root+"VERSION").first.try(:strip)
+    end
+    @revision ||= false
   end
 end

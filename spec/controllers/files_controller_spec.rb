@@ -268,7 +268,7 @@ describe FilesController do
       @file.save!
       
       # turn off google docs previews for this acccount so we can isolate testing just scribd.
-      account = @module.context.account
+      account = Account.default
       account.disable_service(:google_docs_previews)
       account.save!
       
@@ -410,16 +410,21 @@ describe FilesController do
   
   describe "POST 'create_pending'" do
     it "should require authorization" do
-      course_with_teacher(:active_all => true)
+      course(:active_course => true)
+      user(:acitve_user => true)
+      user_session(user)
       post 'create_pending', {:attachment => {:context_code => @course.asset_string}}
       assert_unauthorized
     end
+
+    it "should require a pseudonym" do
+      course_with_teacher(:active_all => true)
+      post 'create_pending', {:attachment => {:context_code => @course.asset_string}}
+      response.should redirect_to login_url
+    end
     
     it "should create file placeholder (in local mode)" do
-      Attachment.stubs(:s3_storage?).returns(false)
-      Attachment.stubs(:local_storage?).returns(true)
-      Attachment.local_storage?.should eql(true)
-      Attachment.s3_storage?.should eql(false)
+      local_storage!
       course_with_teacher_logged_in(:active_all => true)
       post 'create_pending', {:attachment => {
         :context_code => @course.asset_string,
@@ -438,15 +443,7 @@ describe FilesController do
     end
     
     it "should create file placeholder (in s3 mode)" do
-      Attachment.stubs(:s3_storage?).returns(true)
-      Attachment.stubs(:local_storage?).returns(false)
-      conn = mock('AWS::S3::Connection')
-      AWS::S3::Base.stubs(:connection).returns(conn)
-      conn.stubs(:access_key_id).returns('stub_id')
-      conn.stubs(:secret_access_key).returns('stub_key')
-
-      Attachment.s3_storage?.should eql(true)
-      Attachment.local_storage?.should eql(false)
+      s3_storage!
       course_with_teacher_logged_in(:active_all => true)
       post 'create_pending', {:attachment => {
         :context_code => @course.asset_string,
@@ -465,15 +462,7 @@ describe FilesController do
     end
     
     it "should not allow going over quota for file uploads" do
-      Attachment.stubs(:s3_storage?).returns(true)
-      Attachment.stubs(:local_storage?).returns(false)
-      conn = mock('AWS::S3::Connection')
-      AWS::S3::Base.stubs(:connection).returns(conn)
-      conn.stubs(:access_key_id).returns('stub_id')
-      conn.stubs(:secret_access_key).returns('stub_key')
-
-      Attachment.s3_storage?.should eql(true)
-      Attachment.local_storage?.should eql(false)
+      s3_storage!
       course_with_student_logged_in(:active_all => true)
       Setting.set('user_default_quota', -1)
       post 'create_pending', {:attachment => {
@@ -485,15 +474,7 @@ describe FilesController do
     end
     
     it "should allow going over quota for homework submissions" do
-      Attachment.stubs(:s3_storage?).returns(true)
-      Attachment.stubs(:local_storage?).returns(false)
-      conn = mock('AWS::S3::Connection')
-      AWS::S3::Base.stubs(:connection).returns(conn)
-      conn.stubs(:access_key_id).returns('stub_id')
-      conn.stubs(:secret_access_key).returns('stub_key')
-
-      Attachment.s3_storage?.should eql(true)
-      Attachment.local_storage?.should eql(false)
+      s3_storage!
       course_with_student_logged_in(:active_all => true)
       @assignment = @course.assignments.create!(:title => 'upload_assignment', :submission_types => 'online_upload')
       Setting.set('user_default_quota', -1)
@@ -515,8 +496,85 @@ describe FilesController do
       json['remote_url'].should eql(true)
     end
   end
-  
-  describe "POST 's3_success'" do
+
+  describe "POST 'api_create'" do
+    before do
+      # this endpoint does not need a logged-in user or api token auth, it's
+      # based completely on the policy signature
+      course_with_teacher(:active_all => true, :user => user_with_pseudonym)
+      @attachment = factory_with_protected_attributes(Attachment, :context => @course, :file_state => 'deleted', :workflow_state => 'unattached', :filename => 'test.txt', :content_type => 'text')
+      @content = StringIO.new("test file")
+      enable_forgery_protection true
+      request.env['CONTENT_TYPE'] = 'multipart/form-data'
+    end
+
+    after do
+      enable_forgery_protection false
+    end
+
+    it "should accept the upload data if the policy and attachment are acceptable" do
+      params = @attachment.ajax_upload_params(@user.pseudonym, "", "")
+      post "api_create", params[:upload_params].merge(:file => @content)
+      response.should be_redirect
+      @attachment.reload
+      @attachment.workflow_state.should == 'processed'
+      # the file is not available until the third api call is completed
+      @attachment.file_state.should == 'deleted'
+      @attachment.open.read.should == "test file"
+    end
+
+    it "should reject a blank policy" do
+      post "api_create", { :file => @content }
+      response.status.to_i.should == 400
+    end
+
+    it "should reject an expired policy" do
+      params = @attachment.ajax_upload_params(@user.pseudonym, "", "", :expiration => -60)
+      post "api_create", params[:upload_params].merge({ :file => @content })
+      response.status.to_i.should == 400
+    end
+
+    it "should reject a modified policy" do
+      params = @attachment.ajax_upload_params(@user.pseudonym, "", "")
+      params[:upload_params]['Policy'] << 'a'
+      post "api_create", params[:upload_params].merge({ :file => @content })
+      response.status.to_i.should == 400
+    end
+
+    it "should reject a good policy if the attachment data is already uploaded" do
+      params = @attachment.ajax_upload_params(@user.pseudonym, "", "")
+      @attachment.uploaded_data = @content
+      @attachment.save!
+      post "api_create", params[:upload_params].merge(:file => @content)
+      response.status.to_i.should == 400
+    end
   end
-  
+
+  describe "GET 'public_feed.atom'" do
+    before(:each) do
+      course_with_student(:active_all => true)
+      user_file
+    end
+
+    it "should require authorization" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code + 'x'
+      assigns[:problem].should match /The verification code is invalid/
+    end
+
+    it "should include absolute path for rel='self' link" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.links.first.rel.should match(/self/)
+      feed.links.first.href.should match(/http:\/\//)
+    end
+
+    it "should include an author for each entry" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.should_not be_empty
+      feed.entries.all?{|e| e.authors.present?}.should be_true
+    end
+  end
 end

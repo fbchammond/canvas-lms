@@ -15,8 +15,18 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+define([
+  'i18n!media_comments',
+  'jquery' /* $ */,
+  'str/htmlEscape',
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jquery.instructure_misc_helpers' /* /\$\.h/, /\$\.fileSize/ */,
+  'jquery.instructure_misc_plugins' /* .dim, /\.log\(/ */,
+  'jqueryui/progressbar' /* /\.progressbar/ */,
+  'jqueryui/tabs' /* /\.tabs/ */
+], function(I18n, $, htmlEscape) {
 
-I18n.scoped('media_comments', function(I18n) {
   (function($, INST){
     var yourVersion = null;
     try {
@@ -24,26 +34,25 @@ I18n.scoped('media_comments', function(I18n) {
       yourVersion = " (you have " + yourVersion + " installed)";
     } catch(e) {
     }
-    var flashRequiredMessage = "<div>" + $.h(I18n.t('messages.flash_required', "This video requires Flash version 9 or higher (you have %{version} installed).", { version: yourVersion })) +
-            "<br/><a target='_blank' href='http://get.adobe.com/flashplayer/'>" + $.h(I18n.t('links.upgrade_flash', "Click here to upgrade")) +"</a></div>";
-    $.fn.mediaComment = function(command, arg1, arg2, arg3, arg4, arg5) {
+    var flashRequiredMessage = "<div>" + htmlEscape(I18n.t('messages.flash_required', "This video requires Flash version 9 or higher (you have %{version} installed).", { version: yourVersion })) +
+            "<br/><a target='_blank' href='http://get.adobe.com/flashplayer/'>" + htmlEscape(I18n.t('links.upgrade_flash', "Click here to upgrade")) +"</a></div>";
+    $.fn.mediaComment = function(command, arg1, arg2, arg3, arg4) {
       var id = arg1, mediaType = arg2, downloadUrl = arg3;
       if(!INST.kalturaSettings) { console.log('Kaltura has not been enabled for this account'); return; }
       if(command == 'create') {
         mediaType = arg1;
         var callback = arg2;
         var cancel_callback = arg3;
-        var modal = arg4;
-        var defaultTitle = arg5;
+        var defaultTitle = arg4;
         $("#media_recorder_container").removeAttr('id').addClass('old_recorder_container');
         this.attr('id', 'media_recorder_container').removeClass('old_recorder_container');
-        this.unbind('media_comment_created');
+        $(document).unbind('media_comment_created');
         var $comment = this;
-        this.bind('media_comment_created', function(event, data) {
-          callback.call(this, data.id, data.mediaType);
+        $(document).bind('media_comment_created', function(event, data) {
+          callback.call($comment, data.id, data.mediaType);
         });
         $.mediaComment.init(mediaType, {
-          modal: modal,
+          modal: false,
           close: function() {
             if(cancel_callback && $.isFunction(cancel_callback)) {
               cancel_callback.call($comment);
@@ -118,16 +127,13 @@ I18n.scoped('media_comments', function(I18n) {
         }
 
         $dialog
-          .dialog('close')
           .dialog({
-            autoOpen: false,
             title: I18n.t('titles.play_comment', "Play Media Comment"),
             width: 575,
             height: 493,
             modal: true,
             draggable: false
           })
-          .dialog('open')
           .empty()
           .css({padding: 0, overflow: 'hidden'})//get rid of scrollbars and whitespace, have to do oveflow:hidden because the swf <object> is display:inline not display:block
           .append($('<div id="media_comment_play" />').html(flashRequiredMessage));
@@ -273,7 +279,7 @@ I18n.scoped('media_comments', function(I18n) {
             $(document).triggerHandler('media_object_created', data);
           }, function(data) {});
         }
-        $("#media_recorder_container").triggerHandler('media_comment_created', {id: entry.entryId, mediaType: mediaType});
+        $(document).triggerHandler('media_comment_created', {id: entry.entryId, mediaType: mediaType});
       }
     };
     $.mediaComment.audio_delegate = {
@@ -416,13 +422,12 @@ I18n.scoped('media_comments', function(I18n) {
       var defaultTitle = opts.defaultTitle || user_name || I18n.t('titles.media_contribution', "Media Contribution");
       var mediaCommentReady = function() {
         $("#video_record_title,#audio_record_title").val(defaultTitle);
-        $dialog.dialog('close').dialog({
-          autoOpen: false,
+        $dialog.dialog({
           title: I18n.t('titles.record_upload_media_comment', "Record/Upload Media Comment"),
           width: 560,
           height: 460,
-          modal: (opts.modal == false ? false : true)
-        }).dialog('open');
+          modal: false
+        });
         $dialog.dialog('option', 'close', function() {
           $("#audio_record").before("<div id='audio_record'/>").remove();
           $("#video_record").before("<div id='video_record'/>").remove();
@@ -611,13 +616,13 @@ I18n.scoped('media_comments', function(I18n) {
       if($dialog.length == 0) {
         var $div = $("<div/>").attr('id', 'media_comment_dialog');
         $div.text(I18n.t('messages.loading', "Loading..."));
-        $div.dialog('close').dialog({
-          autoOpen: false,
+        $div.dialog({
           title: I18n.t('titles.record_upload_media_comment', "Record/Upload Media Comment"),
           resizable: false,
           width: 470,
-          height: 300
-        }).dialog('open');
+          height: 300,
+          modal: false
+        });
         $.ajaxJSON('/api/v1/services/kaltura_session', 'POST', {}, function(data) {
           $div.data('ks', data.ks);
           $div.data('uid', data.uid);
@@ -691,12 +696,12 @@ I18n.scoped('media_comments', function(I18n) {
     });
     $(document).bind('media_recording_error', function() {
       $("#audio_record_holder_message,#video_record_holder_message").find(".recorder_message").html(
-              $.h(I18n.t('errors.save_failed', "Saving appears to have failed.  Please close this popup to try again.")) +
+              htmlEscape(I18n.t('errors.save_failed', "Saving appears to have failed.  Please close this popup to try again.")) +
               "<div style='font-size: 0.8em; margin-top: 20px;'>" +
-              $.h(I18n.t('errors.persistent_problem', "If this problem keeps happening, you may want to try recording your media locally and then uploading the saved file instead.")) +
+              htmlEscape(I18n.t('errors.persistent_problem', "If this problem keeps happening, you may want to try recording your media locally and then uploading the saved file instead.")) +
               "</div>");
     });
-  })(jQuery, INST);
+  })($, INST);
 
   window.mediaCommentCallback = function(results) {
     var context_code = $.trim($("#current_context_code").text()) || $.trim("user_" + $("#identity .user_id").text());
@@ -719,7 +724,7 @@ I18n.scoped('media_comments', function(I18n) {
             $(document).triggerHandler('media_object_created', data);
           }, function(data) {});
         }
-        $("#media_recorder_container").triggerHandler('media_comment_created', {id: entry.entryId, mediaType: mediaType});
+        $(document).triggerHandler('media_comment_created', {id: entry.entryId, mediaType: mediaType});
       }
     }
     $("#media_comment_create_dialog").empty().dialog('close');

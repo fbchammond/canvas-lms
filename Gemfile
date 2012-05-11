@@ -8,12 +8,11 @@ gem 'authlogic',      '2.1.3'
 gem "aws-s3-instructure", "~> 0.6.2.1319643167",  :require => 'aws/s3'
 gem 'bcrypt-ruby',    '3.0.1'
 gem 'builder',        '2.1.2'
-gem 'closure-compiler','1.0.0'
 gem 'compass',        '0.11.5'
 gem 'daemons',        '1.1.0'
 gem 'diff-lcs',       '1.1.2',  :require => 'diff/lcs'
 gem 'erubis',         '2.7.0'
-gem 'hairtrigger',    '0.1.12'
+gem 'hairtrigger',    '0.1.13'
 gem 'haml',           '3.1.2'
 gem 'hashery',        '1.3.0',  :require => 'hashery/dictionary'
 gem 'highline',       '1.6.1'
@@ -36,12 +35,13 @@ gem 'oauth',          '0.4.5'
 gem 'rack',           '~> 1.1.2' # rails requires ~> 1.1.0 but 1.1.0 has a param quoting bug
 gem 'rake',           '< 0.10'
 gem 'ratom-instructure', '0.6.9', :require => "atom" # custom gem until necessary changes are merged into mainstream
+gem 'rbx-require-relative', '0.0.5'
 gem 'rdiscount',      '1.6.8'
 gem 'require_relative', '1.0.1'
 gem 'ritex',          '1.0.1'
 gem 'rscribd',        '1.2.0'
 gem 'ruby-net-ldap',  '0.0.4',  :require => 'net/ldap'
-gem 'ruby-saml-mod',  '0.1.4'
+gem 'ruby-saml-mod',  '0.1.8'
 gem 'rubycas-client', '2.2.1'
 gem 'rubyzip',        '0.9.4',  :require => 'zip/zip'
 gem 'sanitize',       '2.0.3'
@@ -64,21 +64,24 @@ group :sqlite do
 end
 
 group :test do
-  gem 'barista',        '1.2.1'
+  gem 'coffee-script'
+  gem 'coffee-script-source',  '1.1.2' #pinned so everyone's compiled output matches
   gem 'bluecloth',    '2.0.10' # for generating api docs
-  gem 'parallel_tests', '0.6.11'
+  gem 'parallel',     '0.5.16'
+  gem 'parallel_tests-instructure', '0.6.19'
   gem 'mocha',        '0.10.0'
   gem 'rcov',         '0.9.9'
   gem 'rspec',        '1.3.2'
   gem 'rspec-rails',  '1.3.4'
-  gem 'selenium-webdriver', '2.14.0'
+  gem 'selenium-webdriver', '2.19.0'
   gem 'webrat',       '0.7.3'
   gem 'yard',         '0.7.2'
 end
 
 group :development do
-  gem 'barista',        '1.2.1'
-  gem 'coffee-script-source',  '1.1.2' #pinned just so everyone's compiled output matches
+  gem 'coffee-script'
+  gem 'coffee-script-source',  '1.1.2' #pinned so everyone's compiled output matches
+  gem 'parallel',     '0.5.16'
   gem 'ruby-debug',   '0.10.4'
   gem 'ruby_parser', '2.0.6'
   gem 'sexp_processor', '3.0.5'
@@ -91,19 +94,7 @@ group :redis do
 end
 
 
-# The closure-compiler gem has an undocumented
-# gem dependency on windows with ruby < 1.9.  I'm
-# working to get this fixed in the gem itself, but
-# in the mean time this needs to be here to make
-# things work on windows.
-WINDOWS  = RUBY_PLATFORM.match(/(win|w)32$/)
 ONE_NINE = RUBY_VERSION >= "1.9"
-if WINDOWS
-  if !ONE_NINE
-    gem 'win32-open3',  '0.3.2'
-  end
-end
-
 if !ONE_NINE
   gem 'fastercsv', '1.5.3'
 end

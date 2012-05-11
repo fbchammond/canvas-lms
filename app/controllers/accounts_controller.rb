@@ -19,6 +19,7 @@
 # @API Accounts
 class AccountsController < ApplicationController
   before_filter :require_user, :only => [:index]
+  before_filter :reject_student_view_student
   before_filter :get_context
 
   include Api::V1::Account
@@ -101,7 +102,7 @@ class AccountsController < ApplicationController
           end
           params[:account].delete :services
         end
-        if current_user_is_site_admin?
+        if Account.site_admin.grants_right?(@current_user, :manage_site_settings)
           @account.enable_user_notes = enable_user_notes if enable_user_notes
           @account.allow_sis_import = allow_sis_import if allow_sis_import && @account.root_account?
           if params[:account][:settings]
@@ -149,7 +150,7 @@ class AccountsController < ApplicationController
         order_hash[type] = idx
       end
       @account_users = @account_users.select(&:user).sort_by{|au| [order_hash[au.membership_type] || 999, au.user.sortable_name.downcase] }
-      @account_notifications = AccountNotification.for_account(@account)
+      @announcements = @account.announcements
       @alerts = @account.alerts
       @role_types = RoleOverride.account_membership_types(@account)
     end
@@ -224,13 +225,13 @@ class AccountsController < ApplicationController
       if @account.grants_right?(@current_user, nil, :read_roster)
         @recently_logged_users = @account.all_users.recently_logged_in[0,25]
       end
-      @counts_report = ReportSnapshot.get_account_details_by_type_and_id('counts_detailed', @account.id)
+      @counts_report = @account.report_snapshots.detailed.last.try(:data)
     end
   end
   
   def statistics_graph
     if authorized_action(@account, @current_user, :view_statistics)
-      @items = ReportSnapshot.get_account_detail_over_time('counts_progressive_detailed', @account.id, params[:attribute])
+      @items = @account.report_snapshots.progressive.last.try(:report_value_over_time, params[:attribute])
       respond_to do |format|
         format.json { render :json => @items.to_json }
         format.csv { 
@@ -250,22 +251,6 @@ class AccountsController < ApplicationController
           )
         }
       end
-    end
-  end
-  
-  def statistics_page_views
-    if authorized_action(@account, @current_user, :view_statistics)
-      today = Time.zone.today
-
-      start_at = Date.parse(params[:start_at]) rescue nil
-      start_at ||= 1.month.ago.to_date
-      end_at = Date.parse(params[:end_at]) rescue nil
-      end_at ||= today
-
-      @end_at = [[start_at, end_at].max, today].min
-      @start_at = [[start_at, end_at].min, today].min
-      add_crumb(t(:crumb_statistics, "Statistics"), statistics_account_url(@account))
-      add_crumb(t(:crumb_page_views, "Page Views"))
     end
   end
   
@@ -375,7 +360,7 @@ class AccountsController < ApplicationController
   
   def build_course_stats
     teachers = TeacherEnrollment.for_courses_with_user_name(@courses).admin.active
-    students = StudentEnrollment.for_courses_with_user_name(@courses).student
+    students = StudentEnrollment.for_courses_with_user_name(@courses).student_in_claimed_or_available
     @courses.each do |course|
       course.write_attribute(:student_count, students.select{|e| e.course_id == course.id }.once_per(&:user_id).length)
       course.write_attribute(:teacher_names, teachers.select{|e| e.course_id == course.id }.once_per(&:user_id).map(&:user_name))
@@ -395,7 +380,7 @@ class AccountsController < ApplicationController
   # AdminsController. see https://redmine.instructure.com/issues/6634
   def add_account_user
     if authorized_action(@context, @current_user, :manage_account_memberships)
-      list = UserList.new(params[:user_list], @context.root_account, params[:only_search_existing_users] ? false : @context.open_registration_for?(@current_user, session))
+      list = UserList.new(params[:user_list], @context.root_account, @context.user_list_search_mode_for(@current_user))
       users = list.users
       account_users = users.map do |user|
         admin = user.flag_as_admin(@context, params[:membership_type])

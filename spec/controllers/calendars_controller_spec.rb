@@ -38,7 +38,7 @@ describe CalendarsController do
       course_with_student_logged_in(:active_all => true)
       get 'show', :user_id => @user.id
       response.should be_redirect
-      response.redirected_to.should == {:action => 'show2'}
+      response.redirected_to.should == {:action => 'show2', :anchor => ' '}
     end
 
     it "should assign variables" do
@@ -84,7 +84,7 @@ describe CalendarsController do
       course_with_student_logged_in(:active_all => true)
       get 'show2', :user_id => @user.id
       response.should be_redirect
-      response.redirected_to.should == {:action => 'show'}
+      response.redirected_to.should == {:action => 'show', :anchor => ' '}
     end
 
     it "should assign variables" do
@@ -101,12 +101,15 @@ describe CalendarsController do
   end
 
   describe "GET 'public_feed'" do
-    it "should assign variables" do
+    before(:each) do
       course_with_student(:active_all => true)
       course_event
       @course.is_public = true
       @course.save!
       @course.assignments.create!(:title => "some assignment")
+    end
+
+    it "should assign variables" do
       get 'public_feed', :feed_code => "course_#{@course.uuid}"
       response.should be_success
       assigns[:events].should_not be_nil
@@ -115,18 +118,33 @@ describe CalendarsController do
     end
 
     it "should assign variables" do
-      course_with_student(:active_all => true)
-      course_event
-      @course.is_public = true
-      @course.save!
-      @course.assignments.create!(:title => "some assignment")
-
       e = @user.calendar_events.create(:title => "my event")
       get 'public_feed', :feed_code => "user_#{@user.uuid}"
       response.should be_success
       assigns[:events].should_not be_nil
       assigns[:events].should_not be_empty
       assigns[:events].should be_include(e)
+    end
+
+    it "should require authorization" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code + 'x'
+      assigns[:problem].should eql("The verification code is invalid.")
+    end
+
+    it "should include absolute path for rel='self' link" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.links.first.rel.should match(/self/)
+      feed.links.first.href.should match(/http:\/\//)
+    end
+
+    it "should include an author for each entry" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.should_not be_empty
+      feed.entries.all?{|e| e.authors.present?}.should be_true
     end
   end
 
@@ -138,7 +156,7 @@ describe CalendarsController do
 
       post 'switch_calendar', {:preferred_calendar => '1'}
       response.should be_redirect
-      response.redirected_to.should == {:action => 'show'}
+      response.redirected_to.should == {:action => 'show', :anchor => ' '}
       @user.reload.preferences[:use_calendar1].should be_true
     end
 
@@ -148,7 +166,7 @@ describe CalendarsController do
 
       post 'switch_calendar', {:preferred_calendar => '2'}
       response.should be_redirect
-      response.redirected_to.should == {:action => 'show'}
+      response.redirected_to.should == {:action => 'show', :anchor => ' '}
       @user.reload.preferences[:use_calendar1].should be_nil
     end
 
@@ -159,7 +177,7 @@ describe CalendarsController do
 
       post 'switch_calendar', {:preferred_calendar => '2'}
       response.should be_redirect
-      response.redirected_to.should == {:action => 'show2'}
+      response.redirected_to.should == {:action => 'show2', :anchor => ' '}
       @user.reload.preferences[:use_calendar1].should be_nil
     end
   end

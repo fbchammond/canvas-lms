@@ -10,7 +10,7 @@
   </div>
 <% end %>
 
-<% jammit_js :profile %>
+<% js_bundle :profile %>
 <% jammit_css :profile %>
 
 <% if service_enabled?(:avatars) %>
@@ -27,7 +27,7 @@
     <td><%= f.blabel :name, :en => "Full Name" %></td>
     <td><span class="full_name <%= editable_name ? 'display_data' : 'edit_or_show_data' %>"><%=h @user.name %></span>
       <%= f.text_field :name, :class => "edit_data" if editable_name %>
-      <span class="edit_or_show_data" style="font-size: 0.8em; color: #888;"><br/><%= t('hints.name', "This name will be used by teachers for grading.") %></span>
+      <span class="edit_or_show_data" style="font-size: 0.8em; color: #888;"><br/><%= t('hints.name', "This name will be used for grading.") %></span>
   </tr>
   <tr>
     <td><%= f.blabel :short_name, :en => "Display Name" %></td>
@@ -153,7 +153,7 @@
 </div>
 </div>
 
-<% unless @domain_root_account && @domain_root_account.service_enabled?(:none) %>
+<% unless (@domain_root_account && @domain_root_account.service_enabled?(:none)) %>
 <a name="registered_web_services"></a>
 <h2><%= t('headers.web_services', "Web Services") %></h2>
 <p><%= t(:web_services, <<-TEXT)

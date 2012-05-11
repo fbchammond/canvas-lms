@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2011 Instructure, Inc.
+ * Copyright (C) 2012 Instructure, Inc.
  *
  * This file is part of Canvas.
  *
@@ -16,9 +16,26 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-var INST, modules;
-I18n.scoped('context_modules', function(I18n) {
-  modules = (function() {
+define([
+  'INST' /* INST */,
+  'i18n!context_modules',
+  'jquery' /* $ */,
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.instructure_date_and_time' /* parseFromISO, time_field, datetime_field */,
+  'jquery.instructure_forms' /* formSubmit, fillFormData, formErrors, errorBox */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jquery.instructure_misc_helpers' /* /\$\.underscore/ */,
+  'jquery.instructure_misc_plugins' /* .dim, confirmDelete, fragmentChange, showIf */,
+  'jquery.keycodes' /* keycodes */,
+  'jquery.loadingImg' /* loadingImage */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */,
+  'vendor/date' /* Date.parse */,
+  'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
+  'jqueryui/sortable' /* /\.sortable/ */
+], function(INST, I18n, $) {
+
+  // TODO: AMD don't export global, use as module
+  window.modules = (function() {
     return {
       updateTaggedItems: function() {
       },
@@ -183,7 +200,7 @@ I18n.scoped('context_modules', function(I18n) {
           $form.attr('method', 'PUT');
           $form.find(".submit_button").text(I18n.t('buttons.update', "Update Module"));
         }
-        $form.find("#unlock_module_at").attr('checked', data.unlock_at).triggerHandler('change');
+        $form.find("#unlock_module_at").prop('checked', data.unlock_at).triggerHandler('change');
         $form.find("#require_sequential_progress").attr('checked', data.require_sequential_progress == "true" || data.require_sequential_progress == "1");
         $form.find(".prerequisites_entry").showIf($("#context_modules .context_module").length > 1);
         var prerequisites = [];
@@ -925,6 +942,7 @@ I18n.scoped('context_modules', function(I18n) {
         var $module = $("#context_module_" + data.content_tag.context_module_id);
         modules.addItemToModule($module, data.content_tag);
         $module.find(".context_module_items").sortable('refresh');
+        modules.updateAssignmentData();
       }, function(data) {
       });
     });
@@ -954,6 +972,7 @@ I18n.scoped('context_modules', function(I18n) {
         var $module = $("#context_module_" + data.content_tag.context_module_id);
         var $item = modules.addItemToModule($module, data.content_tag);
         $module.find(".context_module_items").sortable('refresh');
+        modules.updateAssignmentData();
         $(this).dialog('close');
       },
       error: function(data) {
@@ -1133,4 +1152,6 @@ I18n.scoped('context_modules', function(I18n) {
       modules.refreshed = true;
     }, 1000);
   }
+
+  return modules;
 });

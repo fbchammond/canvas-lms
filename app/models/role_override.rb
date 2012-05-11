@@ -33,6 +33,7 @@ class RoleOverride < ActiveRecord::Base
 
   ENROLLMENT_TYPES =
     [
+      # StudentViewEnrollment permissions will mirror StudentPermissions
       {:name => 'StudentEnrollment', :label => lambda { t('roles.student', 'Student') } },
       {:name => 'TaEnrollment', :label => lambda { t('roles.ta', 'TA') } },
       {:name => 'TeacherEnrollment', :label => lambda { t('roles.teacher', 'Teacher') } },
@@ -49,6 +50,7 @@ class RoleOverride < ActiveRecord::Base
       'TaEnrollment',
       'DesignerEnrollment',
       'StudentEnrollment',
+      'StudentViewEnrollment',
       'ObserverEnrollment',
       'TeacherlessStudentEnrollment',
       'AccountAdmin'
@@ -57,12 +59,12 @@ class RoleOverride < ActiveRecord::Base
     KNOWN_ROLE_TYPES
   end
 
+  # immediately register stock canvas-lms permissions
   # NOTE: manage_alerts = Global Announcements and manage_interaction_alerts = Alerts
   # for legacy reasons
   # NOTE: if you add a permission, please also update the API documentation for
   # RoleOverridesController#add_role
-  PERMISSIONS =
-    {
+  Permissions.register({
       :manage_wiki => {
         :label => lambda { t('permissions.manage_wiki', "Manage wiki (add / edit / delete pages)") },
         :available_to => [
@@ -78,6 +80,26 @@ class RoleOverride < ActiveRecord::Base
           'TaEnrollment',
           'TeacherEnrollment',
           'DesignerEnrollment',
+          'AccountAdmin'
+        ]
+      },
+      :read_forum => {
+        :label => lambda { t('permissions.read_forum', "View discussions") },
+        :available_to => [
+          'StudentEnrollment',
+          'TaEnrollment',
+          'DesignerEnrollment',
+          'TeacherlessStudentEnrollment',
+          'ObserverEnrollment',
+          'AccountAdmin',
+          'AccountMembership'
+        ],
+        :true_for => [
+          'StudentEnrollment',
+          'TaEnrollment',
+          'DesignerEnrollment',
+          'ObserverEnrollment',
+          'TeacherEnrollment',
           'AccountAdmin'
         ]
       },
@@ -229,7 +251,6 @@ class RoleOverride < ActiveRecord::Base
         ],
         :true_for => [
           'TaEnrollment',
-          'DesignerEnrollment',
           'TeacherEnrollment',
           'AccountAdmin'
         ]
@@ -476,8 +497,8 @@ class RoleOverride < ActiveRecord::Base
         :available_to => %w(AccountAdmin AccountMembership),
       },
 
-      :site_admin => {
-        :label => lambda { t('permissions.site_admin', "Use the Site Admin section and admin all other accounts") },
+      :read_messages => {
+        :label => lambda { t('permissions.read_messages', "View notifications sent to users") },
         :account_only => :site_admin,
         :true_for => %w(AccountAdmin),
         :available_to => %w(AccountAdmin AccountMembership),
@@ -499,6 +520,12 @@ class RoleOverride < ActiveRecord::Base
         :account_only => true,
         :true_for => %w(AccountAdmin),
         :available_to => %w(AccountAdmin AccountMembership),
+      },
+      :read_sis => {
+        :label => lambda { t('permission.read_sis', "Read SIS data") },
+        :account_only => true,
+        :true_for => %w(AccountAdmin TeacherEnrollment),
+        :available_to => %w(AccountAdmin AccountMembership TeacherEnrollment TaEnrollment StudentEnrollment)
       },
       :read_course_list => {
         :label => lambda { t('permissions.read_course_list', "View the list of courses") },
@@ -528,7 +555,6 @@ class RoleOverride < ActiveRecord::Base
       },
       :read_course_content => {
         :label => lambda { t('permissions.read_course_content', "View course content") },
-        :account_only => true,
         :true_for => %w(AccountAdmin),
         :available_to => %w(AccountAdmin AccountMembership)
       },
@@ -577,24 +603,24 @@ class RoleOverride < ActiveRecord::Base
         :true_for => %w(AccountAdmin TeacherEnrollment DesignerEnrollment),
         :available_to => %w(AccountAdmin AccountMembership TeacherEnrollment TaEnrollment DesignerEnrollment),
       }
-    }.freeze
+    })
 
   RESERVED_ROLES =
     [
       'AccountAdmin', 'AccountMembership', 'DesignerEnrollment',
-      'ObserverEnrollment', 'StudentEnrollment', 'TaEnrollment',
-      'TeacherEnrollment', 'TeacherlessStudentEnrollment'
+      'ObserverEnrollment', 'StudentEnrollment', 'StudentViewEnrollment', 
+      'TaEnrollment', 'TeacherEnrollment', 'TeacherlessStudentEnrollment'
     ].freeze
 
   def self.permissions
-    PERMISSIONS
+    Permissions.retrieve
   end
 
   def self.manageable_permissions(context)
     permissions = self.permissions.dup
     permissions.reject!{ |k, p| p[:account_only] == :site_admin } unless context.site_admin?
     permissions.reject!{ |k, p| p[:account_only] == :root } unless context.root_account?
-    permissions.keys
+    permissions
   end
 
   def self.css_class_for(context, permission, enrollment_type)
@@ -648,6 +674,7 @@ class RoleOverride < ActiveRecord::Base
   end
   
   def self.permission_for(context, permission, enrollment_type=nil)
+    enrollment_type = 'StudentEnrollment' if enrollment_type == 'StudentViewEnrollment'
     @cached_permissions ||= {}
     key = [context.cache_key, permission.to_s, enrollment_type.to_s].join
     permissionless_key = [context.cache_key, enrollment_type.to_s].join
@@ -663,12 +690,6 @@ class RoleOverride < ActiveRecord::Base
       :explicit   => false,
       :enrollment_type => enrollment_type
     }
-    if context.is_a?(Enrollment)
-      generated_permission.merge!({
-        :enabled         =>  self.permissions[permission][:true_for].include?(context.class.to_s),
-        :enrollment_type => context.class.to_s
-      })
-    end
     
     @@role_override_chain ||= {}
     overrides = @@role_override_chain[permissionless_key]

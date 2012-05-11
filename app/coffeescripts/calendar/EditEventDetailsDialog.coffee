@@ -1,13 +1,16 @@
-define 'compiled/calendar/EditEventDetailsDialog', [
-  'i18n'
+define [
+  'jquery'
+  'i18n!calendar'
+  'use!underscore'
   'compiled/calendar/CommonEvent'
   'compiled/calendar/EditCalendarEventDetails'
   'compiled/calendar/EditAssignmentDetails'
+  'compiled/calendar/EditApptCalendarEventDialog'
   'compiled/calendar/EditAppointmentGroupDetails'
   'jst/calendar/editEvent'
-], (I18n, CommonEvent, EditCalendarEventDetails, EditAssignmentDetails, EditAppointmentGroupDetails, editEventTemplate) ->
-
-  I18n = I18n.scoped 'calendar'
+  'jquery.instructure_jquery_patches'
+  'jqueryui/tabs'
+], ($, I18n, _, CommonEvent, EditCalendarEventDetails, EditAssignmentDetails, EditApptCalendarEventDialog, EditAppointmentGroupDetails, editEventTemplate) ->
 
   dialog = $('<div id="edit_event"><div /></div>').appendTo('body').dialog
     autoOpen: false
@@ -28,6 +31,7 @@ define 'compiled/calendar/EditEventDetailsDialog', [
     setupTabs: =>
       # Set up the tabbed view of the dialog
       tabs = dialog.find("#edit_event_tabs")
+
       tabs.tabs().bind 'tabsselect', (event, ui) ->
         $(ui.panel).closest(".tab_holder").data('form-widget').activate()
 
@@ -40,6 +44,12 @@ define 'compiled/calendar/EditEventDetailsDialog', [
         tabs.tabs('remove', 0)
         @assignmentDetailsForm.activate()
       else
+        # don't even show the assignments tab if the user doesn't have
+        # permission to create them
+        can_create_assignments = _.any(@event.allPossibleContexts, (c) -> c.can_create_assignments)
+        unless can_create_assignments
+          tabs.tabs('remove', 1)
+
         @calendarEventForm.activate()
 
     contextChange: (newContext) =>
@@ -53,19 +63,23 @@ define 'compiled/calendar/EditEventDetailsDialog', [
       dialog.dialog('close')
 
     show: =>
-      html = editEventTemplate()
-      dialog.children().replaceWith(html)
+      if @event.isAppointmentGroupEvent()
+        new EditApptCalendarEventDialog(@event).show()
+      else
+        html = editEventTemplate()
+        dialog.children().replaceWith(html)
 
-      if @event.isNewEvent() || @event.eventType == 'calendar_event'
-        @calendarEventForm = new EditCalendarEventDetails(dialog.find("#edit_calendar_event_form_holder"), @event, @contextChange, @closeCB)
-        dialog.find("#edit_calendar_event_form_holder").data('form-widget', @calendarEventForm)
+        if @event.isNewEvent() || @event.eventType == 'calendar_event'
+          formHolder = dialog.find('#edit_calendar_event_form_holder')
+          @calendarEventForm = new EditCalendarEventDetails(formHolder, @event, @contextChange, @closeCB)
+          formHolder.data('form-widget', @calendarEventForm)
 
-      if @event.isNewEvent() || @event.eventType == 'assignment'
-        @assignmentDetailsForm = new EditAssignmentDetails(dialog.find("#edit_assignment_form_holder"), @event, @contextChange, @closeCB)
-        dialog.find("#edit_assignment_form_holder").data('form-widget', @assignmentDetailsForm)
+        if @event.isNewEvent() || @event.eventType == 'assignment'
+          @assignmentDetailsForm = new EditAssignmentDetails($('#edit_assignment_form_holder'), @event, @contextChange, @closeCB)
+          dialog.find("#edit_assignment_form_holder").data('form-widget', @assignmentDetailsForm)
 
-      @setupTabs()
+        @setupTabs()
 
-      # TODO: select the tab that should be active
+        # TODO: select the tab that should be active
 
-      dialog.dialog('open')
+        dialog.dialog('open')

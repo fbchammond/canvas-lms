@@ -16,8 +16,18 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-var grading_scheme;
-I18n.scoped('gradebook', function(I18n) {
+define([
+  'INST' /* INST */,
+  'i18n!gradebook',
+  'jquery' /* $ */,
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.instructure_forms' /* getFormData */,
+  'jquery.instructure_misc_helpers' /* replaceTags, scrollSidebar */,
+  'jquery.instructure_misc_plugins' /* showIf */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */,
+  'media_comments' /* mediaComment, mediaCommentThumbnail */
+], function(INST, I18n, $) {
+
   function setGroupData(groups, $group) {
     if($group.length === 0) { return; }
     var data = $group.getTemplateData({textValues: ['assignment_group_id', 'rules', 'group_weight']});
@@ -201,9 +211,11 @@ I18n.scoped('gradebook', function(I18n) {
       finalGrade = 0;
     }
     $(".student_assignment.final_grade").find(".grade").text(finalGrade);
-    if(grading_scheme) {
+
+    if(window.grading_scheme) {
       $(".final_letter_grade .grade").text(INST.GradeCalculator.letter_grade(grading_scheme, finalGrade));
     }
+
     $(".revert_all_scores").showIf($("#grades_summary .revert_score_link").length > 0);
     var eTime = (new Date()).getTime();
   }
@@ -232,62 +244,59 @@ I18n.scoped('gradebook', function(I18n) {
       event.preventDefault();
       $(this).parents("tr.student_assignment").next("tr.comments").next("tr.rubric_assessments").toggle();
     });
-    $(".student_assignment.editable .assignment_score").click(function(event) {
-      if($("#grades_summary.editable").length === 0 || $(this).find("#grade_entry").length > 0 || $(event.target).closest('.revert_score_link').length > 0) {
+    $('.student_assignment.editable .assignment_score').click(function(event) {
+      if ($('#grades_summary.editable').length === 0 || $(this).find('#grade_entry').length > 0 || $(event.target).closest('.revert_score_link').length > 0) {
         return;
       }
       if (!$(this).find('.grade').data('originalValue')){
         $(this).find('.grade').data('originalValue', $(this).find('.grade').html());
       }
-      $(this).find(".grade").empty().append($("#grade_entry"));
-      $(this).find(".score_value").hide();
-      var val = $(this).parents(".student_assignment").find(".score").text();
-      $("#grade_entry").val(val).show().focus().select();
+      $(this).find('.grade').empty().append($("#grade_entry"));
+      $(this).find('.score_value').hide();
+      var val = $(this).parents('.student_assignment').find('.score').text();
+      $('#grade_entry').val(parseFloat(val)).show().focus().select();
     });
     $("#grade_entry").keydown(function(event) {
       if(event.keyCode == 13) {
-        $(this).blur();
+        $(this)[0].blur();
       } else if(event.keyCode == 27) {
         var val = $(this).parents(".student_assignment")
           .addClass('dont_update')
           .find(".original_score").text();
-        $(this).val(val || "").blur();
+        $(this).val(val || "")[0].blur();
       }
     });
-    $("#grades_summary .student_assignment").bind('score_change', function(event, update) {
-      var $assignment = $(this);
-      var originalVal = parseFloat($assignment.find(".original_score").text());
-      if(isNaN(originalVal)) { originalVal = null; }
-      var val = $assignment.find("#grade_entry").val() || $(this).find(".score").text();
-      val = parseFloat(val);
-      if(isNaN(val)) { val = null; }
-      if(!val && val !== 0) { val = originalVal; }
-      var isChanged = (originalVal != val);
-      if(val == parseInt(val, 10)) {
-        val = val + ".0";
+    $('#grades_summary .student_assignment').bind('score_change', function(event, update) {
+      var $assignment   = $(this),
+          originalScore = $assignment.find('.original_score').text(),
+          originalVal   = parseFloat(originalScore),
+          val           = parseFloat($assignment.find('#grade_entry').val() || $(this).find('.score').text()),
+          isChanged;
+
+      if (isNaN(originalVal)) { originalVal = null; }
+      if (isNaN(val)) { val = null; }
+      if (!val && val !== 0) { val = originalVal; }
+      isChanged = (originalVal != val);
+      if (val == parseInt(val, 10)) {
+        val = val + '.0';
       }
-      $assignment.find(".score").text(val);
-      if($assignment.hasClass('dont_update')) {
+      $assignment.find('.score').text(val);
+      if ($assignment.hasClass('dont_update')) {
         update = false;
         $assignment.removeClass('dont_update');
       }
-      if(update) {
-        if(!isChanged) {
-          val = null;
-        }
-        var assignment_id = $assignment.getTemplateData({textValues: ['assignment_id']}).assignment_id;
-        var url = $.replaceTags($(".update_submission_url").attr('href'), 'assignment_id', assignment_id);
-        $.ajaxJSON(url, 'PUT', {'submission[student_entered_score]': val}, function(data) {
+      if (update) {
+        var assignment_id = $assignment.getTemplateData({ textValues: ['assignment_id'] }).assignment_id,
+            url           = $.replaceTags($('.update_submission_url').attr('href'), 'assignment_id', assignment_id);
+        if (!isChanged) { val = null; }
+        $.ajaxJSON(url, 'PUT', { 'submission[student_entered_score]': val }, function(data) {
           data = {student_entered_score: data.submission.student_entered_score};
-          $assignment.fillTemplateData({data: data});
-        }, function() {
-        });
-        if(!isChanged) {
-          val = originalVal;
-        }
+          $assignment.fillTemplateData({ data: data });
+        }, $.noop);
+        if(!isChanged) { val = originalVal; }
       }
-      $("#grade_entry").hide().appendTo($("body"));
-      if(isChanged) {
+      $('#grade_entry').hide().appendTo($('body'));
+      if (isChanged) {
         $assignment.find(".assignment_score").attr('title', '')
           .find(".score_teaser").text(I18n.t('titles.hypothetical_score', "This is a What-If score")).end()
           .find(".score_holder").append($("#revert_score_template").clone(true).attr('id', '').show())
@@ -301,8 +310,9 @@ I18n.scoped('gradebook', function(I18n) {
           .find(".grade").removeClass('changed');
         $assignment.find(".revert_score_link").remove();
       }
-      if(val === 0) { val = "0.0"; }
-      $assignment.find(".grade").html(val || $assignment.find('.grade').data('originalValue'));
+      if (val === 0) { val = '0.0'; }
+      if (val === originalVal) { val = originalScore; }
+      $assignment.find('.grade').html(val || $assignment.find('.grade').data('originalValue'));
       updateStudentGrades();
     });
     $("#grade_entry").blur(function() {
@@ -372,5 +382,12 @@ I18n.scoped('gradebook', function(I18n) {
       $("tr.rubric_assessments").show();
     });
     $.scrollSidebar();
+    $("#observer_user_url").change(function() {
+      if(location.href != $(this).val()) {
+        location.href = $(this).val();
+      }
+    });
   });
+
 });
+

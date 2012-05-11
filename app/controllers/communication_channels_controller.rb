@@ -18,6 +18,7 @@
 
 class CommunicationChannelsController < ApplicationController
   before_filter :require_user, :only => [:create, :destroy]
+  before_filter :reject_student_view_student
   
   def create
     if params[:build_pseudonym]
@@ -37,7 +38,7 @@ class CommunicationChannelsController < ApplicationController
     @cc.workflow_state = 'unconfirmed'
     @cc.build_pseudonym_on_confirm = params[:build_pseudonym] == '1'
     if @cc.save
-      @cc.send_confirmation!
+      @cc.send_confirmation!(@domain_root_account)
       flash[:notice] = "Contact method registered!"
       render :json => @cc.to_json(:only => [:id, :user_id, :path, :path_type])
     else
@@ -52,7 +53,7 @@ class CommunicationChannelsController < ApplicationController
     if cc
       @communication_channel = cc
       @user = cc.user
-      @enrollment = @user.enrollments.find_by_uuid_and_workflow_state(params[:enrollment], 'invited') if params[:enrollment]
+      @enrollment = @user.enrollments.find_by_uuid_and_workflow_state(params[:enrollment], 'invited') if params[:enrollment].present?
       @course = @enrollment && @enrollment.course
       @root_account = @course.root_account if @course
       @root_account ||= @user.pseudonyms.first.try(:account) if @user.pre_registered?
@@ -150,6 +151,9 @@ class CommunicationChannelsController < ApplicationController
 
         # User chose to continue with this cc/pseudonym/user combination on confirmation page
         if @pseudonym && params[:register]
+          if Canvas.redis_enabled? && @merge_opportunities.length == 1
+            Canvas.redis.rpush('single_user_registered_new_account_stats', {:user_id => @user.id, :registered_at => Time.now.utc }.to_json)
+          end
           @user.attributes = params[:user]
           @pseudonym.attributes = params[:pseudonym]
           @pseudonym.communication_channel = cc
@@ -157,6 +161,7 @@ class CommunicationChannelsController < ApplicationController
           # trick pseudonym into validating the e-mail address
           @pseudonym.account = nil
           unless @pseudonym.valid?
+            @pseudonym.account = @root_account
             return
           end
           @pseudonym.account = @root_account
@@ -169,7 +174,7 @@ class CommunicationChannelsController < ApplicationController
             new_cc ||= @user.communication_channels.build(:path => @pseudonym.unique_id)
             new_cc.user = @user
             new_cc.workflow_state = 'unconfirmed' if new_cc.retired?
-            new_cc.send_confirmation! if new_cc.unconfirmed?
+            new_cc.send_confirmation!(@root_account) if new_cc.unconfirmed?
             new_cc.save! if new_cc.changed?
             @pseudonym.communication_channel = new_cc
           end
@@ -210,6 +215,7 @@ class CommunicationChannelsController < ApplicationController
     end
   end
 
+  # params[:enrollment_id] is optional
   def re_send_confirmation
     @user = User.find(params[:user_id])
     @enrollment = params[:enrollment_id] && @user.enrollments.find(params[:enrollment_id])
@@ -217,7 +223,7 @@ class CommunicationChannelsController < ApplicationController
       @enrollment.re_send_confirmation!
     else
       @cc = @user.communication_channels.find(params[:id])
-      @cc.send_confirmation!
+      @cc.send_confirmation!(@domain_root_account)
     end
     render :json => {:re_sent => true}
   end

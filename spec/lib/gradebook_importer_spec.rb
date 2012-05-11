@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2012 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -53,6 +53,19 @@ describe GradebookImporter do
       @gi.assignments.first.points_possible.should == 10
       @gi.students.length.should == 2
     end
+
+    it "should handle muted line and being sorted in weird places" do
+      course_model
+      importer_with_rows(
+          'Student,ID,Section,Assignment 1,Final Score',
+          '"Blend, Bill",6,My Course,-,',
+          'Points Possible,,,10,',
+          'Muted assignments do not impact Current and Final score columns,,,Muted,',
+          '"Farner, Todd",4,My Course,-,')
+      @gi.assignments.length.should == 1
+      @gi.assignments.first.points_possible.should == 10
+      @gi.students.length.should == 2
+    end
   end
 
   context "User lookup" do
@@ -64,28 +77,23 @@ describe GradebookImporter do
 
       user_with_pseudonym(:active_all => true)
       @user.pseudonym.sis_user_id = "SISUSERID"
-      student_in_course(:user => @user)
       @user.pseudonym.save!
+      student_in_course(:user => @user)
       @u2 = @user
 
       user_with_pseudonym(:active_all => true, :username => "something_that_has_not_been_taken")
       student_in_course(:user => @user)
-      @user.pseudonym.save!
       @u3 = @user
 
       user_with_pseudonym(:active_all => true, :username => "inactive_login")
       @user.pseudonym.destroy
       student_in_course(:user => @user)
-      @user.pseudonym.save!
-      @user.reload
       @u4 = @user
 
       user_with_pseudonym(:active_all => true, :username => "inactive_login")
       @user.pseudonym.destroy
       @user.pseudonyms.create!(:unique_id => 'active_login', :account => Account.default)
       student_in_course(:user => @user)
-      @user.pseudonym.save!
-      @user.reload
       @u5 = @user
 
       uploaded_csv = FasterCSV.generate do |csv|
@@ -128,8 +136,8 @@ describe GradebookImporter do
 
       user_with_pseudonym(:active_all => true)
       @user.pseudonym.sis_user_id = "0123456"
-      student_in_course(:user => @user)
       @user.pseudonym.save!
+      student_in_course(:user => @user)
       @u0 = @user
 
       # user with an sis-id that is a number
@@ -137,8 +145,6 @@ describe GradebookImporter do
       @user.pseudonym.destroy
       @user.pseudonyms.create!(:unique_id => '0231163', :account => Account.default)
       student_in_course(:user => @user)
-      @user.pseudonym.save!
-      @user.reload
       @u1 = @user
 
       uploaded_csv = FasterCSV.generate do |csv|
@@ -159,6 +165,98 @@ describe GradebookImporter do
     end
   end
 
+  it "should parse new and existing assignments" do
+    course_model
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1')
+    @assignment3 = @course.assignments.create!(:name => 'Assignment 3')
+    importer_with_rows(
+        'Student,ID,Section,Assignment 1,Assignment 2',
+        'Some Student,,,,'
+    )
+    @gi.assignments.length.should == 2
+    @gi.assignments.first.should == @assignment1
+    @gi.assignments.last.title.should == 'Assignment 2'
+    @gi.assignments.last.should be_new_record
+    @gi.assignments.last.id.should < 0
+    @gi.missing_assignments.should == [@assignment3]
+  end
+
+  it "should not include missing assignments if no new assignments" do
+    course_model
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1')
+    @assignment3 = @course.assignments.create!(:name => 'Assignment 3')
+    importer_with_rows(
+        'Student,ID,Section,Assignment 1',
+        'Some Student,,,'
+    )
+    @gi.assignments.should == [@assignment1]
+    @gi.missing_assignments.should == []
+  end
+
+  it "should not include assignments with no changes" do
+    course_model
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1', :points_possible => 10)
+    importer_with_rows(
+        "Student,ID,Section,Assignment 1"
+    )
+    @gi.assignments.should == []
+    @gi.missing_assignments.should == []
+  end
+
+  it "should include assignments that changed only in points possible" do
+    course_model
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1', :points_possible => 10)
+    importer_with_rows(
+        "Student,ID,Section,Assignment 1",
+        "Points Possible,,,20"
+    )
+    @gi.assignments.should == [@assignment1]
+    @gi.assignments.first.should be_changed
+    @gi.assignments.first.points_possible.should == 20
+  end
+
+  it "should parse new and existing users" do
+    course_with_student
+    @student2 = user
+    @course.enroll_student(@student2)
+    importer_with_rows(
+        "Student,ID,Section,Assignment 1",
+        ",#{@student.id},,10",
+        "New Student,,,12"
+    )
+    @gi.students.length.should == 2
+    @gi.students.first.should == @student
+    @gi.students.last.should be_new_record
+    @gi.students.last.id.should < 0
+    @gi.missing_students.should == [@student2]
+  end
+
+  it "should not include assignments that don't have any grade changes" do
+    course_with_student
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1', :points_possible => 10)
+    @assignment1.grade_student(@student, :grade => 10)
+    importer_with_rows(
+        "Student,ID,Section,Assignment 1",
+        ",#{@student.id},,10"
+    )
+    @gi.assignments.should == []
+  end
+
+  it "should include assignments that the grade changed for an existing user" do
+    course_with_student
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1', :points_possible => 10)
+    @assignment1.grade_student(@student, :grade => 8)
+    importer_with_rows(
+        "Student,ID,Section,Assignment 1",
+        ",#{@student.id},,10"
+    )
+    @gi.assignments.should == [@assignment1]
+    submission = @gi.students.first.read_attribute(:submissions).first
+    submission['original_grade'].should == '8'
+    submission['grade'].should == '10'
+    submission['assignment_id'].should == @assignment1.id
+  end
+
   context "to_json" do
     before do
       course_model
@@ -167,7 +265,7 @@ describe GradebookImporter do
 
     it "should have a simplified json output" do
       hash = ActiveSupport::JSON.decode(@gi.to_json)
-      hash.keys.sort.should eql(["assignments", "students"])
+      hash.keys.sort.should eql(["assignments", "missing_objects", "original_submissions", "students", "unchanged_assignments"])
       students = hash["students"]
       students.should be_is_a(Array)
       student = students.first
@@ -175,7 +273,7 @@ describe GradebookImporter do
       submissions = student["submissions"]
       submissions.should be_is_a(Array)
       submission = submissions.first
-      submission.keys.sort.should eql(["assignment_id", "grade"])
+      submission.keys.sort.should eql(["assignment_id", "grade", "original_grade"])
       assignments = hash["assignments"]
       assignments.should be_is_a(Array)
       assignment = assignments.first

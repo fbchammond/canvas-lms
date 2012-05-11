@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2012 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -16,11 +16,16 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-class GroupsController < ApplicationController  
+# @API Groups
+#
+# API for accessing group information.
+class GroupsController < ApplicationController
   before_filter :get_context
   before_filter :require_context, :only => [:create_category, :delete_category]
   before_filter :get_group_as_context, :only => [:show]
-  
+
+  include Api::V1::Attachment
+
   def context_group_members
     @group = @context
     if authorized_action(@group, @current_user, :read_roster)
@@ -29,7 +34,7 @@ class GroupsController < ApplicationController
       end
     end
   end
-  
+
   def unassigned_members
     category = @context.group_categories.find_by_id(params[:category_id])
     return render :json => {}, :status => :not_found unless category
@@ -40,7 +45,7 @@ class GroupsController < ApplicationController
       groups = []
     end
     users = @context.paginate_users_not_in_groups(groups, page)
-    
+
     if authorized_action(@context, @current_user, :manage)
       respond_to do |format|
         format.json { render :json => {
@@ -50,18 +55,12 @@ class GroupsController < ApplicationController
           :previous_page => users.previous_page,
           :total_entries => users.total_entries,
           :pagination_html => render_to_string(:partial => 'user_pagination', :locals => { :users => users }),
-          :users => users.map do |u|
-            h = { :user_id => u.id, :name => u.last_name_first }
-            if @context.is_a?(Course) && (section = u.section_for_course(@context))
-              h = h.merge(:section_id => section.id, :section_code => section.section_code)
-            end
-            h
-          end
+          :users => users.map { |u| u.group_member_json(@context) }
         } }
       end
     end
   end
-  
+
   def index
     return context_index if @context
     @groups = @current_user ? @current_user.groups.active : []
@@ -75,26 +74,24 @@ class GroupsController < ApplicationController
     end
     @current_conferences = @group.web_conferences.select{|c| c.active? && c.users.include?(@current_user) } rescue []
     @groups = @current_user.group_memberships_for(@group.context) if @current_user
-    if @group.free_association?(@current_user)
-      if params[:join]
-        @group.request_user(@current_user)
-        if !@group.grants_right?(@current_user, session, :read)
-          render :action => 'membership_pending'
-          return
-        else
-          flash[:notice] = t('notices.welcome', "Welcome to the group %{group_name}!", :group_name => @group.name)
-          redirect_to named_context_url(@group.context, :context_groups_url)
-          return
-        end
+    if params[:join] && @group.free_association?(@current_user)
+      @group.request_user(@current_user)
+      if !@group.grants_right?(@current_user, session, :read)
+        render :action => 'membership_pending'
+        return
+      else
+        flash[:notice] = t('notices.welcome', "Welcome to the group %{group_name}!", :group_name => @group.name)
+        redirect_to named_context_url(@group.context, :context_groups_url)
+        return
       end
-      if params[:leave]
-        membership = @group.membership_for_user(@current_user)
-        if membership
-          membership.destroy
-          flash[:notice] = t('notices.goodbye', "You have removed yourself from the group %{group_name}.", :group_name => @group.name)
-          redirect_to named_context_url(@group.context, :context_groups_url)
-          return
-        end
+    end
+    if params[:leave] && (@group.free_association?(@current_user) || @group.student_organized?)
+      membership = @group.membership_for_user(@current_user)
+      if membership
+        membership.destroy
+        flash[:notice] = t('notices.goodbye', "You have removed yourself from the group %{group_name}.", :group_name => @group.name)
+        redirect_to named_context_url(@group.context, :context_groups_url)
+        return
       end
     end
     if authorized_action(@group, @current_user, :read)
@@ -121,7 +118,7 @@ class GroupsController < ApplicationController
       end
     end
   end
-  
+
   def update_category
     if authorized_action(@context, @current_user, :manage_groups)
       @group_category = @context.group_categories.find_by_id(params[:category_id])
@@ -133,7 +130,7 @@ class GroupsController < ApplicationController
       end
     end
   end
-  
+
   def delete_category
     if authorized_action(@context, @current_user, :manage_groups)
       @group_category = @context.group_categories.find_by_id(params[:category_id])
@@ -147,7 +144,7 @@ class GroupsController < ApplicationController
       end
     end
   end
-  
+
   def add_user
     @group = @context
     if authorized_action(@group, @current_user, :manage)
@@ -160,7 +157,7 @@ class GroupsController < ApplicationController
       end
     end
   end
-  
+
   def remove_user
     @group = @context
     if authorized_action(@group, @current_user, :manage)
@@ -193,7 +190,7 @@ class GroupsController < ApplicationController
           @group.invitees = params[:invitees]
           flash[:notice] = t('notices.create_success', 'Group was successfully created.')
           format.html { redirect_to group_url(@group) }
-          format.json { render :json => @group.to_json }
+          format.json { render :json => @group.to_json(:methods => :participating_users_count) }
         else
           format.html { render :action => "new" }
           format.json { render :json => @group.errors.to_json }
@@ -222,7 +219,7 @@ class GroupsController < ApplicationController
         if @group.update_attributes(params[:group])
           flash[:notice] = t('notices.update_success', 'Group was successfully updated.')
           format.html { redirect_to group_url(@group) }
-          format.json { render :json => @group.to_json }
+          format.json { render :json => @group.to_json(:methods => :participating_users_count) }
         else
           format.html { render :action => "edit" }
           format.json { render :json => @group.errors.to_json }
@@ -254,9 +251,9 @@ class GroupsController < ApplicationController
     return unless get_feed_context(:only => [:group])
     feed = Atom::Feed.new do |f|
       f.title = t(:feed_title, "%{course_or_account_name} Feed", :course_or_account_name => @context.full_name)
-      f.links << Atom::Link.new(:href => named_context_url(@context, :context_url))
+      f.links << Atom::Link.new(:href => group_url(@context), :rel => 'self')
       f.updated = Time.now
-      f.id = named_context_url(@context, :context_url)
+      f.id = group_url(@context)
     end
     @entries = []
     @entries.concat @context.calendar_events.active
@@ -295,6 +292,24 @@ class GroupsController < ApplicationController
     render :json => json
   end
 
+  # @API
+  #
+  # Upload a file to the group.
+  #
+  # This API endpoint is the first step in uploading a file to a group.
+  # See the {file:file_uploads.html File Upload Documentation} for details on
+  # the file upload workflow.
+  #
+  # Only those with the "Manage Files" permission on a group can upload files
+  # to the group. By default, this is anybody participating in the
+  # group, or any admin over the group.
+  def create_file
+    @attachment = Attachment.new(:context => @context)
+    if authorized_action(@attachment, @current_user, :create)
+      api_attachment_preflight(@context, request)
+    end
+  end
+
   protected
 
   def get_group_as_context
@@ -326,7 +341,7 @@ class GroupsController < ApplicationController
     # sort by name, but with the student organized category in the back
     @categories = @categories.sort_by{|c| [ (c.student_organized? ? 1 : 0), c.name ] }
     @groups = @groups.sort_by{ |g| [(g.name || '').downcase, g.created_at]  }
-    
+
     if authorized_action(@context, @current_user, :read_roster)
       respond_to do |format|
         if @context.grants_right?(@current_user, session, :manage_groups)
@@ -361,7 +376,7 @@ class GroupsController < ApplicationController
     @group_category.configure_self_signup(enable_self_signup, restrict_self_signup)
     @group_category.save
   end
-  
+
   def create_default_groups_in_category
     self_signup = params[:category][:enable_self_signup] == "1"
     distribute_members = !self_signup && params[:category][:split_groups] == "1"

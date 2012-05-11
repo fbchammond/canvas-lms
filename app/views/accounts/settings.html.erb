@@ -1,11 +1,10 @@
 <%
   @active_tab = "settings"
   add_crumb t(:settings_crumb, "Settings")
-  jammit_js :account_settings
-  jammit_css :account_settings, :reports
+  js_bundle :account_settings
+  jammit_css :account_settings, :reports, :tinymce
   content_for :page_title, t(:page_title, "Account Settings")
 %>
-<% js_block do %><%= javascript_include_tag "tinymce/jscripts/tiny_mce/tiny_mce.js" %><% end %>
 
 <% content_for :right_side do %>
   <%= render :partial => "courses_right_side" unless @account.site_admin? %>
@@ -53,7 +52,7 @@
               <td><%= f.blabel :name, :en => "Account Name" %></td>
               <td><%= f.text_field :name %></td>
             </tr>
-            <% if !@account.root_account? && (@context.sis_source_id || can_do(@context.root_account, @current_user, :manage_sis)) %>
+            <% if !@account.root_account? && (@context.sis_source_id && can_do(@context.root_account, @current_user, :read_sis) || can_do(@context.root_account, @current_user, :manage_sis)) %>
               <tr>
                 <td><%= f.blabel :sis_source_id, :en => "SIS ID" %></td>
                 <td>
@@ -158,7 +157,7 @@
           <legend><%= t(:features_title, "Features") %></legend>
           <% f.fields_for :settings do |settings| %>
             <% if @account.root_account? %>
-              <% if current_user_is_site_admin? %>
+              <% if Account.site_admin.grants_right?(@current_user, :manage_site_settings) %>
                 <div>
                   <%= settings.check_box :admins_can_change_passwords, :checked => @account.settings[:admins_can_change_passwords] == true %>
                   <%= settings.label :admins_can_change_passwords, :en => "Password setting by admins" %>
@@ -186,12 +185,19 @@
                   <%= settings.label :global_includes, :en => "Global CSS/JavaScript includes" %>
                 </div>
               <% end %>
-              <% unless @account.delegated_authentication? %>
-                <div>
-                  <%= settings.check_box :open_registration, :checked => @account.open_registration? %>
-                  <%= settings.label :open_registration, :en => "Open Registration" %>
-                </div>
-              <% end %>
+              <div>
+                <%= settings.check_box :open_registration, :checked => @account.open_registration? %>
+                <%= settings.label :open_registration, :en => "Open Registration" %>
+                <% if @account.delegated_authentication? %>
+                  <%= link_to(image_tag('warning.png'), '#', :class => 'open_registration_delegated_warning_link no-hover', :title => t(:open_registration_delegated_warning_tooltip, "An External Identity Provider is Enabled")) %></legend>
+
+                  <div id="open_registration_delegated_warning_dialog" style="display: none;">
+                      <%= t(:open_registration_delegated_warning_message,
+                      "An external identity provider is enabled, and users created via open registration may not be able to log in unless
+                      the external identity provider's login form has a link back to %{url}.", :url => login_url(:canvas_login => 1)) %>
+                  </div>
+                <% end %>
+              </div>
               <div>
                 <%= settings.check_box :users_can_edit_name, :checked => @account.settings[:users_can_edit_name] != false %>
                 <%= settings.label :users_can_edit_name, :en => "Users can edit display name" %>
@@ -303,7 +309,7 @@
               </tr>
               <tr>
                 <td><%= f.blabel :turnitin_shared_secret, :en => "Turnitin Shared Secret" %></td>
-                <td><%= f.text_field :turnitin_shared_secret, :style => "width: 150px;", :class => "turnitin_account_settings" %></td>
+                <td><%= f.text_field :turnitin_shared_secret, :class => "turnitin_account_settings" %></td>
               </tr>
               <tr>
                 <td>&nbsp;</td>
@@ -312,7 +318,7 @@
                 </td>
               </tr>
               <tr>
-                <td><%= f.blabel :turnitin_comments, :en => "Turnitin Submission Comments" %></td>
+                <td><%= f.blabel :turnitin_comments, :en => "Submission Comments" %></td>
                 <td>
                   <span style="font-size: 0.9em;"><%= t(:turnitin_comments_help, "these comments will be shown to students when submitting a Turnitin-enabled assignment") %></span>
                   <%= f.text_area :turnitin_comments, :style => "width: 90%; height: 50px;" %>
@@ -396,7 +402,7 @@
       <%= render :partial => 'account_user', :object => nil %>
     </ul>
     <% if can_do(@context, @current_user, :manage_account_memberships) %>
-      <% jammit_js :user_lists %>
+      <% js_bundle :user_lists %>
       <a href="#" class="add_users_link button"><%= image_tag "add.png" %><%= t('links.add_admins', %{Add Account Admins}) %></a>
       <% form_tag account_add_account_user_url(@account), {:id => "enroll_users_form", :style => "display: none;"} do  %>
         <h2><%= t(:add_admin_title, "Add Account Admins") %></h2>
@@ -430,25 +436,25 @@
       "\"close\" link to ignore the alert. **These announcements should be " +
       "used sparingly.**") %>
       <ul class="announcements_list unstyled_list">
-        <% @account_notifications.each do |notification| %>
+        <% @announcements.each do |announcement| %>
           <li>
             <div class="subject">
-              <%= image_tag("#{notification.icon}.png") %><%= notification.subject %>
+              <%= image_tag("#{announcement.icon}.png") %><%= announcement.subject %>
             </div>
             <% if can_do(@account, @current_user, :manage_alerts) %>
-              <a href="#" rel="<%= context_url(@account, :context_account_notification_url, notification) %>" class="delete_notification_link" title="<%= t(:delete_alert_tooltip, "Delete this Alert") %>"><%= image_tag "delete_circle.png" %></a>
+              <a href="#" rel="<%= context_url(@account, :context_account_notification_url, announcement) %>" class="delete_notification_link" title="<%= t(:delete_announcement_tooltip, "Delete this Announcement") %>"><%= image_tag "delete_circle.png" %></a>
             <% end %>
             <div class="clear"></div>
             <div class="dates">
               <span style="padding-right: 10px;">
                 <%= t(:alert_timespan, "from %{start_at} to %{end_at}",
-                      :start_at => datetime_string(notification.start_at),
-                      :end_at => datetime_string(notification.end_at)) %>
+                      :start_at => datetime_string(announcement.start_at),
+                      :end_at => datetime_string(announcement.end_at)) %>
               </span>
-              <%= link_to(context_user_name(@account, notification.user_id), user_path(notification.user_id)) %>
+              <%= link_to(context_user_name(@account, announcement.user_id), user_path(announcement.user_id)) %>
             </div>
             <div class="message user_content">
-              <%= user_content(notification.message) %>
+              <%= user_content(announcement.message) %>
             </div>
           </li>
         <% end %>
@@ -512,6 +518,8 @@
            last_complete = @last_complete_reports[report]
            last_report = @last_reports[report]
            in_progress = last_report && last_report.in_progress?
+           #the extra text is added so that you can give more than the date for the last run report
+           extra_text = last_complete.try(:parameters).try(:[], "extra_text")
         %>
           <tr id="<%= report %>" class="reports">
             <td class="title reports">
@@ -526,6 +534,10 @@
             <td class="last-run reports">
               <% if last_complete %>
                 <%= datetime_string(last_complete.created_at) %>
+                <%#the extra text is added so that you can give more than the date for the last run report %>
+                <% if extra_text %>
+                  (<%= extra_text %>)
+                <% end %>
                 <%= link_to image_tag("download.png"), context_url(last_complete.account, :context_file_download_url, last_complete.attachment.id) %>
               <% else %>
                 <%= t 'report_last_run_never', 'Never' %>

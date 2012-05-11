@@ -1,8 +1,8 @@
 /**
  * Copyright (C) 2011 Instructure, Inc.
- * 
+ *
  * This file is part of Canvas.
- * 
+ *
  * Canvas is free software: you can redistribute it and/or modify it under
  * the terms of the GNU Affero General Public License as published by the Free
  * Software Foundation, version 3 of the License.
@@ -15,16 +15,26 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-(function() {
-  $("<link/>", {
-     rel: "stylesheet",
-     type: "text/css",
-     href: location.protocol + "//" + location.host + "/stylesheets/static/mathquill.css"
-  }).appendTo("head");
-  $.getScript("/javascripts/mathquill.js", function() {
-    // hidden span so that we pre-load Symbola long before the equation popup ever opens
-    $("<span class='mathquill-embedded-latex' style='position: absolute; z-index: -1; top: 0; left: 0; width: 0; height: 0; overflow: hidden;'>a</span>").appendTo("body").mathquill();
-  });
+
+define([
+  'compiled/editor/stocktiny',
+  'jquery',
+  'jquery.instructure_jquery_patches',
+  'mathquill'
+], function(tinymce, $) {
+
+  // the loading of this @font-face is done here because tinyMCE was blocking rendering untill all of the css
+  // was loaded. Remember to update the ?v1 querystring parameter if we ever update the font.
+  $('<style>' +
+      '@font-face { '+
+        'font-family: Symbola; src: url(/font/Symbola.eot?v1); src: local("Symbola Regular"), local("Symbola"),' +
+        'url(/font/Symbola.ttf?v1) format("truetype"),' +
+        'url(/font/Symbola.otf?v1) format("opentype"),' +
+        'url(/font/Symbola.svg?v1#webfont7MzkO3xs) format("svg");' +
+      '}' +
+    '</style>').appendTo("head");
+
+  $("<span class='mathquill-embedded-latex' style='position: absolute; z-index: -1; top: 0; left: 0; width: 0; height: 0; overflow: hidden;'>a</span>").appendTo("body").mathquill();
 
   // like $.text() / Sizzle.getText(elems), except it also gets alt attributes
   // from images
@@ -127,8 +137,8 @@
       };
     }
   });
-  
+
   // Register plugin
   tinymce.PluginManager.add('instructure_equation', tinymce.plugins.InstructureEquation);
-})();
+});
 

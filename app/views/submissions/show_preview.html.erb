@@ -2,17 +2,26 @@
 
 <% if @assignment.submission_types == 'discussion_topic' && @assignment.discussion_topic %>
   <div style="width: 600px; margin: 10px auto;">
-    <p><%= t('discussion_submission_description', 
-            "The submissions for this assignment are posts in the assignment's discussion. Below are the discussion posts for %{user}, or you can *view the full discussion*.", 
-            :user => context_user_name(@context, @submission.user), 
-            :wrapper => "<a href=\"#{context_url(@assignment.context, :context_discussion_topic_url, @assignment.discussion_topic.id, :headless => 1)}\"><b>\\1</b></a>") %>
+    <p>
+      <% if @assignment.discussion_topic.for_group_assignment? && (group = @assignment.group_students(@submission.user)[0]) %>
+        <%= t('group_discussion_submission_description',
+                "The submissions for this assignment are posts in the assignment's discussion for this group. Below are the discussion posts for %{user}, or you can *view the full group discussion*.",
+                :user => context_user_name(@context, @submission.user),
+                :wrapper => "<a href=\"#{context_url(group, :context_discussion_topics_url, :root_discussion_topic_id => @assignment.discussion_topic.id, :headless => 1)}\"><b>\\1</b></a>") %>
+      <% else %>
+        <%= t('discussion_submission_description',
+                "The submissions for this assignment are posts in the assignment's discussion. Below are the discussion posts for %{user}, or you can *view the full discussion*.",
+                :user => context_user_name(@context, @submission.user),
+                :wrapper => "<a href=\"#{context_url(@assignment.context, :context_discussion_topic_url, @assignment.discussion_topic.id, :headless => 1)}\"><b>\\1</b></a>") %>
+      <% end %>
+
     </p>
     <% @entries = @assignment.discussion_topic.discussion_entries.active.for_user(@user) %>
     <% if @assignment.has_group_category? %>
       <% @entries = @assignment.discussion_topic.child_topics.map{|t| t.discussion_entries.active.for_user(@user) }.flatten.sort_by{|e| e.created_at} %>
     <% end %>
     <% @entries.each do |entry| %>
-      <%= render :partial => 'discussion_topics/entry', :object => entry, :locals => {:out_of_context => true, :skip_sub_entries => true} %>
+      <%= render :partial => 'discussion_topics/entry', :object => entry, :locals => {:out_of_context => true, :skip_sub_entries => true, :link_to_headless => true} %>
     <% end %>
     <div style="text-align: center; font-size: 1.2em; margin-top: 10px; display: none;">
       <a href="<%= context_url(@assignment.context, :context_discussion_topic_url, @assignment.discussion_topic.id, :headless => 1, :combined => 1) %>" class="forward"><%= t('show_entire_discussion', 'Show the Entire Discussion') %></a>
@@ -42,14 +51,16 @@
 <% elsif @submission.submission_type == "online_text_entry" %>
   <% js_block do %>
   <script>
-  $(document).ready(function() {
-    $(".data_view").change(function() {
-      if($(this).val() == "paper") {
-        $("#submission_preview").removeClass('plain_text').addClass('paper');
-      } else {
-        $("#submission_preview").removeClass('paper').addClass('plain_text');
-      }
-    }).change();
+  require(['jquery'], function($) {
+    $(document).ready(function() {
+      $(".data_view").change(function() {
+        if($(this).val() == "paper") {
+          $("#submission_preview").removeClass('plain_text').addClass('paper');
+        } else {
+          $("#submission_preview").removeClass('paper').addClass('plain_text');
+        }
+      }).change();
+    });
   });
   </script>
   <% end %>
@@ -99,6 +110,12 @@
   </div>
   <% js_block do %>
     <script>
+    require([
+      'jquery',
+      'vendor/swfobject/swfobject',
+      'jquery.instructure_jquery_patches', // .dialog patch
+      'jquery.doc_previews' // loadDocPreview
+    ], function($, swfobject, _docPreviews) {
       $(document).ready(function(){
 
         $("a.flash").click(function() {
@@ -122,6 +139,7 @@
         }
 
       });
+    });
     </script>
   <% end %>
 
@@ -142,6 +160,10 @@
 
   <% js_block do %>
     <script>
+    require([
+      'jquery',
+      'media_comments'
+    ], function($, _mediaComments) {
       $(document).ready(function() {
         $(".play_media_recording_link").click(function(event) {
           event.preventDefault();
@@ -151,6 +173,7 @@
         });
         $(".play_media_recording_link").mediaCommentThumbnail();
       });
+    });
     </script>
   <% end %>
 <% else %>

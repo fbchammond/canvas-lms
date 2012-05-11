@@ -31,7 +31,7 @@ describe "accounts/settings.html.erb" do
       assigns[:account_users] = []
       assigns[:root_account] = @account
       assigns[:associated_courses_count] = 0
-      assigns[:account_notifications] = []
+      assigns[:announcements] = []
     end
 
     it "should show to sis admin" do
@@ -59,7 +59,7 @@ describe "accounts/settings.html.erb" do
       assigns[:account_users] = []
       assigns[:root_account] = @account
       assigns[:associated_courses_count] = 0
-      assigns[:account_notifications] = []
+      assigns[:announcements] = []
       admin = account_admin_user
       view_context(@account, admin)
     end
@@ -67,12 +67,14 @@ describe "accounts/settings.html.erb" do
     it "should show by default" do
       render
       response.should have_tag("input#account_settings_open_registration")
+      response.should_not have_tag("div#open_registration_delegated_warning_dialog")
     end
 
-    it "should not show when a delegated auth config is around" do
+    it "should show warning dialog when a delegated auth config is around" do
       @account.account_authorization_configs.create!(:auth_type => 'cas')
       render
-      response.should_not have_tag("input#account_settings_open_registration")
+      response.should have_tag("input#account_settings_open_registration")
+      response.should have_tag("div#open_registration_delegated_warning_dialog")
     end
   end
 end

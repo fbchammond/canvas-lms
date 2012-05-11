@@ -76,7 +76,21 @@ describe CoursesController do
       assigns[:pending_enrollment].should eql(@enrollment)
       assigns[:pending_enrollment].should be_rejected
     end
-    
+
+    it "should successfully reject temporary invitation" do
+      user_with_pseudonym(:active_all => 1)
+      user_session(@user, @pseudonym)
+      user = User.create! { |u| u.workflow_state = 'creation_pending' }
+      user.communication_channels.create!(:path => @cc.path)
+      course(:active_all => 1)
+      @enrollment = @course.enroll_student(user)
+      post 'enrollment_invitation', :course_id => @course.id, :reject => '1', :invitation => @enrollment.uuid
+      response.should be_redirect
+      response.should redirect_to(root_url)
+      assigns[:pending_enrollment].should eql(@enrollment)
+      assigns[:pending_enrollment].should be_rejected
+    end
+
     it "should not reject invitation for bad parameters" do
       course_with_student(:active_course => true, :active_user => true)
       post 'enrollment_invitation', :course_id => @course.id, :reject => '1', :invitation => @enrollment.uuid + 'a'
@@ -154,6 +168,30 @@ describe CoursesController do
       response.status.should == '401 Unauthorized'
       assigns[:unauthorized_message].should_not be_nil
     end
+
+    it "should allow student view student to view unpublished courses" do
+      course_with_teacher_logged_in(:active_user => true)
+      @course.should_not be_available
+      @fake_student = @course.student_view_student
+      session[:become_user_id] = @fake_student.id
+
+      get 'show', :id => @course.id
+      response.should be_success
+    end
+
+    it "should not allow student view students to view other courses" do
+      course_with_teacher_logged_in(:active_user => true)
+      @c1 = @course
+
+      course(:active_course => true)
+      @c2 = @course
+
+      @fake1 = @c1.student_view_student
+      session[:become_user_id] = @fake1.id
+
+      get 'show', :id => @c2.id
+      assert_unauthorized
+    end
     
     context "show feedback for the current course only on course front page" do
       before(:each) do
@@ -229,6 +267,37 @@ describe CoursesController do
         assigns[:pending_enrollment].should == @enrollment
       end
 
+      it "should still show unauthorized if unpublished, regardless of if previews are allowed" do
+        # unpublished course with invited student in default account (disallows previews)
+        course_with_student
+        @course.workflow_state = 'claimed'
+        @course.save!
+
+        get 'show', :id => @course.id, :invitation => @enrollment.uuid
+        response.status.should == '401 Unauthorized'
+        assigns[:unauthorized_message].should_not be_nil
+
+        # unpublished course with invited student in account that allows previews
+        @account = Account.create!
+        course_with_student(:account => @account)
+        @course.workflow_state = 'claimed'
+        @course.save!
+
+        get 'show', :id => @course.id, :invitation => @enrollment.uuid
+        response.status.should == '401 Unauthorized'
+        assigns[:unauthorized_message].should_not be_nil
+      end
+
+      it "should not show unauthorized for invited teachers when unpublished" do
+        # unpublished course with invited teacher
+        course_with_teacher
+        @course.workflow_state = 'claimed'
+        @course.save!
+
+        get 'show', :id => @course.id, :invitation => @enrollment.uuid
+        response.should be_success
+      end
+
       it "should re-invite an enrollment that has previously been rejected" do
         course_with_student(:active_course => 1)
         @enrollment.should be_invited
@@ -252,15 +321,14 @@ describe CoursesController do
         @enrollment.should be_active
       end
 
-      it "should ignore invitations that have been accepted" do
+      it "should ignore invitations that have been accepted (not logged in)" do
         course_with_student(:active_course => 1, :active_enrollment => 1)
-        @course.grants_right?(@user, nil, :read).should be_true
         get 'show', :id => @course.id, :invitation => @enrollment.uuid
         response.status.should == '401 Unauthorized'
+      end
 
-        # Force reload permissions
-        controller.instance_variable_set(:@context_all_permissions, nil)
-        user_session(@user)
+      it "should ignore invitations that have been accepted (logged in)" do
+        course_with_student_logged_in(:active_course => 1, :active_enrollment => 1)
         get 'show', :id => @course.id, :invitation => @enrollment.uuid
         response.should be_success
         assigns[:pending_enrollment].should be_nil
@@ -325,6 +393,45 @@ describe CoursesController do
         assigns[:pending_enrollment].should == @enrollment2
         session[:enrollment_uuid].should == @enrollment2.uuid
       end
+
+      it "should find temporary enrollments that match the logged in user" do
+        course(:active_course => 1)
+        @temporary = User.create! { |u| u.workflow_state = 'creation_pending' }
+        @temporary.communication_channels.create!(:path => 'user@example.com')
+        @enrollment = @course.enroll_student(@temporary)
+        @user = user_with_pseudonym(:active_all => 1, :username => 'user@example.com')
+        @enrollment.should be_invited
+        user_session(@user)
+
+        get 'show', :id => @course.id
+        response.should be_success
+        assigns[:pending_enrollment].should == @enrollment
+      end
+    end
+
+    it "should redirect html to settings page when user can :read_as_admin, but not :read" do
+      # an account user on the site admin will always have :read_as_admin
+      # permission to any course, but will not have :read permission unless
+      # they've been granted the :read_course_content role override, which
+      # defaults to false for everyone except those with the AccountAdmin role
+      course(:active_all => true)
+      user(:active_all => true)
+      Account.site_admin.add_user(@user, 'LimitedAccess')
+      user_session(@user)
+
+      get 'show', :id => @course.id
+      response.status.should == '302 Found'
+      response.location.should match(%r{/courses/#{@course.id}/settings})
+    end
+
+    it "should not redirect xhr to settings page when user can :read_as_admin, but not :read" do
+      course(:active_all => true)
+      user(:active_all => true)
+      Account.site_admin.add_user(@user, 'LimitedAccess')
+      user_session(@user)
+
+      xhr :get, 'show', :id => @course.id
+      response.status.should == '200 OK'
     end
   end
   
@@ -696,6 +803,33 @@ describe CoursesController do
             }
         }
     end
+  end
 
+  describe "GET 'public_feed.atom'" do
+    before(:each) do
+      course_with_student(:active_all => true)
+      assignment_model(:course => @course)
+    end
+
+    it "should require authorization" do
+      get 'public_feed', :format => 'atom', :feed_code => @enrollment.feed_code + 'x'
+      assigns[:problem].should match /The verification code does not match/
+    end
+
+    it "should include absolute path for rel='self' link" do
+      get 'public_feed', :format => 'atom', :feed_code => @enrollment.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.links.first.rel.should match(/self/)
+      feed.links.first.href.should match(/http:\/\//)
+    end
+
+    it "should include an author for each entry" do
+      get 'public_feed', :format => 'atom', :feed_code => @enrollment.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.should_not be_empty
+      feed.entries.all?{|e| e.authors.present?}.should be_true
+    end
   end
 end

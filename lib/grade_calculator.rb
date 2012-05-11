@@ -35,8 +35,9 @@ class GradeCalculator
   
   # recomputes the scores and saves them to each user's Enrollment
   def recompute_and_save_scores
+    all_submissions = @course.submissions.for_user(@user_ids).to_a
     @user_ids.each do |user_id|
-      submissions = Submission.for_user(user_id)
+      submissions = all_submissions.select { |submission| submission.user_id == user_id }
       calculate_current_score(user_id, submissions)
       calculate_final_score(user_id, submissions)
     end
@@ -79,8 +80,10 @@ class GradeCalculator
               :submission_count => 0}
       
       # collect submissions for this user for all the assignments
+      # if an assignment is muted it will be treated as if there is no submission
       group_assignments.each do |assignment|
         submission = submissions.detect { |s| s.assignment_id == assignment.id }
+        submission = nil if assignment.muted
         submission ||= OpenStruct.new(:assignment_id=>assignment.id, :score=>0) unless ignore_ungraded
         assignment_submissions << {:assignment => assignment, :submission => submission}
       end

@@ -11,22 +11,24 @@
   </div>
 <% else %>
   <% if @attachment.content_type == "application/x-shockwave-flash" %>
-    <object classid="clsid:D27CDB6E-AE6D-11cf-96B8-444553540000" width="100%" height="500">
+    <object classid="clsid:D27CDB6E-AE6D-11cf-96B8-444553540000" class="embedded_swf">
       <param name="movie" value="<%= safe_domain_file_url(@attachment) %>" />
       <param name="wmode" value="transparent" />
+      <param name="salign" value="t" />
       <param name="allowscriptaccess" value="never" />
       <!--[if !IE]>-->
-      <object type="application/x-shockwave-flash" data="<%= safe_domain_file_url(@attachment) %>" width="100%" height="500">
+      <object type="application/x-shockwave-flash" data="<%= safe_domain_file_url(@attachment) %>" class="embedded_swf">
         <param name="wmode" value="transparent" />
+        <param name="salign" value="t" />
         <param name="allowscriptaccess" value="never" />
         <!--<![endif]-->
         <!--[if !IE]>-->
       </object>
       <!--<![endif]-->
     </object>
-    <a style="display:block;" href="<%= safe_domain_file_url(@attachment) %>">Download <%= @attachment.display_name %></a>
+    <a style="display:block;" href="<%= safe_domain_file_url(@attachment, nil, nil, true) %>">Download <%= @attachment.display_name %></a>
   <% elsif @attachment.inline_content? %>
-    <% jammit_js :file_inline %>
+    <% js_bundle :file_inline %>
     <iframe id="file_content" src="<%= safe_domain_file_url(@attachment) %>" style="width: 100%; height: 400px;"></iframe>
   <% elsif @attachment.content_type && @attachment.content_type.match(/\Aimage\//) %>
     <h2><%= @attachment.display_name %></h2>
@@ -34,12 +36,19 @@
   <% else %>
     <h2><%= @attachment.display_name %></h2>
     <span style="font-size: 1.2em;">
-      <%= link_to "Download #{@attachment.filename}", download_url %>
+      <%= link_to "Download #{@attachment.display_name}", download_url %>
     </span> (<%= @attachment.readable_size %>)
     <% if @attachment.scribdable? %>
       <div id="doc_preview" data-attachment_view_inline_ping_url="<%= context_url(@context, :context_file_inline_view_url, @attachment.id) %>" data-scribd_doc_id="<%= @attachment.scribd_doc.try(:doc_id) %>" data-scribd_access_key="<%= @attachment.scribd_doc.try(:access_key) %>" data-public_url="<%= @attachment.authenticated_s3_url %>"></div>
       <% js_block do %>
         <script>
+        require([
+          'jquery' /* $ */,
+          'jquery.doc_previews' /* loadDocPreview */,
+          'jquery.instructure_misc_plugins' /* fillWindowWithMe */,
+          'vendor/scribd.view' /* scribd */
+        ], function($) {
+
           $(function() {
             $('#doc_preview').fillWindowWithMe().loadDocPreview({
               height: '100%',
@@ -48,6 +57,8 @@
               }
             });
           });
+
+        });
         </script>
       <% end %>
     <% end %>

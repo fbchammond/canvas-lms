@@ -2,11 +2,11 @@
   <div class='event-details-header'>
     <a href="#" class="popover_close x-close-link">×</a>
     <h3 class="details_title title">
-      {{#if fullDetailsURL}}
+      {{#ifAll can_edit fullDetailsURL}}
         <a href="{{fullDetailsURL}}" class="view_event_link">{{title}}</a>
       {{else}}
         {{title}}
-      {{/if}}
+      {{/ifAll}}
     </h3>
   </div>
   <div class="event-details-content">
@@ -15,7 +15,11 @@
       {{#if contextInfo}}
         <tr>
           <th scope="row">{{#t "calendar"}}Calendar{{/t}}</th>
-          <td><a href="{{contextInfo.url}}">{{contextInfo.name}}</a></td>
+          <td><a href="{{contextInfo.url}}">{{contextInfo.name}}</a>
+            {{#if actualContextInfo}}
+              <br><span class="event-details-actual-context">{{actualContextInfo.name}}</span>
+            {{/if}}
+          </td>
         </tr>
       {{/if}}
       {{#if location_name}}
@@ -30,28 +34,26 @@
           <td>{{{description}}}</td>
         </tr>
       {{/if}}
-      {{#if reserved_users}}
+      {{#if reservations}}
         <tr>
           <th scope="row">{{#t "attendees"}}Attendees{{/t}}</th>
           <td>
-            <ul>
-              {{#each reserved_users}}
-                <!-- TODO: put avatar images here if enabled -->
-                <li>{{name}}</li>
-              {{/each}}
-            </ul>
-          </td>
-        </tr>
-      {{/if}}
-      {{#if reserved_groups}}
-        <tr>
-          <th scope="row">{{#t "attendees"}}Attendees{{/t}}</th>
-          <td>
-            <ul>
-              {{#each reserved_groups}}
-                <li>{{name}}</li>
-              {{/each}}
-            </ul>
+            {{#if can_edit}}
+              <ul id="attendees">
+                {{#each reservations}}
+                  <li data-url="{{event_url}}">
+                    <div class="ellipsis">{{name}}</div>
+                    <a href="javascript:void(0)" class="cancel_appointment_link"></a>
+                  </li>
+                {{/each}}
+              </ul>
+            {{else}}
+              <ul>
+                {{#each reservations}}
+                  <li>{{name}}</li>
+                {{/each}}
+              </ul>
+            {{/if}}
           </td>
         </tr>
       {{/if}}

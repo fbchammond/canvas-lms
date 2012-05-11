@@ -89,7 +89,7 @@ class PseudonymSessionsController < ApplicationController
     elsif @is_saml && !params[:no_auto]
       initiate_saml_login(request.env['canvas.account_domain'])
     else
-      flash[:delegated_message] = session.delete :delegated_message
+      flash[:delegated_message] = session.delete :delegated_message if session[:delegated_message]
       maybe_render_mobile_login
     end
   end
@@ -105,6 +105,7 @@ class PseudonymSessionsController < ApplicationController
       }
       render :template => 'pseudonym_sessions/mobile_login', :layout => false, :status => status
     else
+      @request = request
       render :action => 'new', :status => status
     end
   end
@@ -125,9 +126,11 @@ class PseudonymSessionsController < ApplicationController
     end
 
     if !found && params[:pseudonym_session]
-      valid_alternatives = Pseudonym.trusted_by(@domain_root_account).custom_find_by_unique_id(params[:pseudonym_session][:unique_id], :all).select {|p|
-        p.valid_arbitrary_credentials?(params[:pseudonym_session][:password])
-      }
+      valid_alternatives = Shard.partition_by_shard(@domain_root_account.trusted_account_ids) do |account_ids|
+        Pseudonym.active.by_unique_id(params[:pseudonym_session][:unique_id]).find(:all, :conditions => { :account_id => account_ids }).select { |p|
+          p.valid_arbitrary_credentials?(params[:pseudonym_session][:password])
+        }
+      end
       # only log them in if these credentials match a single user
       if valid_alternatives.map(&:user).uniq.length == 1
         # prefer a pseudonym from Site Admin if possible, otherwise just choose one
@@ -173,11 +176,21 @@ class PseudonymSessionsController < ApplicationController
     if @domain_root_account.saml_authentication? and session[:name_id]
       # logout at the saml identity provider
       # once logged out it'll be redirected to here again
-      settings = @domain_root_account.account_authorization_config.saml_settings(request.env['canvas.account_domain'])
-      request = Onelogin::Saml::LogOutRequest.create(settings, session)
+      aac = @domain_root_account.account_authorization_config
+      settings = aac.saml_settings(request.env['canvas.account_domain'])
+      request = Onelogin::Saml::LogOutRequest.new(settings, session)
+      forward_url = request.generate_request
+      
+      if aac.debugging? && aac.debug_get(:logged_in_user_id) == @current_user.id
+        aac.debug_set(:logout_request_id, request.id)
+        aac.debug_set(:logout_to_idp_url, forward_url)
+        aac.debug_set(:logout_to_idp_xml, request.request_xml)
+        aac.debug_set(:debugging, t('debug.logout_redirect', "LogoutRequest sent to IdP"))
+      end
+      
       reset_session
       session[:delegated_message] = message if message
-      redirect_to(request)
+      redirect_to(forward_url)
       return
     elsif @domain_root_account.cas_authentication? and session[:cas_login]
       reset_session
@@ -210,12 +223,27 @@ class PseudonymSessionsController < ApplicationController
 
   def saml_consume
     if @domain_root_account.saml_authentication? && params[:SAMLResponse]
-      settings = @domain_root_account.account_authorization_config.saml_settings(request.env['canvas.account_domain'])
+      aac = @domain_root_account.account_authorization_config
+      settings = aac.saml_settings(request.env['canvas.account_domain'])
       response = saml_response(params[:SAMLResponse], settings)
 
       logger.info "Attempting SAML login for #{response.name_id} in account #{@domain_root_account.id}"
 
+      debugging = aac.debugging? && aac.debug_get(:request_id) == response.in_response_to
+      if debugging
+        aac.debug_set(:debugging, t('debug.redirect_from_idp', "Recieved LoginResponse from IdP"))
+        aac.debug_set(:idp_response_encoded, params[:SAMLResponse])
+        aac.debug_set(:idp_response_xml_encrypted, response.xml)
+        aac.debug_set(:idp_response_xml_decrypted, response.document.to_s)
+        aac.debug_set(:idp_in_response_to, response.in_response_to)
+        aac.debug_set(:idp_login_destination, response.destination)
+        aac.debug_set(:fingerprint_from_idp, response.fingerprint_from_idp)
+        aac.debug_set(:login_to_canvas_success, 'false')
+      end
+      
       if response.is_valid?
+        aac.debug_set(:is_valid_login_response, 'true') if debugging
+        
         if response.success_status?
           @pseudonym = nil
           @pseudonym = @domain_root_account.pseudonyms.custom_find_by_unique_id(response.name_id)
@@ -228,6 +256,11 @@ class PseudonymSessionsController < ApplicationController
             #Successful login and we have a user
             @domain_root_account.pseudonym_sessions.create!(@pseudonym, false)
             @user = @pseudonym.login_assertions_for_user
+            
+            if debugging
+              aac.debug_set(:login_to_canvas_success, 'true')
+              aac.debug_set(:logged_in_user_id, @user.id)
+            end
 
             session[:name_id] = response.name_id
             session[:name_qualifier] = response.name_qualifier
@@ -236,24 +269,37 @@ class PseudonymSessionsController < ApplicationController
 
             successful_login(@user, @pseudonym)
           else
-            logger.warn "Received SAML login request for unknown user: #{response.name_id}"
+            message = "Received SAML login request for unknown user: #{response.name_id}"
+            logger.warn message
+            aac.debug_set(:canvas_login_fail_message, message) if debugging
             # the saml message has to survive a couple redirects
             session[:delegated_message] = t 'errors.no_matching_user', "Canvas doesn't have an account for user: %{user}", :user => response.name_id
             redirect_to :action => :destroy
           end
         elsif response.auth_failure?
-          logger.warn "Failed SAML login attempt."
+          message = "Failed to log in correctly at IdP"
+          logger.warn message
+          aac.debug_set(:canvas_login_fail_message, message) if debugging
+          flash[:delegated_message] = t 'errors.login_error', "There was a problem logging in at %{institution}", :institution => @domain_root_account.display_name
+          redirect_to login_url(:no_auto=>'true')
+        elsif response.no_authn_context?
+          message = "Attempted SAML login for unsupported authn_context at IdP."
+          logger.warn message
+          aac.debug_set(:canvas_login_fail_message, message) if debugging
           flash[:delegated_message] = t 'errors.login_error', "There was a problem logging in at %{institution}", :institution => @domain_root_account.display_name
           redirect_to login_url(:no_auto=>'true')
         else
-          logger.warn "Unexpected SAML status code - status code: #{response.status_code rescue ""}"
-          logger.warn "Status Message: #{response.status_message rescue ""}"
-          logger.warn "SAML Response:";i=0;while temp=params[:SAMLResponse][i...i+1500] do logger.warn temp;i+=1500;end
+          message = "Unexpected SAML status code - status code: #{response.status_code rescue ""} - Status Message: #{response.status_message rescue ""}"
+          logger.warn message
+          aac.debug_set(:canvas_login_fail_message, message) if debugging
           redirect_to login_url(:no_auto=>'true')
         end
       else
+        if debugging
+          aac.debug_set(:is_valid_login_response, 'false')
+          aac.debug_set(:login_response_validation_error, response.validation_error)
+        end
         logger.error "Failed to verify SAML signature."
-        logger.warn "SAML Response:";i=0;while temp=params[:SAMLResponse][i...i+1500] do logger.warn temp;i+=1500;end
         @pseudonym_session.destroy rescue true
         reset_session
         flash[:delegated_message] = t 'errors.login_error', "There was a problem logging in at %{institution}", :institution => @domain_root_account.display_name
@@ -275,6 +321,20 @@ class PseudonymSessionsController < ApplicationController
   end
 
   def saml_logout
+    if @domain_root_account.saml_authentication? && params[:SAMLResponse]
+      aac = @domain_root_account.account_authorization_config
+      settings = aac.saml_settings(request.env['canvas.account_domain'])
+      response = Onelogin::Saml::LogoutResponse.new(params[:SAMLResponse], settings)
+      response.logger = logger
+
+      if aac.debugging? && aac.debug_get(:logout_request_id) == response.in_response_to
+        aac.debug_set(:idp_logout_response_encoded, params[:SAMLResponse])
+        aac.debug_set(:idp_logout_response_xml_encrypted, response.xml)
+        aac.debug_set(:idp_logout_in_response_to, response.in_response_to)
+        aac.debug_set(:idp_logout_destination, response.destination)
+        aac.debug_set(:debugging, t('debug.logout_redirect_from_idp', "Received LogoutResponse from IdP"))
+      end
+    end
     redirect_to :action => :destroy
   end
 
@@ -300,7 +360,7 @@ class PseudonymSessionsController < ApplicationController
 
   def successful_login(user, pseudonym)
     respond_to do |format|
-      flash[:notice] = t 'notices.login_success', "Login successful."
+      flash[:notice] = t 'notices.login_success', "Login successful." unless flash[:error]
       if session[:oauth2]
         # this is where we will verify client authorization and scopes, once implemented
         # .....

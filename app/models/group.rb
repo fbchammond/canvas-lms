@@ -60,12 +60,21 @@ class Group < ActiveRecord::Base
   has_many :short_message_associations, :as => :context, :include => :short_message, :dependent => :destroy
   has_many :short_messages, :through => :short_message_associations, :dependent => :destroy
   has_many :media_objects, :as => :context
+  has_many :zip_file_imports, :as => :context
 
   before_save :ensure_defaults, :maintain_category_attribute
   after_save :close_memberships_if_deleted
 
   include StickySisFields
   are_sis_sticky :name
+
+  alias_method :participating_users_association, :participating_users
+
+  def participating_users(user_ids = nil)
+    user_ids ?
+      participating_users_association.scoped(:conditions => {:id => user_ids}) :
+      participating_users_association
+  end
 
   def wiki
     res = self.wiki_id && Wiki.find_by_id(self.wiki_id)
@@ -78,28 +87,30 @@ class Group < ActiveRecord::Base
   end
 
   def auto_accept?(user)
-    return false unless user
-    self.student_organized? && self.context.users.include?(user) &&
-    self.join_level == 'parent_context_auto_join'
+    self.context.grants_right?(user, :participate_in_groups) &&
+      self.student_organized? && 
+      self.join_level == 'parent_context_auto_join'
   end
 
   def allow_join_request?(user)
-    return false unless user
-    self.student_organized? && self.context.users.include?(user) &&
-    ['parent_context_auto_join', 'parent_context_request'].include?(self.join_level)
+    self.context.grants_right?(user, :participate_in_groups) &&
+      self.student_organized? && 
+      ['parent_context_auto_join', 'parent_context_request'].include?(self.join_level)
   end
 
   def allow_self_signup?(user)
-    return false unless user && self.group_category
-    self.group_category.unrestricted_self_signup? ||
-    (self.group_category.restricted_self_signup? && self.has_common_section_with_user?(user))
+    self.context.grants_right?(user, :participate_in_groups) &&
+      self.group_category &&
+      (self.group_category.unrestricted_self_signup? ||
+        (self.group_category.restricted_self_signup? && self.has_common_section_with_user?(user)))
   end
 
   def free_association?(user)
     allow_join_request?(user) || allow_self_signup?(user)
   end
 
-  def participants
+  def participants(include_observers=false)
+    # argument needed because #participants is polymorphic for contexts
     participating_users.uniq
   end
 
@@ -303,7 +314,7 @@ class Group < ActiveRecord::Base
     can :create
 
     given { |user, session| self.context && self.context.grants_right?(user, session, :manage_groups) }
-    can :read and can :read_roster and can :manage and can :manage_content and can :manage_students and can :manage_admin_users and can :update and can :delete and can :create and can :moderate_forum and can :post_to_forum and can :manage_wiki and can :manage_files
+    can :read and can :read_roster and can :manage and can :manage_content and can :manage_students and can :manage_admin_users and can :update and can :delete and can :create and can :moderate_forum and can :post_to_forum and can :manage_wiki and can :manage_files and can :create_conferences
 
     given { |user, session| self.context && self.context.grants_right?(user, session, :view_group_pages) }
     can :read and can :read_roster
@@ -332,6 +343,10 @@ class Group < ActiveRecord::Base
     end
   end
 
+  def participating_users_count
+    self.participating_users.count
+  end
+
   def quota
     self.storage_quota || Setting.get_cached('group_default_quota', 50.megabytes.to_s).to_i
   end
@@ -354,7 +369,7 @@ class Group < ActiveRecord::Base
       { :id => TAB_CHAT,          :label => t("#group.tabs.chat", "Chat"), :css_class => 'chat', :href => :group_chat_path },
       { :id => TAB_FILES,         :label => t("#group.tabs.files", "Files"), :css_class => 'files', :href => :group_files_path }
     ]
-    available_tabs << { :id => TAB_CONFERENCES, :label => t('#tabs.conferences', "Conferences"), :css_class => 'conferences', :href => :group_conferences_path } if user && self.grants_right?(user, nil, :create_conferences)
+    available_tabs << { :id => TAB_CONFERENCES, :label => t('#tabs.conferences', "Conferences"), :css_class => 'conferences', :href => :group_conferences_path } if user && self.grants_right?(user, nil, :read)
     available_tabs
   end
 
@@ -362,9 +377,8 @@ class Group < ActiveRecord::Base
 
   def self.process_migration(data, migration)
     groups = data['groups'] ? data['groups']: []
-    to_import = migration.to_import 'groups'
     groups.each do |group|
-      if group['migration_id'] && (!to_import || to_import[group['migration_id']])
+      if migration.import_object?("groups", group['migration_id'])
         begin
           import_from_migration(group, migration.context)
         rescue

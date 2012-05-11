@@ -1,7 +1,13 @@
-<% 
-  jammit_js :jquery_ui_menu, :speed_grader
+<%
+  js_bundle :speed_grader
   jammit_css :speed_grader
-  @show_left_side = false 
+  js_env({
+    :RUBRIC_ASSESSMENT => {
+      :assessor_id => @current_user ? @current_user.id : "null",
+      :assessment_type => can_do(@assignment, @current_user, :grade) ? "grading" : "peer_review"
+    }
+  })
+  @show_left_side = false
   @can_edit_anything = !@context.completed?
 %>
 <% content_for :page_title, t(:page_title, "%{assignment_name}, SpeedGrader, %{course_name}", :assignment_name => @assignment.title, :course_name => @context.name) %>
@@ -11,11 +17,16 @@
 <div id="gradebook_header" style="display:none;">
   <% form_tag({ :controller => :gradebooks, :course_id => @context.id, :action => :update_submission }) do %>
     <div class="left">
+      <% if service_enabled?(:avatars) %>
+         <div id="avatar">
+          <img src="/images/blank.png" id="avatar_image" alt=""/>
+        </div>
+      <% end %>
       <a href="#" class="prev"><%= t('links.previous', "Previous") %></a>
       <div id="combo_box_container"></div>
       <a href="#" class="next"><%= t('links.next', "Next") %></a>
       <div id='x_of_x_students'>
-        (<%= t(:student_index_of_total, "student %{index} of %{total_students}", :index => raw('<span>???</span>'), :total_students => @assignment.context.students.length) %>)<br />
+        (<%= t(:student_index_of_total, "student %{index} of %{total_students}", :index => raw('<span>???</span>'), :total_students => @assignment.context.students_visible_to(@current_user).uniq.count) %>)<br />
         <a href="<%= context_url(@context, :context_gradebook_url) %>#assignment/<%= @assignment.id %>"><%= t('links.gradebook', "Gradebook") %></a> | 
         <a href="<%= context_url(@context, :context_url) %>"><%= t('links.course_home', "Course Home") %></a>
       </div>
@@ -47,6 +58,12 @@
       <div id='submissions_container'>
         <div id="this_student_does_not_have_a_submission">
           <h3><%= t('headers.no_submission', "This student does not have a submission for this assignment") %></h3>
+        </div>
+        <div id="this_student_has_a_submission">
+          <h3>
+            <%= t('headers.submission', "This student has submitted the assignment") %>
+            <span class="subheader"><%= t('headers.anonymous_submission', "This student's responses are hidden because this assignment is anonymous.") %></span>
+          </h3>
         </div>
         <div id="iframe_holder" style="display:none;"></div>
         <div id="resize_overlay" style="display:none;"></div>
@@ -152,6 +169,7 @@
           <div id="comments">
             <div class="comment" id="comment_blank" style="display: none;">
               <a href="javascript:void 0;" class="delete_comment_link"><span class="ui-icon ui-icon-close"></span></a>
+              <img src="#" class="avatar" alt="" style="display: none;"/>
               <span class="comment"></span>
               <a href="#" class="play_comment_link media-comment" style="display:none;"><%= t('links.click_to_view', "click here to view") %></a>
               <span class="media_comment_id" style="display: none;">&nbsp;</span>
@@ -259,12 +277,9 @@
 </ul>
 
 <% js_block do %>
-  <script type="text/javascript">
-    anonymousAssignment = <%= @assignment.quiz && @assignment.quiz.survey? && @assignment.quiz.anonymous_submissions ? "true" : "false" %>;
-    var visibleRubricAssessments = <%= raw((@assignment.visible_rubric_assessments_for(@current_user) || {}).to_json(:methods => [:assessor_name], :include_root => false)) %>;
-    
-    rubricAssessment.assessor_id = <%= @current_user ? @current_user.id : "null" %>;
-    rubricAssessment.assessment_type = '<%= can_do(@assignment, @current_user, :grade) ? "grading" : "peer_review" %>';
+  <script>
+    window.anonymousAssignment = <%= @assignment.quiz && @assignment.quiz.survey? && @assignment.quiz.anonymous_submissions ? "true" : "false" %>;
+    window.visibleRubricAssessments = <%= raw((@assignment.visible_rubric_assessments_for(@current_user) || {}).to_json(:methods => [:assessor_name], :include_root => false)) %>;
   </script>
 <% end %>
 <div id="current_context_code" style="display: none;"><%= @context.asset_string %></div>

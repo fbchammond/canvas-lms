@@ -15,11 +15,20 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+define([
+  'i18n!rubric_assessment',
+  'jquery' /* $ */,
+  'str/htmlEscape',
+  'jquery.instructure_forms' /* fillFormData */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/, /\.scrollTop/, windowScrollTop */,
+  'jquery.instructure_misc_helpers' /* truncateText */,
+  'jquery.instructure_misc_plugins' /* showIf */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */,
+  'vendor/jquery.scrollTo' /* /\.scrollTo/ */
+], function(I18n, $, htmlEscape) {
 
-var rubricAssessment;
-I18n.scoped('rubric_assessment', function(I18n) {
-rubricAssessment = {
-  
+// TODO: stop managing this in the view and get it out of the global scope submissions/show.html.erb
+window.rubricAssessment = {
   init: function(){
     var $rubric_criterion_comments_dialog = $("#rubric_criterion_comments_dialog");
 
@@ -56,7 +65,7 @@ rubricAssessment = {
         event.preventDefault();
         var $criterion = $(this).parents(".criterion"),
             comments = $criterion.getTemplateData({textValues: ['custom_rating']}).custom_rating,
-            editing = $(this).closest(".displaying").parents(".criterion").length === 0,
+            editing = $(this).closest('td').children('.editing').is(':visible'),
             data = {
               criterion_comments: comments,
               criterion_description: $criterion.find(".description:first").text()
@@ -165,8 +174,8 @@ rubricAssessment = {
   assessmentData: function($rubric) {
     $rubric = rubricAssessment.findRubric($rubric);
     var data = {};
-    data['rubric_assessment[user_id]'] = rubricAssessment.assessment_user_id || $rubric.find(".user_id").text();
-    data['rubric_assessment[assessment_type]'] = rubricAssessment.assessment_type || $rubric.find(".assessment_type").text();
+    data['rubric_assessment[user_id]'] = ENV.RUBRIC_ASSESSMENT.assessment_user_id || $rubric.find(".user_id").text();
+    data['rubric_assessment[assessment_type]'] = ENV.RUBRIC_ASSESSMENT.assessment_type || $rubric.find(".assessment_type").text();
     $rubric.find(".criterion:not(.blank)").each(function() {
       var id = $(this).attr('id');
       var pre = "rubric_assessment[" + id + "]";
@@ -217,8 +226,8 @@ rubricAssessment = {
   populateRubric: function($rubric, data) {
     $rubric = rubricAssessment.findRubric($rubric);
     var id = $rubric.attr('id').substring(7);
-    $rubric.find(".user_id").text(rubricAssessment.assessment_user_id || data.user_id).end()
-      .find(".assessment_type").text(rubricAssessment.assessment_type || data.assessment_type);
+    $rubric.find(".user_id").text(ENV.RUBRIC_ASSESSMENT.assessment_user_id || data.user_id).end()
+      .find(".assessment_type").text(ENV.RUBRIC_ASSESSMENT.assessment_type || data.assessment_type);
     
     $rubric.find(".criterion_description").removeClass('completed').removeClass('original_completed').end()
       .find(".rating").removeClass('selected').removeClass('original_selected').end()
@@ -235,6 +244,11 @@ rubricAssessment = {
       for(var idx in assessment.data) {
         var rating = assessment.data[idx];
         var comments = rating.comments_enabled ? rating.comments : rating.description;
+        if (rating.comments_enabled && rating.comments_html) {
+          var comments_html = rating.comments_html;
+        } else {
+          var comments_html = htmlEscape(comments);
+        }
         var $criterion = $rubric.find("#criterion_" + rating.criterion_id);
         if(!rating.id) {
           $criterion.find(".rating").each(function() {
@@ -248,14 +262,15 @@ rubricAssessment = {
           .find(".criterion_description").addClass('original_completed').end()
           .find("#rating_" + rating.id).addClass('original_selected').addClass('selected').end()
           .find(".custom_rating_field").val(comments).end()
-          .find(".custom_rating_comments").text(comments).end()
+          .find(".custom_rating_comments").html(comments_html).end()
           .find(".criterion_points").val(rating.points).change().end()
           .find(".criterion_rating_points_holder").showIf(rating.points || rating.points === 0).end()
           .find(".criterion_rating_points").text(rating.points).end()
           .find(".custom_rating").text(comments).end()
           .find(".criterion_comments").toggleClass('empty', !comments).end()
           .find(".save_custom_rating").attr('checked', false);
-        if(rating.points) {
+        if(comments) $criterion.find('.criterion_comments').show();
+        if(rating.points && !rating.ignore_for_scoring) {
           total += rating.points;
         }
       }
@@ -276,12 +291,13 @@ rubricAssessment = {
           .find(".rating").hide().end()
           .find(".rating.description").showIf(!$rubricSummary.hasClass('free_form')).text(rating.description).end()
           .find(".rating_" + rating.id).show().end()
-          .find(".criterion_points").text(rating.points);
+          .find(".criterion_points").text(rating.points).end()
+          .find(".ignore_for_scoring").showIf(rating.ignore_for_scoring);
         if(rating.comments_enabled && rating.comments) {
           var abbrev = $.truncateText(rating.comments, 50);
           $rubricSummary.find("#criterion_" + rating.criterion_id).find(".rating_custom").show().text(abbrev);
         }
-        if(rating.points) {
+        if(rating.points && !rating.ignore_for_scoring) {
           total += rating.points;
         }
       }
@@ -293,8 +309,8 @@ rubricAssessment = {
     }
   }
 };
-});
-// actually initialize it on dom ready.
-$(function() {
-  rubricAssessment.init();
+
+$(rubricAssessment.init);
+
+return rubricAssessment;
 });

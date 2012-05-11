@@ -1,13 +1,14 @@
-define 'compiled/calendar/CommonEvent', [
-  'i18n'
-], (I18n) ->
-
-  I18n = I18n.scoped 'calendar'
+define [
+  'jquery'
+  'jquery.ajaxJSON'
+  'vendor/jquery.ba-tinypubsub'
+], ($) ->
 
   class
-    constructor: (data, contextInfo) ->
+    constructor: (data, contextInfo, actualContextInfo) ->
       @eventType = 'generic'
       @contextInfo = contextInfo
+      @actualContextInfo = actualContextInfo
       @allPossibleContexts = null
       @className = []
       @object = {}
@@ -22,7 +23,7 @@ define 'compiled/calendar/CommonEvent', [
       @object?.appointment_group_url
 
     contextCode: () =>
-      @object?.context_code || @contextInfo?.asset_string
+      @object?.effective_context_code || @object?.context_code || @contextInfo?.asset_string
 
     isUndated: () =>
       @start == null

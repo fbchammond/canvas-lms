@@ -1,26 +1,24 @@
 module ConversationsHelper
-  def contexts_for(audience)
+  def contexts_for(audience, context_tags)
     result = {:courses => {}, :groups => {}}
     return result if audience.empty?
-    return {:courses => audience.first.common_courses, :groups => audience.first.common_groups} if audience.size == 1
-
-    # get up to two contexts that are shared by >= 50% of the audience
-    contexts = audience.inject({}) { |hash, user|
-      user.common_courses.each { |id, roles| (hash[[:courses, id]] ||= []) << user.id }
-      user.common_groups.each { |id, roles| (hash[[:groups, id]] ||= []) << user.id }
+    context_tags.inject(result) do |hash, tag|
+      next unless tag =~ /\A(course|group)_(\d+)\z/
+      hash["#{$1}s".to_sym][$2.to_i] = []
       hash
-    }.
-    sort_by{ |c| - c.last.size}.
-    select{ |k, v| v.size >= audience.size / 2 }[0, 2].
-    map(&:first).
-    inject(result){ |hash, (type, id)|
-      (hash[type] ||= {})[id] = []
-      hash
-    }
+    end
+    if audience.size == 1 && include_private_conversation_enrollments
+      audience.first.common_courses.each do |id, enrollments|
+        result[:courses][id] = enrollments if result[:courses][id]
+      end
+      audience.first.common_groups.each do |id, enrollments|
+        result[:groups][id] = enrollments if result[:groups][id]
+      end
+    end
+    result
   end
 
-  def avatar_url_for(conversation)
-    participants = conversation.participants
+  def avatar_url_for(conversation, participants = conversation.participants)
     if participants.size == 1
       avatar_url_for_user(participants.first)
     elsif participants.size == 2
@@ -43,7 +41,7 @@ module ConversationsHelper
       "/images/messages/avatar-#{avatar_size}.png"
     )
     if service_enabled?(:avatars)
-      user.avatar_url(avatar_size, nil, default_avatar).sub(%r{\A/}, "#{request.protocol}#{request.host_with_port}/")
+      avatar_image_url(user.id, :fallback => default_avatar)
     else
       default_avatar
     end

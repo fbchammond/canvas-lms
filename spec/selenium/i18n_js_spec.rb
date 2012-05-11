@@ -1,11 +1,13 @@
 require File.expand_path(File.dirname(__FILE__) + "/common")
 
-describe "i18n js selenium tests" do
+describe "i18n js" do
   it_should_behave_like "in-process server selenium tests"
 
-  before do
+  before (:each) do
     course_with_teacher_logged_in
     get "/"
+    # get I18n global for all the tests
+    driver.execute_script "require(['i18nObj'], function (I18n) { window.I18n = I18n });"
   end
 
   context "html safety" do

@@ -163,21 +163,11 @@ module Api
       links << template % [base_url, collection.previous_page, "prev"]
     end
     links << template % [base_url, 1, "first"]
-    if collection.total_pages && collection.total_pages > 1
+    if !pagination_args[:without_count] && collection.total_pages && collection.total_pages > 1
       links << template % [base_url, collection.total_pages, "last"]
     end
     controller.response.headers["Link"] = links.join(',') if links.length > 0
     collection
-  end
-
-  def attachment_json(attachment)
-    url = file_download_url(attachment, :verifier => attachment.uuid, :download => '1', :download_frd => '1')
-    {
-      'content-type' => attachment.content_type,
-      'display_name' => attachment.display_name,
-      'filename' => attachment.filename,
-      'url' => url,
-    }
   end
 
   def media_comment_json(media_object_or_hash)
@@ -214,11 +204,15 @@ module Api
   def api_user_content(html, context = @context, user = @current_user)
     return html if html.blank?
 
+    # if we're a controller, use the host of the request, otherwise let HostUrl
+    # figure out what host is appropriate
+    host = HostUrl.context_host(context, @account_domain) unless self.is_a?(ApplicationController)
+
     rewriter = UserContent::HtmlRewriter.new(context, user)
     rewriter.set_handler('files') do |match|
       obj = match.obj_class.find_by_id(match.obj_id)
       next unless obj && rewriter.user_can_view_content?(obj)
-      file_download_url(obj.id, :verifier => obj.uuid, :download => '1')
+      file_download_url(obj.id, :verifier => obj.uuid, :download => '1', :host => host)
     end
     html = rewriter.translate_content(html)
 
@@ -227,16 +221,28 @@ module Api
     # translate media comments into html5 video tags
     doc = Nokogiri::HTML::DocumentFragment.parse(html)
     doc.css('a.instructure_inline_media_comment').each do |anchor|
-      media_id = anchor['id'].gsub(/^media_comment_/, '')
-      media_redirect = polymorphic_url([context, :media_download], :entryId => media_id, :type => 'mp4', :redirect => '1')
-      thumbnail = media_object_thumbnail_url(media_id, :width => 550, :height => 448, :type => 3)
-      video_node = Nokogiri::XML::Node.new('video', doc)
-      video_node['controls'] = 'controls'
-      video_node['poster'] = thumbnail
-      video_node['src'] = media_redirect
-      video_node['width'] = '550'
-      video_node['height'] = '448'
-      anchor.replace(video_node)
+      media_id = anchor['id'].try(:gsub, /^media_comment_/, '')
+      next if media_id.blank?
+
+      if anchor['class'].try(:match, /\baudio_comment\b/)
+        node = Nokogiri::XML::Node.new('audio', doc)
+        node['data-media_comment_type'] = 'audio'
+      else
+        node = Nokogiri::XML::Node.new('video', doc)
+        thumbnail = media_object_thumbnail_url(media_id, :width => 550, :height => 448, :type => 3, :host => host)
+        node['poster'] = thumbnail
+        node['data-media_comment_type'] = 'video'
+        node['width'] = '550'
+        node['height'] = '448'
+      end
+
+      node['preload'] = 'none'
+      node['class'] = 'instructure_inline_media_comment'
+      node['data-media_comment_id'] = media_id
+      media_redirect = polymorphic_url([context, :media_download], :entryId => media_id, :type => 'mp4', :redirect => '1', :host => host)
+      node['controls'] = 'controls'
+      node['src'] = media_redirect
+      anchor.replace(node)
     end
 
     return doc.to_s

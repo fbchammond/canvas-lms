@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv=Content-type content="text/html; charset=utf-8">
+  <title>Tests</title>
+  <link rel="stylesheet" href="support/qunit/qunit.css" type="text/css">
+  <style>
+  body {
+    font-family: 'Helvetica', 'Verdana';
+  }
+  code {
+    font-size: 120%;
+    background-color: rgba(255, 255, 255, 0.75);
+  }
+  #fixture {
+    background: yellow;
+    padding: 10px;
+    margin: 10px 0;
+    border: solid 1px #ccc;
+    -webkit-border-radius: 1em;
+    -moz-border-radius: 1em;
+    -ms-border-radius: 1em;
+    border-radius: 1em;
+  }
+  </style>
+</head>
+<body>
+  <h1 id="qunit-header">QUnit Test Suite</h1>
+  <h2 id="qunit-banner"></h2>
+  <div id="qunit-testrunner-toolbar"></div>
+  <h2 id="qunit-userAgent"></h2>
+  <ol id="qunit-tests"></ol>
+
+  <div id="fixtures"></div>
+
+  <script src="support/qunit/qunit.js"></script>
+  <script src="support/sinon/sinon-1.3.1.js"></script>
+  <script src="support/sinon/sinon-qunit-1.0.0.js"></script>
+  <script>
+    var require = {
+      urlArgs: "bust=" +  (new Date()).getTime(),
+
+      baseUrl: '../../public/javascripts',
+
+      paths: {
+        jquery: 'vendor/jquery-1.6.4',
+        jqueryui: 'vendor/jqueryui',
+        underscore: 'vendor/underscore',
+        use: 'vendor/use'
+      },
+
+      // non-amd shims
+      use: {
+        underscore: {
+          attach: '_'
+        }
+      },
+
+      packages: [
+        {
+          name: 'jqueryui',
+          location: 'vendor/jqueryui'
+        },
+        {
+          name: 'helpers',
+          location: '../../spec/javascripts/helpers',
+          main: 'helpers',
+          lib: './'
+        },
+        {
+          name: 'support',
+          location: '../../spec/javascripts/support',
+          main: 'support',
+          lib: './'
+        },
+        {
+          name: 'spec',
+          location: '../../spec'
+        },
+      ]
+    };
+  </script>
+  <script src="../../public/javascripts/vendor/require.js"></script>
+  <script>
+    // don't run specs until they are all loaded
+    stop();
+    require(<%= Dir["spec/javascripts/**/*Spec.js"].map{ |file| file.sub(/\.js$/, '') }.inspect %>, function() {
+      // run specs once they've all loaded
+      start();
+    });
+  </script>
+
+</body>
+</html>
+

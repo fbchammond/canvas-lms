@@ -13,6 +13,7 @@ class Pool
     @options = {
       :config_file => expand_rails_path("config/delayed_jobs.yml"),
       :pid_folder => expand_rails_path("tmp/pids"),
+      :tail_logs => true, # only in FG mode
     }
   end
 
@@ -34,6 +35,7 @@ class Pool
       opts.separator "\n<options>"
       opts.on("-c", "--config", "Use alternate config file (default #{options[:config_file]})") { |c| options[:config_file] = c }
       opts.on("-p", "--pid", "Use alternate folder for PID files (default #{options[:pid_folder]})") { |p| options[:pid_folder] = p }
+      opts.on("--no-tail", "Don't tail the logs (only affects non-daemon mode)") { options[:tail_logs] = false }
       opts.on_tail("-h", "--help", "Show this message") { puts opts; exit }
     end
     op.parse!(@args)
@@ -70,8 +72,8 @@ class Pool
     say "Started job master", :info
     $0 = "delayed_jobs_pool"
     read_config(options[:config_file])
-    spawn_all_workers
     spawn_periodic_auditor
+    spawn_all_workers
     say "Workers spawned"
     join
     say "Shutting down"
@@ -126,6 +128,10 @@ class Pool
   def spawn_periodic_auditor
     return if @config[:disable_periodic_jobs]
 
+    # audit any periodic job overrides for invalid cron lines
+    # we do this here to fail as early as possible
+    Delayed::Periodic.audit_overrides!
+
     @periodic_thread = Thread.new do
       # schedule the initial audit immediately on startup
       schedule_periodic_audit
@@ -164,6 +170,7 @@ class Pool
   end
 
   def tail_rails_log
+    return if !@options[:tail_logs]
     Rails.logger.auto_flushing = true if Rails.logger.respond_to?(:auto_flushing=)
     Thread.new do
       f = File.open(Rails.configuration.log_path.presence || (Rails.root+"log/#{Rails.env}.log"), 'r')
@@ -215,7 +222,11 @@ class Pool
     pid = File.read(pid_file) if File.file?(pid_file)
     if pid.to_i > 0
       puts "Stopping pool #{pid}..."
-      Process.kill('INT', pid.to_i)
+      begin
+        Process.kill('INT', pid.to_i)
+      rescue Errno::ESRCH
+        # ignore if the pid no longer exists
+      end
     else
       status
     end
@@ -223,12 +234,13 @@ class Pool
 
   def status(print = true)
     pid = File.read(pid_file) if File.file?(pid_file)
-    if pid
+    alive = pid && pid.to_i > 0 && Process.kill(0, pid.to_i) rescue false
+    if alive
       puts "Delayed jobs running, pool PID: #{pid}" if print
     else
       puts "No delayed jobs pool running" if print
     end
-    pid.to_i > 0 ? pid.to_i : nil
+    alive
   end
 
   def read_config(config_filename)

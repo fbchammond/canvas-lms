@@ -7,7 +7,10 @@
  *
  * http://docs.jquery.com/UI/Widget
  */
-(function( $, undefined ) {
+define([
+  'jquery',
+  'jqueryui/widget' // make sure we overrite the old version in case other modules require it after this (hack!)
+], function( $, undefined ) {
 
 var slice = Array.prototype.slice;
 
@@ -125,7 +128,7 @@ $.widget.bridge = function( name, object ) {
 			this.each(function() {
 				var instance = $.data( this, name );
 				if ( !instance ) {
-					return $.error( "cannot call methods on " + name + " prior to initialization; " +
+					return console.log("WARNING, this will break with new jqueryui: cannot call methods on " + name + " prior to initialization; " +
 						"attempted to call method '" + options + "'" );
 				}
 				if ( !$.isFunction( instance[options] ) || options.charAt( 0 ) === "_" ) {
@@ -420,4 +423,4 @@ if ( $.uiBackCompat !== false ) {
 	};
 }
 
-})( jQuery );
+});

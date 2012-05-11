@@ -9,7 +9,8 @@ ActionController::Routing::Routes.draw do |map|
 
   map.discussion_replies 'conversations/discussion_replies', :controller => 'context', :action => 'discussion_replies'
   map.conversations_unread 'conversations/unread', :controller => 'conversations', :action => 'index', :scope => 'unread'
-  map.conversations_labeled 'conversations/labeled', :controller => 'conversations', :action => 'index', :scope => 'labeled'
+  map.conversations_starred 'conversations/starred', :controller => 'conversations', :action => 'index', :scope => 'starred'
+  map.conversations_sent 'conversations/sent', :controller => 'conversations', :action => 'index', :scope => 'sent'
   map.conversations_archived 'conversations/archived', :controller => 'conversations', :action => 'index', :scope => 'archived'
   map.conversations_find_recipients 'conversations/find_recipients', :controller => 'conversations', :action => 'find_recipients'
   map.conversations_mark_all_as_read 'conversations/mark_all_as_read', :controller => 'conversations', :action => 'mark_all_as_read', :conditions => {:method => :post}
@@ -28,7 +29,7 @@ ActionController::Routing::Routes.draw do |map|
   map.registration_confirmation_deprecated 'pseudonyms/:id/register/:nonce',
     :controller => 'communication_channels', :action => 'confirm'
   map.re_send_confirmation 'confirmations/:user_id/re_send/:id',
-    :controller => 'communication_channels', :action => 're_send_confirmation'
+    :controller => 'communication_channels', :action => 're_send_confirmation', :id => nil
   map.forgot_password "forgot_password",
     :controller => 'pseudonyms', :action => 'forgot_password'
   map.confirm_change_password "pseudonyms/:pseudonym_id/change_password/:nonce",
@@ -43,14 +44,96 @@ ActionController::Routing::Routes.draw do |map|
   map.message_redirect "mr/:id", :controller => 'info', :action => 'message_redirect'
   map.help_links 'help_links', :controller => 'info', :action => 'help_links'
 
-  question_bank_resources = lambda do |bank|
-    bank.bookmark 'bookmark', :controller => 'question_banks', :action => 'bookmark'
-    bank.reorder 'reorder', :controller => 'question_banks', :action => 'reorder'
-    bank.questions 'questions', :controller => 'question_banks', :action => 'questions'
-    bank.move_questions 'move_questions', :controller => 'question_banks', :action => 'move_questions'
-    bank.resources :assessment_questions do |question|
-      question.move_question 'move', :controller => 'assessment_questions', :action => 'move'
+  def add_question_banks(context)
+    context.resources :question_banks do |bank|
+      bank.bookmark 'bookmark', :controller => 'question_banks', :action => 'bookmark'
+      bank.reorder 'reorder', :controller => 'question_banks', :action => 'reorder'
+      bank.questions 'questions', :controller => 'question_banks', :action => 'questions'
+      bank.move_questions 'move_questions', :controller => 'question_banks', :action => 'move_questions'
+      bank.resources :assessment_questions do |question|
+        question.move_question 'move', :controller => 'assessment_questions', :action => 'move'
+      end
     end
+  end
+
+  def add_groups(context)
+    context.resources :groups, :collection => {:create_category => :post, :update_category => :put, :delete_category => :delete}
+    context.group_unassigned_members 'group_unassigned_members', :controller => 'groups', :action => 'unassigned_members', :conditions => { :method => :get }
+    context.group_unassigned_members 'group_unassigned_members.:format', :controller => 'groups', :action => 'unassigned_members', :conditions => { :method => :get }
+    context.group_assign_unassigned_members 'group_assign_unassigned_members', :controller => 'groups', :action => 'assign_unassigned_members', :conditions => { :method => :post }
+  end
+
+  def add_files(context, options={})
+    context.resources :files, :collection => {:quota => :get, :reorder => :post} do |file|
+      file.text_inline 'inline', :controller => 'files', :action => 'text_show'
+      file.download 'download', :controller => 'files', :action => 'show', :download => '1'
+      file.typed_download 'download.:type', :controller => 'files', :action => 'show', :download => '1'
+      file.preview 'preview', :controller => 'files', :action => 'show', :preview => '1'
+      file.inline_view 'inline_view', :controller => 'files', :action => 'show', :inline => '1'
+      file.attachment_content 'contents', :controller => 'files', :action => 'attachment_content'
+      file.relative_path ":file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
+    end
+    context.images 'images', :controller => 'files', :action => 'images' if options[:images]
+    context.relative_file_path "file_contents/:file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative' if options[:relative]
+    if options[:folders]
+      context.resources :folders do |folder|
+        folder.download 'download', :controller => 'folders', :action => 'download'
+      end
+    end
+  end
+
+  def add_media(context)
+    context.media_download 'media_download', :controller => 'users', :action => 'media_download'
+    context.typed_media_download 'media_download.:type', :controller => 'users', :action => 'media_download'
+  end
+
+  def add_users(context)
+    context.users 'users', :controller => 'context', :action => 'roster'
+    context.user_services 'user_services', :controller => 'context', :action => 'roster_user_services'
+    context.user_usage 'users/:user_id/usage', :controller => 'context', :action => 'roster_user_usage'
+    yield if block_given?
+    context.user 'users/:id', :controller => 'context', :action => 'roster_user', :conditions => {:method => :get}
+  end
+
+  def add_announcements(context)
+    context.resources :announcements
+    context.announcements_external_feeds "announcements/external_feeds", :controller => 'announcements', :action => 'create_external_feed', :conditions => { :method => :post }
+    context.announcements_external_feed "announcements/external_feeds/:id", :controller => 'announcements', :action => 'destroy_external_feed', :conditions => { :method => :delete }
+  end
+
+  def add_chat(context)
+    context.resources :chats
+    context.chat 'chat', :controller => 'context', :action => 'chat'
+    context.formatted_chat 'chat.:format', :controller => 'context', :action => 'chat'
+  end
+
+  def add_discussions(context)
+    context.resources :discussion_topics, :collection => {:reorder => :post} do |topic|
+      topic.permissions 'permissions', :controller => 'discussion_topics', :action => 'permissions'
+    end
+    context.resources :discussion_entries
+  end
+
+  def add_wiki(context)
+    context.resources :wiki_pages, :as => 'wiki' do |wiki_page|
+      wiki_page.latest_version_number 'revisions/latest', :controller => 'wiki_page_revisions', :action => 'latest_version_number'
+      wiki_page.resources :wiki_page_revisions, :as => "revisions"
+      wiki_page.resources :wiki_page_comments, :as => "comments"
+    end
+    context.named_wiki_page 'wiki/:id', :id => /[^\/]+/, :controller => 'wiki_pages', :action => 'show'
+  end
+
+  def add_conferences(context)
+    context.resources :conferences do |conference|
+      conference.join "join", :controller => "conferences", :action => "join"
+      conference.close "close", :controller => "conferences", :action => "close"
+      conference.settings "settings", :controller => "conferences", :action => "settings"
+    end
+  end
+
+  def add_zip_file_imports(context)
+    context.resources :zip_file_imports, :only => [:new, :create, :show]
+    context.import_files 'imports/files', :controller => 'content_imports', :action => 'files'
   end
 
   # There are a lot of resources that are all scoped to the course level
@@ -68,12 +151,10 @@ ActionController::Routing::Routes.draw do |map|
     course.unconclude 'unconclude', :controller => 'courses', :action => 'unconclude'
     course.students 'students', :controller => 'courses', :action => 'students'
     course.enrollment_invitation 'enrollment_invitation', :controller => 'courses', :action => 'enrollment_invitation'
-    course.users 'users', :controller => 'context', :action => 'roster'
-    course.user_services 'user_services', :controller => 'context', :action => 'roster_user_services'
-    course.user_usage 'users/:user_id/usage', :controller => 'context', :action => 'roster_user_usage'
+    add_users(course) do
+      course.prior_users 'users/prior', :controller => 'context', :action => 'prior_users'
+    end
     course.statistics 'statistics', :controller => 'courses', :action => 'statistics'
-    course.prior_users 'users/prior', :controller => 'context', :action => 'prior_users'
-    course.user 'users/:id', :controller => 'context', :action => 'roster_user', :conditions => {:method => :get}
     course.unenroll 'unenroll/:id', :controller => 'courses', :action => 'unenroll_user', :conditions => {:method => :delete}
     course.move_enrollment 'move_enrollment/:id', :controller => 'courses', :action => 'move_enrollment', :conditions => {:method => :post}
     course.formatted_unenroll 'unenroll/:id.:format', :controller => 'courses', :action => 'unenroll_user', :conditions => {:method => :delete}
@@ -108,11 +189,13 @@ ActionController::Routing::Routes.draw do |map|
     course.attendance 'attendance', :controller => 'gradebooks', :action => 'attendance'
     course.attendance_user 'attendance/:user_id', :controller => 'gradebooks', :action => 'attendance'
     course.imports 'imports', :controller => 'content_imports', :action => 'intro'
-    course.resources :zip_file_imports, :only => [:new, :create], :collection => [:import_status]
-    course.import_files 'imports/files', :controller => 'content_imports', :action => 'files'
+    add_zip_file_imports(course)
     course.import_quizzes 'imports/quizzes', :controller => 'content_imports', :action => 'quizzes'
     course.import_content 'imports/content', :controller => 'content_imports', :action => 'content'
-    course.import_copy 'imports/copy', :controller => 'content_imports', :action => 'copy_course', :conditions => {:method => :get}
+    course.import_choose_course 'imports/choose_course', :controller => 'content_imports', :action => 'choose_course', :conditions => {:method => :get}
+    course.import_choose_content 'imports/choose_content', :controller => 'content_imports', :action => 'choose_content', :conditions => {:method => :get}
+    course.import_copy_course_checklist 'imports/copy_course_checklist', :controller => 'content_imports', :action => 'copy_course_checklist', :conditions => {:method => :get}
+    course.import_copy_course_finish 'imports/copy_course_finish', :controller => 'content_imports', :action => 'copy_course_finish', :conditions => {:method => :get}
     course.import_migrate 'imports/migrate', :controller => 'content_imports', :action => 'migrate_content'
     course.import_upload 'imports/upload', :controller => 'content_imports', :action => 'migrate_content_upload'
     course.import_s3_success 'imports/s3_success', :controller => 'content_imports', :action => 'migrate_content_s3_success'
@@ -127,17 +210,11 @@ ActionController::Routing::Routes.draw do |map|
     course.grades "grades", :controller => 'gradebooks', :action => 'grade_summary', :id => nil
     course.grading_rubrics "grading_rubrics", :controller => 'gradebooks', :action => 'grading_rubrics'
     course.student_grades "grades/:id", :controller => 'gradebooks', :action => 'grade_summary'
-    course.resources :announcements
-    course.announcements_external_feeds "announcements/external_feeds", :controller => 'announcements', :action => 'create_external_feed', :conditions => { :method => :post }
-    course.announcements_external_feed "announcements/external_feeds/:id", :controller => 'announcements', :action => 'destroy_external_feed', :conditions => { :method => :delete }
-    course.chat 'chat', :controller => 'context', :action => 'chat'
-    course.formatted_chat 'chat.:format', :controller => 'context', :action => 'chat'
+    add_announcements(course)
+    add_chat(course)
     course.old_calendar 'calendar', :controller => 'calendars', :action => 'show'
     course.locks 'locks', :controller => 'courses', :action => 'locks'
-    course.resources :discussion_topics, :collection => {:reorder => :post} do |topic|
-      topic.permissions 'permissions', :controller => 'discussion_topics', :action => 'permissions'
-    end
-    course.resources :discussion_entries
+    add_discussions(course)
     course.resources :assignments, :collection => {:syllabus => :get, :submissions => :get}, :member => {:update_submission => :any} do |assignment|
       assignment.resources :submissions do |submission|
         submission.turnitin_report 'turnitin/:asset_string', :controller => 'submissions', :action => 'turnitin_report'
@@ -163,36 +240,11 @@ ActionController::Routing::Routes.draw do |map|
     end
     course.resources :submissions
     course.resources :calendar_events
-    course.resources :chats
-    course.resources :files, :collection => {:quota => :get, :reorder => :post} do |file|
-      file.text_inline 'inline', :controller => 'files', :action => 'text_show'
-      file.download 'download', :controller => 'files', :action => 'show', :download => '1'
-      file.typed_download 'download.:type', :controller => 'files', :action => 'show', :download => '1'
-      file.preview 'preview', :controller => 'files', :action => 'show', :preview => '1'
-      file.inline_view 'inline_view', :controller => 'files', :action => 'show', :inline => '1'
-      file.attachment_content 'contents', :controller => 'files', :action => 'attachment_content'
-      file.relative_path ":file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    end
-    course.images 'images', :controller => 'files', :action => 'images'
-    course.relative_file_path "file_contents/:file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    course.resources :folders do |folder|
-      folder.download 'download', :controller => 'folders', :action => 'download'
-    end
-    course.resources :groups, :collection => {:create_category => :post, :update_category => :put, :delete_category => :delete}
-    course.resources :wiki_pages, :as => 'wiki' do |wiki_page|
-      wiki_page.latest_version_number 'revisions/latest', :controller => 'wiki_page_revisions', :action => 'latest_version_number'
-      wiki_page.resources :wiki_page_revisions, :as => "revisions"
-      wiki_page.resources :wiki_page_comments, :as => "comments"
-    end
-    course.named_wiki_page 'wiki/:id', :id => /[^\/]+/, :controller => 'wiki_pages', :action => 'show'
-    course.resources :conferences do |conference|
-      conference.join "join", :controller => "conferences", :action => "join"
-      conference.close "close", :controller => "conferences", :action => "close"
-      conference.settings "settings", :controller => "conferences", :action => "settings"
-    end
-
-    course.resources :question_banks, &question_bank_resources
-
+    add_files(course, :relative => true, :images => true, :folders => true)
+    add_groups(course)
+    add_wiki(course)
+    add_conferences(course)
+    add_question_banks(course)
     course.quizzes_publish 'quizzes/publish', :controller => 'quizzes', :action => 'publish'
     course.resources :quizzes do |quiz|
       quiz.reorder "reorder", :controller => "quizzes", :action => "reorder"
@@ -255,11 +307,7 @@ ActionController::Routing::Routes.draw do |map|
     course.confirm_action 'confirm_action', :controller => 'courses', :action => 'confirm_action'
     course.start_copy 'copy', :controller => 'courses', :action => 'copy', :conditions => {:method => :get}
     course.copy_course 'copy', :controller => 'courses', :action => 'copy_course', :conditions => {:method => :post}
-    course.media_download 'media_download', :controller => 'users', :action => 'media_download'
-    course.typed_media_download 'media_download.:type', :controller => 'users', :action => 'media_download'
-    course.group_unassigned_members 'group_unassigned_members', :controller => 'groups', :action => 'unassigned_members', :conditions => { :method => :get }
-    course.group_unassigned_members 'group_unassigned_members.:format', :controller => 'groups', :action => 'unassigned_members', :conditions => { :method => :get }
-    course.group_assign_unassigned_members 'group_assign_unassigned_members', :controller => 'groups', :action => 'assign_unassigned_members', :conditions => { :method => :post }
+    add_media(course)
     course.user_notes 'user_notes', :controller => 'user_notes', :action => 'user_notes'
     course.switch_role 'switch_role/:role', :controller => 'courses', :action => 'switch_role'
     course.sis_publish_status 'details/sis_publish', :controller => 'courses', :action => 'sis_publish_status', :conditions => {:method => :get}
@@ -268,6 +316,8 @@ ActionController::Routing::Routes.draw do |map|
     course.resources :user_lists, :only => :create
     course.reset 'reset', :controller => 'courses', :action => 'reset_content', :conditions => {:method => :post}
     course.resources :alerts
+    course.student_view 'student_view', :controller => 'courses', :action => 'student_view', :conditions => {:method => :post}
+    course.student_view 'student_view', :controller => 'courses', :action => 'leave_student_view', :conditions => {:method => :delete}
   end
 
   map.resources :page_views, :only => [:update,:index]
@@ -308,6 +358,8 @@ ActionController::Routing::Routes.draw do |map|
     feed.user_format "users/:feed_code.:format", :controller => "users", :action => "public_feed"
     feed.gradebook "gradebooks/:feed_code", :controller => "gradebooks", :action => "public_feed"
     feed.eportfolio "eportfolios/:eportfolio_id.:format", :controller => "eportfolios", :action => "public_feed"
+    feed.conversation "conversations/:feed_code", :controller => "conversations", :action => "public_feed"
+    feed.conversation_format "conversations/:feed_code.:format", :controller => "conversations", :action => "public_feed"
   end
 
   map.resources :assessment_questions do |question|
@@ -332,54 +384,21 @@ ActionController::Routing::Routes.draw do |map|
   end
 
   map.resources :groups do |group|
-    group.users 'users', :controller => 'context', :action => 'roster'
-    group.user_services 'user_services', :controller => 'context', :action => 'roster_user_services'
-    group.user_usage 'users/:user_id/usage', :controller => 'context', :action => 'roster_user_usage'
-    group.user 'users/:id', :controller => 'context', :action => 'roster_user', :conditions => {:method => :get}
+    add_users(group)
     group.remove_user 'remove_user/:id', :controller => 'groups', :action => 'remove_user', :conditions => {:method => :delete}
     group.add_user 'add_user', :controller => 'groups', :action => 'add_user'
     group.members 'members.:format', :controller => 'groups', :action => 'context_group_members', :conditions => {:method => :get}
     group.members 'members', :controller => 'groups', :action => 'context_group_members', :conditions => {:method => :get}
-    group.resources :announcements
-    group.resources :discussion_topics, :collection => {:reorder => :post} do |topic|
-      topic.permissions 'permissions', :controller => 'discussion_topics', :action => 'permissions'
-    end
-    group.resources :discussion_entries
+    add_announcements(group)
+    add_discussions(group)
     group.resources :calendar_events
-    group.resources :chats
-    group.announcements_external_feeds "announcements/external_feeds", :controller => 'announcements', :action => 'create_external_feed', :conditions => { :method => :post }
-    group.announcements_external_feed "announcements/external_feeds/:id", :controller => 'announcements', :action => 'destroy_external_feed', :conditions => { :method => :delete }
-    group.resources :zip_file_imports, :only => [:new, :create], :collection => [:import_status]
-    group.resources :files, :collection => {:quota => :get, :reorder => :post} do |file|
-      file.text_inline 'inline', :controller => 'files', :action => 'text_show'
-      file.download 'download', :controller => 'files', :action => 'show', :download => '1'
-      file.typed_download 'download.:type', :controller => 'files', :action => 'show', :download => '1'
-      file.preview 'preview', :controller => 'files', :action => 'show', :preview => '1'
-      file.inline_view 'inline_view', :controller => 'files', :action => 'show', :inline => '1'
-      file.attachment_content 'contents', :controller => 'files', :action => 'attachment_content'
-      file.relative_path ":file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    end
+    add_chat(group)
+    add_files(group, :images => true, :folders => true)
+    add_zip_file_imports(group)
     group.resources :external_tools, :only => [:show], :collection => {:retrieve => :get}
-    group.images 'images', :controller => 'files', :action => 'images'
-    group.resources :folders do |folder|
-      folder.download 'download', :controller => 'folders', :action => 'download'
-    end
-    group.resources :wiki_pages, :as => 'wiki' do |wiki_page|
-      wiki_page.latest_version_number 'revisions/latest', :controller => 'wiki_page_revisions', :action => 'latest_version_number'
-      wiki_page.resources :wiki_page_revisions, :as => "revisions"
-      wiki_page.resources :wiki_page_comments, :as => "comments"
-    end
-    group.named_wiki_page 'wiki/:id', :id => /[^\/]+/, :controller => 'wiki_pages', :action => 'show'
-    group.resources :conferences do |conference|
-      conference.join "join", :controller => "conferences", :action => "join"
-      conference.close "close", :controller => "conferences", :action => "close"
-      conference.settings "settings", :controller => "conferences", :action => "settings"
-    end
-    group.chat 'chat', :controller => 'context', :action => 'chat'
-    group.formatted_chat 'chat.:format', :controller => 'context', :action => 'chat'
-
-    group.media_download 'media_download', :controller => 'users', :action => 'media_download'
-    group.typed_media_download 'media_download.:type', :controller => 'users', :action => 'media_download'
+    add_wiki(group)
+    add_conferences(group)
+    add_media(group)
     group.resources :collaborations
     group.resources :short_messages
     group.old_calendar 'calendar', :controller => 'calendars', :action => 'show'
@@ -393,7 +412,6 @@ ActionController::Routing::Routes.draw do |map|
     account.resources :grading_standards, :only => %w(index create update destroy)
 
     account.statistics 'statistics', :controller => 'accounts', :action => 'statistics'
-    account.statistics_page_views 'statistics/page_views', :controller => 'accounts', :action => 'statistics_page_views'
     account.statistics_graph 'statistics/over_time/:attribute', :controller => 'accounts', :action => 'statistics_graph'
     account.formatted_statistics_graph 'statistics/over_time/:attribute.:format', :controller => 'accounts', :action => 'statistics_graph'
     account.turnitin_confirmation 'turnitin/:id/:shared_secret', :controller => 'accounts', :action => 'turnitin_confirmation'
@@ -409,7 +427,7 @@ ActionController::Routing::Routes.draw do |map|
     account.delete_user 'users/:user_id', :controller => 'accounts', :action => 'remove_user', :conditions => {:method => :delete}
     account.resources :users
     account.resources :account_notifications, :only => [:create, :destroy]
-    account.resources :announcements
+    add_announcements(account)
     account.resources :assignments
     account.resources :submissions
     account.resources :account_authorization_configs
@@ -419,10 +437,12 @@ ActionController::Routing::Routes.draw do |map|
     account.test_ldap_binds 'test_ldap_binds', :controller => 'account_authorization_configs', :action => 'test_ldap_bind'
     account.test_ldap_searches 'test_ldap_searches', :controller => 'account_authorization_configs', :action => 'test_ldap_search'
     account.test_ldap_logins 'test_ldap_logins', :controller => 'account_authorization_configs', :action => 'test_ldap_login'
+    account.saml_testing 'saml_testing', :controller => 'account_authorization_configs', :action => 'saml_testing'
+    account.saml_testing_stop 'saml_testing_stop', :controller => 'account_authorization_configs', :action => 'saml_testing_stop'
     account.resources :external_tools do |tools|
       tools.finished 'finished', :controller => 'external_tools', :action => 'finished'
     end
-    account.resources :chats
+    add_chat(account)
     account.user_outcomes_results 'outcomes/users/:user_id', :controller => 'outcomes', :action => 'user_outcome_results'
     account.resources :outcomes, :collection => {:list => :get, :add_outcome => :post} do |outcome|
       outcome.results 'results', :controller => 'outcomes', :action => 'outcome_results'
@@ -436,37 +456,20 @@ ActionController::Routing::Routes.draw do |map|
     account.resources :rubric_associations do |association|
       association.resources :rubric_assessments, :as => 'assessments'
     end
-    account.resources :zip_file_imports, :only => [:new, :create], :collection => [:import_status]
-    account.resources :files, :collection => {:quota => :get, :reorder => :post, :list => :get} do |file|
-      file.text_inline 'inline', :controller => 'files', :action => 'text_show'
-      file.download 'download', :controller => 'files', :action => 'show', :download => '1'
-      file.typed_download 'download.:type', :controller => 'files', :action => 'show', :download => '1'
-      file.preview 'preview', :controller => 'files', :action => 'show', :preview => '1'
-      file.inline_view 'inline_view', :controller => 'files', :action => 'show', :inline => '1'
-      file.attachment_content 'contents', :controller => 'files', :action => 'attachment_content'
-      file.relative_path ":file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    end
-    account.relative_file_path "file_contents/:file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    account.resources :folders do |folder|
-      folder.download 'download', :controller => 'folders', :action => 'download'
-    end
-    account.media_download 'media_download', :controller => 'users', :action => 'media_download'
-    account.typed_media_download 'media_download.:type', :controller => 'users', :action => 'media_download'
-    account.resources :groups, :collection => {:create_category => :post, :update_category => :put, :delete_category => :delete}
+    add_files(account, :relative => true, :images => true, :folders => true)
+    add_media(account)
+    add_groups(account)
     account.resources :outcomes
-    account.group_unassigned_members 'group_unassigned_members', :controller => 'groups', :action => 'unassigned_members', :conditions => { :method => :get }
-    account.group_unassigned_members 'group_unassigned_members.:format', :controller => 'groups', :action => 'unassigned_members', :conditions => { :method => :get }
-    account.group_assign_unassigned_members 'group_assign_unassigned_members', :controller => 'groups', :action => 'assign_unassigned_members', :conditions => { :method => :post }
     account.courses 'courses', :controller => 'accounts', :action => 'courses'
     account.courses_formatted 'courses.:format', :controller => 'accounts', :action => 'courses'
     account.courses_redirect 'courses/:id', :controller => 'accounts', :action => 'courses_redirect'
     account.user_notes 'user_notes', :controller => 'user_notes', :action => 'user_notes'
     account.run_report 'run_report', :controller => 'accounts', :action => 'run_report'
     account.resources :alerts
-    account.resources :question_banks, &question_bank_resources
+    add_question_banks(account)
     account.resources :user_lists, :only => :create
   end
-  map.avatar_image 'images/users/:user_id', :controller => 'info', :action => 'avatar_image_url', :conditions => {:method => :get}
+  map.avatar_image 'images/users/:user_id', :controller => 'users', :action => 'avatar_image_url', :conditions => {:method => :get}
   map.thumbnail_image 'images/thumbnails/:id/:uuid', :controller => 'files', :action => 'image_thumbnail'
   map.show_thumbnail_image 'images/thumbnails/show/:id/:uuid', :controller => 'files', :action => 'show_thumbnail'
   map.report_avatar_image 'images/users/:user_id/report', :controller => 'users', :action => 'report_avatar_image', :conditions => {:method => :post}
@@ -491,16 +494,8 @@ ActionController::Routing::Routes.draw do |map|
   map.resources :users do |user|
     user.masquerade 'masquerade', :controller => 'users', :action => 'masquerade'
     user.delete 'delete', :controller => 'users', :action => 'delete'
-    user.resources :files, :collection => {:quota => :get, :reorder => :post} do |file|
-      file.text_inline 'inline', :controller => 'files', :action => 'text_show'
-      file.download 'download', :controller => 'files', :action => 'show', :download => '1'
-      file.typed_download 'download.:type', :controller => 'files', :action => 'show', :download => '1'
-      file.preview 'preview', :controller => 'files', :action => 'show', :preview => '1'
-      file.inline_view 'inline_view', :controller => 'files', :action => 'show', :inline => '1'
-      file.attachment_content 'contents', :controller => 'files', :action => 'attachment_content'
-      file.relative_path ":file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    end
-    user.images 'images', :controller => 'files', :action => 'images'
+    add_files(user, :images => true)
+    add_zip_file_imports(user)
     user.resources :page_views, :only => [:index]
     user.resources :folders do |folder|
       folder.download 'download', :controller => 'folders', :action => 'download'
@@ -512,7 +507,7 @@ ActionController::Routing::Routes.draw do |map|
       association.invite_assessor "invite", :controller => "rubric_assessments", :action => "invite"
       association.resources :rubric_assessments, :as => 'assessments'
     end
-    user.resources :pseudonyms
+    user.resources :pseudonyms, :except => %w(index)
     user.resources :question_banks, :only => [:index]
     user.assignments_needing_grading 'assignments_needing_grading', :controller => 'users', :action => 'assignments_needing_grading'
     user.assignments_needing_submitting 'assignments_needing_submitting', :controller => 'users', :action => 'assignments_needing_submitting'
@@ -523,10 +518,10 @@ ActionController::Routing::Routes.draw do |map|
     user.resources :user_notes
     user.manageable_courses 'manageable_courses', :controller => 'users', :action => 'manageable_courses'
     user.outcomes 'outcomes', :controller => 'outcomes', :action => 'user_outcome_results'
-    user.resources :zip_file_imports, :only => [:new, :create], :collection => [:import_status]
     user.course_teacher_activity 'teacher_activity/course/:course_id', :controller => 'users', :action => 'teacher_activity'
     user.student_teacher_activity 'teacher_activity/student/:student_id', :controller => 'users', :action => 'teacher_activity'
     user.media_download 'media_download', :controller => 'users', :action => 'media_download'
+    user.resources :messages, :only => [:index]
   end
   map.resource :profile, :only => [:show, :update], :controller => "profile", :member => { :communication => :get, :update_communication => :post } do |profile|
     profile.resources :pseudonyms, :except => %w(index)
@@ -547,15 +542,7 @@ ActionController::Routing::Routes.draw do |map|
   # Thought this idea of having dashboard-scoped urls was a good idea at the
   # time... now I'm not as big a fan.
   map.resource :dashboard, :only => [] do |dashboard|
-    dashboard.resources :files, :only => [:index,:show], :collection => {:quota => :get} do |file|
-      file.text_inline 'inline', :controller => 'files', :action => 'text_show'
-      file.download 'download', :controller => 'files', :action => 'show', :download => '1'
-      file.typed_download 'download.:type', :controller => 'files', :action => 'show', :download => '1'
-      file.preview 'preview', :controller => 'files', :action => 'show', :preview => '1'
-      file.inline_view 'inline_view', :controller => 'files', :action => 'show', :inline => '1'
-      file.attachment_content 'contents', :controller => 'files', :action => 'attachment_content'
-      file.relative_path ":file_path", :file_path => /.+/, :controller => 'files', :action => 'show_relative'
-    end
+    add_files(dashboard)
     dashboard.close_notification 'account_notifications/:id', :controller => 'users', :action => 'close_notification', :conditions => {:method => :delete}
     dashboard.eportfolios "eportfolios", :controller => "eportfolios", :action => "user_index"
     dashboard.grades "grades", :controller => "users", :action => "grades"
@@ -586,6 +573,7 @@ ActionController::Routing::Routes.draw do |map|
 
   map.calendar 'calendar', :controller => 'calendars', :action => 'show', :conditions => { :method => :get }
   map.calendar2 'calendar2', :controller => 'calendars', :action => 'show2', :conditions => { :method => :get }
+  map.course_section_calendar_event 'course_sections/:course_section_id/calendar_events/:id', :controller => :calendar_events, :action => 'show', :conditions => { :method => :get }
   map.switch_calendar 'switch_calendar/:preferred_calendar', :controller => 'calendars', :action => 'switch_calendar', :conditions => { :method => :post }
   map.files 'files', :controller => 'files', :action => 'full_index', :conditions => { :method => :get }
   map.s3_success 'files/s3_success/:id', :controller => 'files', :action => 's3_success'
@@ -662,15 +650,21 @@ ActionController::Routing::Routes.draw do |map|
       courses.get 'courses/:id', :action => :show
       courses.get 'courses/:course_id/sections', :action => :sections, :path_name => 'course_sections'
       courses.get 'courses/:course_id/students', :action => :students
+      courses.get 'courses/:course_id/users', :action => :users, :path_name => 'course_users'
       courses.get 'courses/:course_id/activity_stream', :action => :activity_stream
       courses.get 'courses/:course_id/todo', :action => :todo_items
+      courses.delete 'courses/:id', :action => :destroy
       courses.post 'courses/:course_id/course_copy', :controller => :content_imports, :action => :copy_course_content
       courses.get 'courses/:course_id/course_copy/:id', :controller => :content_imports, :action => :copy_course_status, :path_name => :course_copy_status
+      courses.post 'courses/:course_id/files', :action => :create_file
     end
 
     api.with_options(:controller => :enrollments_api) do |enrollments|
-      enrollments.get  'courses/:course_id/enrollments', :action => :index, :path_name => 'enrollments'
+      enrollments.get  'courses/:course_id/enrollments', :action => :index, :path_name => 'course_enrollments'
+      enrollments.get  'sections/:section_id/enrollments', :action => :index, :path_name => 'section_enrollments'
+      enrollments.get  'users/:user_id/enrollments', :action => :index, :path_name => 'user_enrollments'
       enrollments.post 'courses/:course_id/enrollments', :action => :create
+      enrollments.post 'sections/:section_id/enrollments', :action => :create
     end
 
     api.with_options(:controller => :assignments_api) do |assignments|
@@ -681,17 +675,16 @@ ActionController::Routing::Routes.draw do |map|
     end
 
     api.with_options(:controller => :submissions_api) do |submissions|
-      submissions.get 'courses/:course_id/assignments/:assignment_id/submissions', :action => :index, :path_name => 'course_assignment_submissions'
-      submissions.get 'sections/:section_id/assignments/:assignment_id/submissions', :action => :index, :path_name => 'section_assignment_submissions'
-
-      submissions.get 'courses/:course_id/students/submissions', :controller => :submissions_api, :action => :for_students, :path_name => 'course_student_submissions'
-      submissions.get 'sections/:section_id/students/submissions', :controller => :submissions_api, :action => :for_students, :path_name => 'section_student_submissions'
-
-      submissions.get 'courses/:course_id/assignments/:assignment_id/submissions/:id', :action => :show
-      submissions.get 'sections/:section_id/assignments/:assignment_id/submissions/:id', :action => :show
-
-      submissions.put 'courses/:course_id/assignments/:assignment_id/submissions/:id', :action => :update, :path_name => 'course_assignment_submission'
-      submissions.put 'sections/:section_id/assignments/:assignment_id/submissions/:id', :action => :update, :path_name => 'section_assignment_submission'
+      def submissions_api(submissions, context)
+        submissions.get "#{context.pluralize}/:#{context}_id/assignments/:assignment_id/submissions", :action => :index, :path_name => "#{context}_assignment_submissions"
+        submissions.get "#{context.pluralize}/:#{context}_id/students/submissions", :controller => :submissions_api, :action => :for_students, :path_name => "#{context}_student_submissions"
+        submissions.get "#{context.pluralize}/:#{context}_id/assignments/:assignment_id/submissions/:id", :action => :show, :path_name => "#{context}_assignment_submission"
+        submissions.post "#{context.pluralize}/:#{context}_id/assignments/:assignment_id/submissions", :action => :create, :controller => :submissions
+        submissions.post "#{context.pluralize}/:#{context}_id/assignments/:assignment_id/submissions/:user_id/files", :action => :create_file
+        submissions.put "#{context.pluralize}/:#{context}_id/assignments/:assignment_id/submissions/:id", :action => :update, :path_name => "#{context}_assignment_submission"
+      end
+      submissions_api(submissions, "course")
+      submissions_api(submissions, "section")
     end
 
     api.get 'courses/:course_id/assignment_groups', :controller => :assignment_groups, :action => :index, :path_name => 'course_assignment_groups'
@@ -702,14 +695,25 @@ ActionController::Routing::Routes.draw do |map|
     end
 
     api.with_options(:controller => :discussion_topics_api) do |topics|
-      topics.post 'courses/:course_id/discussion_topics/:topic_id/entries', :action => :add_entry, :path_name => 'course_discussion_add_entry'
-      topics.post 'groups/:group_id/discussion_topics/:topic_id/entries', :action => :add_entry, :path_name => 'group_discussion_add_entry'
-      topics.get 'courses/:course_id/discussion_topics/:topic_id/entries', :action => :entries, :path_name => 'course_discussion_entries'
-      topics.get 'groups/:group_id/discussion_topics/:topic_id/entries', :action => :entries, :path_name => 'group_discussion_entries'
-      topics.post 'courses/:course_id/discussion_topics/:topic_id/entries/:entry_id/replies', :action => :add_reply, :path_name => 'course_discussion_add_reply'
-      topics.post 'groups/:group_id/discussion_topics/:topic_id/entries/:entry_id/replies', :action => :add_reply, :path_name => 'group_discussion_add_reply'
-      topics.get 'courses/:course_id/discussion_topics/:topic_id/entries/:entry_id/replies', :action => :replies, :path_name => 'course_discussion_replies'
-      topics.get 'groups/:group_id/discussion_topics/:topic_id/entries/:entry_id/replies', :action => :replies, :path_name => 'group_discussion_replies'
+      def topic_routes(topics, context)
+        topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/view", :action => :view, :path_name => "#{context}_discussion_topic_view"
+        topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entry_list", :action => :entry_list, :path_name => "#{context}_discussion_topic_entry_list"
+        topics.post "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries", :action => :add_entry, :path_name => "#{context}_discussion_add_entry"
+        topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries", :action => :entries, :path_name => "#{context}_discussion_entries"
+        topics.post "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries/:entry_id/replies", :action => :add_reply, :path_name => "#{context}_discussion_add_reply"
+        topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries/:entry_id/replies", :action => :replies, :path_name => "#{context}_discussion_replies"
+        topics.put "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries/:id", :controller => :discussion_entries, :action => :update, :path_name => "#{context}_discussion_update_reply"
+        topics.delete "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries/:id", :controller => :discussion_entries, :action => :destroy, :path_name => "#{context}_discussion_delete_reply"
+
+        topics.put "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/read", :action => :mark_topic_read, :path_name => "#{context}_discussion_topic_mark_read"
+        topics.delete "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/read", :action => :mark_topic_unread, :path_name => "#{context}_discussion_topic_mark_unread"
+        topics.put "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/read_all", :action => :mark_all_read, :path_name => "#{context}_discussion_topic_mark_all_read"
+        topics.delete "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/read_all", :action => :mark_all_unread, :path_name => "#{context}_discussion_topic_mark_all_unread"
+        topics.put "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries/:entry_id/read", :action => :mark_entry_read, :path_name => "#{context}_discussion_topic_discussion_entry_mark_read"
+        topics.delete "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries/:entry_id/read", :action => :mark_entry_unread, :path_name => "#{context}_discussion_topic_discussion_entry_mark_unread"
+      end
+      topic_routes(topics, "course")
+      topic_routes(topics, "group")
     end
 
     api.with_options(:controller => :external_tools) do |tools|
@@ -737,6 +741,16 @@ ActionController::Routing::Routes.draw do |map|
       users.delete 'users/self/todo/:asset_string/:purpose', :action => :ignore_item, :path_name => 'users_todo_ignore'
       users.post 'accounts/:account_id/users', :action => :create
       users.get 'accounts/:account_id/users', :action => :index, :path_name => 'account_users'
+
+      users.put 'users/:id', :action => :update
+      users.post 'users/:user_id/files', :action => :create_file
+    end
+
+    api.with_options(:controller => :pseudonyms) do |pseudonyms|
+      pseudonyms.get 'accounts/:account_id/logins', :action => :index, :path_name => 'account_pseudonyms'
+      pseudonyms.get 'users/:user_id/logins', :action => :index, :path_name => 'user_pseudonyms'
+      pseudonyms.post 'accounts/:account_id/logins', :action => :create
+      pseudonyms.put 'accounts/:account_id/logins/:id', :action => :update
     end
 
     api.with_options(:controller => :accounts) do |accounts|
@@ -766,7 +780,7 @@ ActionController::Routing::Routes.draw do |map|
       conversations.get 'conversations/find_recipients', :action => :find_recipients
       conversations.post 'conversations/mark_all_as_read', :action => :mark_all_as_read
       conversations.get 'conversations/:id', :action => :show
-      conversations.put 'conversations/:id', :action => :update # labels, subscribed-ness, workflow_state
+      conversations.put 'conversations/:id', :action => :update # stars, subscribed-ness, workflow_state
       conversations.delete 'conversations/:id', :action => :destroy
       conversations.post 'conversations/:id/add_message', :action => :add_message
       conversations.post 'conversations/:id/add_recipients', :action => :add_recipients
@@ -788,14 +802,29 @@ ActionController::Routing::Routes.draw do |map|
       events.post 'calendar_events/:id/reservations/:participant_id', :action => :reserve, :path_name => 'calendar_event_reserve'
     end
 
-    api.with_options(:controller => :appointment_groups) do |groups|
-      groups.get 'appointment_groups', :action => :index, :path_name => 'appointment_groups'
-      groups.post 'appointment_groups', :action => :create
-      groups.get 'appointment_groups/:id', :action => :show, :path_name => 'appointment_group'
-      groups.put 'appointment_groups/:id', :action => :update
-      groups.delete 'appointment_groups/:id', :action => :destroy
+    api.with_options(:controller => :appointment_groups) do |appt_groups|
+      appt_groups.get 'appointment_groups', :action => :index, :path_name => 'appointment_groups'
+      appt_groups.post 'appointment_groups', :action => :create
+      appt_groups.get 'appointment_groups/:id', :action => :show, :path_name => 'appointment_group'
+      appt_groups.put 'appointment_groups/:id', :action => :update
+      appt_groups.delete 'appointment_groups/:id', :action => :destroy
+      appt_groups.get 'appointment_groups/:id/users', :action => :users, :path_name => 'appointment_group_users'
+      appt_groups.get 'appointment_groups/:id/groups', :action => :groups, :path_name => 'appointment_group_groups'
     end
+
+    api.with_options(:controller => :groups) do |groups|
+      groups.post 'groups/:group_id/files', :action => :create_file
+    end
+
+    api.post 'files/:id/create_success', :controller => :files, :action => :api_create_success, :path_name => 'files_create_success'
+    api.get 'files/:id/create_success', :controller => :files, :action => :api_create_success, :path_name => 'files_create_success'
   end
+
+  # this is not a "normal" api endpoint in the sense that it is not documented
+  # or called directly, it's used as the redirect in the file upload process
+  # for local files. it also doesn't use the normal oauth authentication
+  # system, so we can't put it in the api uri namespace.
+  map.api_v1_files_create 'files_api', :controller => 'files', :action => 'api_create', :conditions => { :method => :post }
 
   map.oauth2_auth 'login/oauth2/auth', :controller => 'pseudonym_sessions', :action => 'oauth2_auth', :conditions => { :method => :get }
   map.oauth2_token 'login/oauth2/token',:controller => 'pseudonym_sessions', :action => 'oauth2_token', :conditions => { :method => :post }
@@ -805,7 +834,7 @@ ActionController::Routing::Routes.draw do |map|
     lti.post "tools/:tool_id/ext_grade_passback", :controller => :lti_api, :action => :legacy_grade_passback, :path_name => "blti_legacy_grade_passback_api"
   end
 
-  map.resources :equation_images, :only => :show
+  map.equation_images 'equation_images/:id', :controller => :equation_images, :action => :show, :id => /.+/
 
   # assignments at the top level (without a context) -- we have some specs that
   # assert these routes exist, but just 404. I'm not sure we ever actually want

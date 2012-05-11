@@ -167,7 +167,7 @@ class LearningOutcome < ActiveRecord::Base
   end
   
   def self.delete_if_unused(ids)
-    tags = ContentTag.active.find_all_by_content_id_and_content_type('LearningOutcome', ids)
+    tags = ContentTag.active.find_all_by_content_id_and_content_type(ids, 'LearningOutcome')
     to_delete = []
     ids.each do |id|
       to_delete << id unless tags.any?{|t| t.content_id == id }
@@ -204,7 +204,8 @@ class LearningOutcome < ActiveRecord::Base
     item.description = hash[:description]
     
     if hash[:ratings]
-      item.data = {:rubric_criterion=>{:ratings=>hash[:ratings]}}
+      item.data = {:rubric_criterion=>{}}
+      item.data[:rubric_criterion][:ratings] = hash[:ratings] ? hash[:ratings].map(&:symbolize_keys) : []
       item.data[:rubric_criterion][:mastery_points] = hash[:mastery_points]
       item.data[:rubric_criterion][:points_possible] = hash[:points_possible]
       item.data[:rubric_criterion][:description] = item.short_description || item.description

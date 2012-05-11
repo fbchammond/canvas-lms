@@ -153,6 +153,13 @@
   max-height: 225px
   &:last-child
     border-bottom: none
+.event-details-actual-context
+  font-size: 0.8em
+  font-style: italic
+  color: #666
+
+#attendees li
+  +name_bubbles
 
 /*replicate button styles to work for fullcalendar */
 .calendar .fc-button
@@ -182,3 +189,12 @@
 #delete_event_dialog
   textarea
     width: 100%
+
+#edit_appt_calendar_event_form
+  p
+    margin-bottom: .5em
+  textarea
+    width: 500px
+    height: 100px
+  .max-participants
+    width: 40px

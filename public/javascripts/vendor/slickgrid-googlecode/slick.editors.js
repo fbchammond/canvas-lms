@@ -1,14 +1,14 @@
-//this is a random comment
-function requiredFieldValidator(value) {
-	if (value == null || value == undefined || !$.trim(value+"").length)
-		return {valid:false, msg:"This is a required field"};
-	else	
-		return {valid:true, msg:null};
+define(['jquery', 'vendor/jquery.template'], function($) {
+
+window.requiredFieldValidator = function(value) {
+  if (value == null || value == undefined || !$.trim(value+"").length)
+    return {valid:false, msg:"This is a required field"};
+  else
+    return {valid:true, msg:null};
 }
 
 
-
-var TextCellEditor = function($container, columnDef, value, dataContext) {
+window.TextCellEditor = function($container, columnDef, value, dataContext) {
     var $input;
     var defaultValue = value;
     var scope = this;
@@ -64,7 +64,7 @@ var TextCellEditor = function($container, columnDef, value, dataContext) {
     this.init();
 }
 
-var GradeCellEditor = function($container, columnDef, value, dataContext) {
+window.GradeCellEditor = function($container, columnDef, value, dataContext) {
 
   if (dataContext.active) {
     value = value || {};
@@ -73,7 +73,7 @@ var GradeCellEditor = function($container, columnDef, value, dataContext) {
     var scope = this;
 
     this.init = function() {
-      switch(columnDef._uploaded.grading_type){
+      switch(columnDef.grading_type){
       
       case "letter_grade":
         var letterGrades = [
@@ -111,11 +111,13 @@ var GradeCellEditor = function($container, columnDef, value, dataContext) {
       $input.appendTo($container);
       $input.focus().select();
 
+      if (typeof(value.uploaded_grade) == "undefined") {
+        value.uploaded_grade = value.grade;
+      }
       var scores = {
-        originalScore: value._original && value._original.grade || "--",
-        uploadedScore: value._uploaded && value._uploaded.grade || "--"
+        originalScore: value.original_grade || "--",
+        uploadedScore: value.uploaded_grade || "--"
       };
-
 
       var helperTemplate = '' + 
       '<div class="grade-helper-wrapper">' + 
@@ -198,7 +200,7 @@ var GradeCellEditor = function($container, columnDef, value, dataContext) {
   }
 }
 
-var StudentNameEditor = function($container, columnDef, value, dataContext) {
+window.StudentNameEditor = function($container, columnDef, value, dataContext) {
   var $input;
   this.init = function() {
     var html = value ? value.name: "";
@@ -229,12 +231,12 @@ var StudentNameEditor = function($container, columnDef, value, dataContext) {
   this.init();
 }
 
-var StudentNameFormatter = function(row, cell, value, columnDef, dataContext) {
+window.StudentNameFormatter = function(row, cell, value, columnDef, dataContext) {
   return value ? value.name : "";
 };
 
 
-var NullEditor = function($container, columnDef, value, dataContext) {
+window.NullEditor = function($container, columnDef, value, dataContext) {
     var $input;
     var defaultValue = value;
     var scope = this;
@@ -275,7 +277,7 @@ var NullEditor = function($container, columnDef, value, dataContext) {
     this.init();
 }
 
-var NullGradeEditor = function($container, columnDef, value, dataContext) {
+window.NullGradeEditor = function($container, columnDef, value, dataContext) {
     var $input;
     
     this.init = function() {
@@ -307,11 +309,11 @@ var NullGradeEditor = function($container, columnDef, value, dataContext) {
     this.init();
 }
 
-var simpleGradeCellFormatter = function(row, cell, value, columnDef, dataContext) {
+window.simpleGradeCellFormatter = function(row, cell, value, columnDef, dataContext) {
     return value ? value.grade : "";
 };
 
-var PassFailCellFormatter = function(row, cell, value, columnDef, dataContext) {
+window.PassFailCellFormatter = function(row, cell, value, columnDef, dataContext) {
   value = value || {};
   switch(value.grade){
   case "pass":
@@ -323,7 +325,7 @@ var PassFailCellFormatter = function(row, cell, value, columnDef, dataContext) {
   }
 };
 
-var PassFailSelectCellEditor = function($container, columnDef, value, dataContext) {
+window.PassFailSelectCellEditor = function($container, columnDef, value, dataContext) {
     value = value || {};
     var $select;
     var defaultValue = value;
@@ -387,3 +389,4 @@ var PassFailSelectCellEditor = function($container, columnDef, value, dataContex
     
     this.init();
 }
+});

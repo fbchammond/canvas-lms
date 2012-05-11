@@ -19,6 +19,11 @@ module Delayed
       class Job < ::ActiveRecord::Base
         include Delayed::Backend::Base
         set_table_name :delayed_jobs
+        attr_writer :current_shard
+
+        def current_shard
+          @current_shard || Shard.default
+        end
 
         # be aware that some strand functionality is controlled by triggers on
         # the database. see
@@ -46,7 +51,7 @@ module Delayed
             # this funky sub-sub-select is to force mysql to create a temporary
             # table, otherwise it fails complaining that you can't select from
             # the same table you are updating
-            self.class.execute_with_sanitize(["UPDATE delayed_jobs SET next_in_strand = 1 WHERE id = (SELECT _id.id FROM (SELECT id FROM delayed_jobs j2 WHERE j2.strand = ? ORDER BY j2.strand, j2.id ASC LIMIT 1) AS _id)", strand])
+            connection.execute(sanitize_sql(["UPDATE delayed_jobs SET next_in_strand = 1 WHERE id = (SELECT _id.id FROM (SELECT id FROM delayed_jobs j2 WHERE j2.strand = ? ORDER BY j2.strand, j2.id ASC LIMIT 1) AS _id)", strand]))
           end
         end
 
@@ -173,6 +178,13 @@ module Delayed
           end
         end
 
+        def create_and_lock!(worker)
+          raise "job already exists" unless new_record?
+          self.locked_at = Delayed::Job.db_time_now
+          self.locked_by = worker
+          save!
+        end
+
         def fail!
           attrs = self.attributes
           attrs['original_id'] = attrs.delete('id')
@@ -188,6 +200,16 @@ module Delayed
           self.destroy
           # re-raise so the worker logs the error, at least
           raise
+        end
+
+        # hold/unhold jobs with a scope
+        def self.hold!
+          update_all({ :locked_by => ON_HOLD_LOCKED_BY, :locked_at => db_time_now, :attempts => ON_HOLD_COUNT })
+        end
+
+        def self.unhold!
+          now = db_time_now
+          update_all(["locked_by = NULL, locked_at = NULL, attempts = 0, run_at = (CASE WHEN run_at > ? THEN run_at ELSE ? END), failed_at = NULL", now, now])
         end
 
         # Get the current time (GMT or local depending on DB)

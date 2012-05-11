@@ -53,7 +53,7 @@
 <% @show_left_side = false %>
 
 <% jammit_css :slickgrid %>
-<% jammit_js :slickgrid, :jobs %>
+<% js_bundle :jobs %>
 
 <div id="running-wrapper" style="float:left">
   <h2><%= t 'headings.running_jobs', "Running Jobs" %></h2>
@@ -81,7 +81,7 @@
                               [t('job_options.failed', "Failed"), 'failed']], @flavor) %>
     </select>
     <button id='jobs-refresh'><%= t '#buttons.refresh', "refresh" %></button>
-    <input type='search' results='15' placeholder='<%= t :search_jobs, "Search Jobs" %>' autosave='canvas-jobs-search' id='jobs-search' name='q' value="<%= params[:id].presence %>" />
+    <input type='search' results='15' placeholder='<%= t :search_jobs, "Search Jobs" %>' autosave='canvas-jobs-search' id='jobs-search' name='q' value="<%= params[:q].presence %>" />
     <%= before_label :total_jobs, "Total" %> <span id='jobs-total'><%= @jobs_count %></span>
     <button id='select-all-jobs'><%= t 'buttons.select_all', 'select all' %></button>
     <%= before_label :with_selection, "With Selection" %>
@@ -133,7 +133,7 @@
 </div>
 </div>
 
-<% js_block do
+<%
 jobs_data = @jobs.all(:limit => JobsController::LIMIT)
 jobs_data.length.upto(@jobs_count - 1) { jobs_data << {} }
 jobs_opts = {
@@ -145,11 +145,13 @@ jobs_opts = {
   :batch_update_url => batch_update_jobs_url,
   :on_hold_attempt_count => Delayed::Job::ON_HOLD_COUNT,
   :limit => JobsController::LIMIT,
+  :starting_query => params[:q],
 }
 running_opts = jobs_opts.merge({
   :data => @running.all,
   :url => jobs_url(:only => :running),
   :refresh_rate => 2.seconds * 1000,
+  :starting_query => nil,
 })
 tags_opts = {
   :data => @tags,
@@ -157,12 +159,11 @@ tags_opts = {
   :refresh_rate => 10.seconds * 1000,
   :flavor => @flavor,
 }
+
+js_env :JOBS => {
+  :opts => jobs_opts.as_json(:include_root => false),
+  :running_opts => running_opts.as_json(:include_root => false),
+  :tags_opts => tags_opts
+}
 %>
-<script type="text/javascript">
-$(document).ready(function() {
-  window.jobs = new Jobs(<%= raw jobs_opts.to_json(:include_root => false) %>).init();
-  window.running = new Workers(<%= raw running_opts.to_json(:include_root => false) %>).init();
-  window.tags = new Tags(<%= raw tags_opts.to_json %>).init();
-});
-</script>
-<% end %>
+

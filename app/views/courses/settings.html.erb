@@ -1,11 +1,11 @@
 <% 
   content_for :page_title, join_title(t(:page_title, "Course Details"), @context.name)
   jammit_css :course_settings
-  jammit_js :course_settings
+  js_bundle :course_settings
   @active_tab = "settings"
 
   enrollment_hashes  = {} 
-  ['StudentEnrollment', 'TeacherEnrollment', 'TaEnrollment', 'ObserverEnrollment'].each do |type|
+  ['StudentEnrollment', 'TeacherEnrollment', 'TaEnrollment', 'ObserverEnrollment', 'DesignerEnrollment'].each do |type|
     enrollment_hashes[type] = {} 
     list = @context.detailed_enrollments.select{|e| e.type == type && e.active_or_pending?}.sort_by{|e| e.user.sortable_name.downcase rescue 'a' }
     if type == 'StudentEnrollment' && @context.visibility_limited_to_course_sections?(@current_user)
@@ -19,6 +19,7 @@
   teachers = enrollment_hashes['TeacherEnrollment'].map{|k, v| v[0]}
   tas = enrollment_hashes['TaEnrollment'].map{|k, v| v[0]}
   observers = enrollment_hashes['ObserverEnrollment'].map{|k, v| v[0]}
+  designers = enrollment_hashes['DesignerEnrollment'].map{|k, v| v[0]}
   has_multiple_sections = @context.course_sections.active.count > 1
 
   publishing_enabled = @context.allows_grade_publishing_by(@current_user) && can_do(@context, @current_user, :manage_grades)
@@ -28,11 +29,14 @@
 <% content_for :right_side do %>
 
   <div class="rs-margin-lr rs-margin-top">
+    <% if can_do(@context, @current_user, :use_student_view) %>
+      <%= link_to image_tag("student_view_icon.png") + " " + t('links.student_view', %{Student View}), course_student_view_path(@context), { :method => :post, :class => 'button button-sidebar-wide student_view_button' }%>
+    <% end %>
     <% if can_do(@context, @current_user, :read_reports) %>
       <a href="<%= context_url(@context, :context_statistics_url) %>" class="button button-sidebar-wide"><%= image_tag "graph.png" %> <%= t('links.stats', %{Course Statistics}) %></a>
     <% end %>
     <% if can_do(@context, @current_user, :read) %>
-      <a href="<%= calendar_url_for(@context) %>" class="button button-sidebar-wide"><%= image_tag "calendar_icon.png" %> <%= t('links.calendar', %{Course Calendar}) %></a>
+      <a href="<%= calendar_url_for(@context) %>" class="button button-sidebar-wide" id="course_calendar_link"><%= image_tag "calendar_icon.png" %> <%= t('links.calendar', %{Course Calendar}) %></a>
     <% end %>
 
     <% if can_do(@context, @current_user, :change_course_state) %>
@@ -54,7 +58,7 @@
       <a href="<%= context_url(@context, :context_imports_url) %>" class="button button-sidebar-wide"><%= image_tag "file_multiple.png" %><%= t('links.import', %{Import Content into this Course}) %></a>
     <% end %>
     <% if can_do(@context, @current_user, :read) %>
-      <a href="<%= context_url(@context, :course_content_exports_url) %>" class="button button-sidebar-wide"><%= image_tag "file_multiple.png" %><%= t('links.export', %{Export this Course}) %></a>
+      <a href="<%= context_url(@context, :course_content_exports_url) %>" class="button button-sidebar-wide"><%= image_tag "file_multiple.png" %><%= t('links.export_content', %{Export Course Content}) %></a>
     <% end %>
     <% if can_do(@context, @current_user, :manage_content) %>
       <a href="<%= context_url(@context, :course_reset_url) %>" class="button button-sidebar-wide reset_course_content_button"><%= image_tag "delete.png" %><%= t('links.reset', %{Reset Course Content}) %></a>
@@ -89,6 +93,10 @@
       <tr>
         <td><%= before_label('observers', %{Observers}) %></td>
         <td class="observer_count"><%= observers.empty? ? t('none', "None") : observers.length %></td>
+      </tr>
+      <tr>
+        <td><%= before_label('designers', %{Designers}) %></td>
+        <td class="designer_count"><%= designers.empty? ? t('none', "None") : designers.length %></td>
       </tr>
     </table>
   </div>
@@ -177,7 +185,7 @@ Hashtags should consist of letters, numbers, dashes and underscores (no spaces).
           </span>
           </td>
         <% end %>
-      <% if @context.sis_source_id || can_do(@context.root_account, @current_user, :manage_sis) %>
+      <% if @context.sis_source_id && can_do(@context.root_account, @current_user, :read_sis) || can_do(@context.root_account, @current_user, :manage_sis) %>
         </tr><tr>
           <td><%= f.blabel :sis_source_id, :en => "SIS ID" %></td>
           <td>
@@ -191,7 +199,7 @@ Hashtags should consist of letters, numbers, dashes and underscores (no spaces).
             <span class="course_info sis_source_id"><%= @context.sis_source_id %></span>
           </td>
       <% end %>
-      <% if current_user_is_site_admin? %>
+      <% if @current_user && Account.site_admin.account_users_for(@current_user).present? %>
         </tr><tr>
           <td><%= f.blabel :root_account_id, :en => "Root Account" %></td>
           <td><%= link_to @context.root_account.name, account_url(@context.root_account.id)  %></td>
@@ -429,7 +437,7 @@ Hashtags should consist of letters, numbers, dashes and underscores (no spaces).
           <% end %>
           <span class="users_count">
             (
-              <%= t 'enrollment_count', 'User', :count => section.enrollments.count %><% if section && section.sis_source_id %>, 
+              <%= t 'enrollment_count', 'User', :count => section.enrollments.not_fake.count %><% if section && section.sis_source_id %>,
                 <%= t 'section_sis_id', 'SIS ID: %{section_sis}', :section_sis => section.sis_source_id %>
               <% end %>
             )
@@ -499,6 +507,14 @@ Hashtags should consist of letters, numbers, dashes and underscores (no spaces).
               <%= render :partial => 'shared/enrollment', :collection => enrollment_hashes['TeacherEnrollment'].to_a.sort_by{|e| e[0].sortable_name.downcase rescue 'a' }, :locals => {:show_section => has_multiple_sections, :show_information_link => true} %>
             <% end %>
           </ul>
+          <h3><%= t('headings.designers', %{Designers}) %> <span class="tally">(<span class="designer_count"><%= designers.length %></span>)</span></h3>
+          <ul class="user_list designer_enrollments">
+            <% if designers.empty? %>
+              <li class="none"><%= t('no_designers', %{No Designers Assigned}) %></li>
+            <% else %>
+              <%= render :partial => 'shared/enrollment', :collection => enrollment_hashes['DesignerEnrollment'].to_a.sort_by{|e| e[0].sortable_name.downcase rescue 'a' }, :locals => {:show_section => has_multiple_sections, :show_information_link => true} %>
+            <% end %>
+          </ul>
           <h3><%= t('headings.tas', %{TAs}) %> <span class="tally">(<span class="ta_count"><%= tas.length %></span>)</span></h3>
           <ul class="user_list ta_enrollments">
             <% if tas.empty? %>
@@ -529,6 +545,7 @@ Hashtags should consist of letters, numbers, dashes and underscores (no spaces).
             <option value="TeacherEnrollment" class="teacherless_invite"><%= t('option.teachers', %{Teachers}) %></option>
           <% end %>
           <option value="ObserverEnrollment"><%= t('option.observers', %{Observers}) %></option>
+          <option value="DesignerEnrollment"><%= t('option.designers', %{Designers}) %></option>
         </select>
       </div>
       <div style="<%= hidden unless has_multiple_sections %>" id="course_section_id_holder">
@@ -544,12 +561,6 @@ Hashtags should consist of letters, numbers, dashes and underscores (no spaces).
           <input type="checkbox" id="limit_privileges_to_course_section" name="limit_privileges_to_course_section" value="1"/>
           <%= label_tag :limit_privileges_to_course_section, :en => 'these admins can only grade students in their section' %>
         </span>
-        <% if can_do(@context.account, @current_user, :manage_admin_users) %>
-          <div style="white-space: nowrap;">
-            <input type="checkbox" id="auto_accept_enrollment" name="auto_accept" value="1"/>
-            <%= label_tag :auto_accept_enrollment, :en => "don't send invite, just auto-accept these users" %>
-          </div>
-        <% end %>
       </div>
       <div class="teacherless_invite_message" style="<%= hidden unless @context.teacherless? %> font-size: 0.8em;">
         <%= t('teacherless_invite_details', %{If you invite a teacher and they accept, you will give up administrative privileges for this course.}) %>

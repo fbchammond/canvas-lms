@@ -33,10 +33,14 @@ describe "Roles API", :type => :integration do
     end
 
     def api_call_with_settings(settings={})
-      api_call(:post, "/api/v1/accounts/#{@admin.account.id}/roles",
-        { :controller => 'role_overrides', :action => 'add_role', :format => 'json', :account_id => @admin.account.id.to_s },
-        { :role => @role,
-          :permissions => { @permission => settings } })
+      admin = settings.delete(:admin) || @admin
+      account = settings.delete(:account) || @admin.account
+      role = settings.delete(:role) || @role
+      permission = settings.delete(:permission) || @permission
+      api_call(:post, "/api/v1/accounts/#{account.id}/roles",
+        { :controller => 'role_overrides', :action => 'add_role', :format => 'json', :account_id => account.id.to_s },
+        { :role => role,
+          :permissions => { permission => settings } })
     end
 
     it "should add the role to the account" do
@@ -134,11 +138,13 @@ describe "Roles API", :type => :integration do
           "name" => @account.name,
           "root_account_id" => @account.root_account_id,
           "parent_account_id" => @account.parent_account_id,
-          "id" => @account.id,
-          "sis_account_id" => @account.sis_source_id
+          "id" => @account.id
         }
         json["role"].should == @role
-        json["permissions"].keys.sort.should == [
+
+        # make sure all the expected keys are there, but don't assert on a
+        # *only* the expected keys, since plugins may have added more.
+        ([
           "become_user", "change_course_state",
           "comment_on_others_submissions", "create_collaborations",
           "create_conferences", "manage_account_memberships",
@@ -149,10 +155,11 @@ describe "Roles API", :type => :integration do
           "manage_role_overrides", "manage_sections", "manage_sis",
           "manage_students", "manage_user_logins", "manage_user_notes",
           "manage_wiki", "moderate_forum", "post_to_forum",
-          "read_course_content", "read_course_list", "read_question_banks",
-          "read_reports", "read_roster", "send_messages", "view_all_grades",
-          "view_group_pages", "view_statistics"
-        ]
+          "read_course_content", "read_course_list", "read_forum",
+          "read_question_banks", "read_reports", "read_roster",
+          "read_sis", "send_messages", "view_all_grades", "view_group_pages",
+          "view_statistics"
+        ] - json["permissions"].keys).should be_empty
 
         json["permissions"][@permission].should == {
           "explicit" => false,
@@ -160,6 +167,19 @@ describe "Roles API", :type => :integration do
           "enabled" => false,
           "locked" => false
         }
+      end
+
+      it "should only return manageable permissions" do
+        # set up a subaccount and admin in subaccount
+        subaccount = @account.sub_accounts.create!
+
+        # add a role in that subaccount
+        json = api_call_with_settings(:account => subaccount)
+        json["account"]["id"].should == subaccount.id
+
+        # become_user is a permission restricted to root account roles. it
+        # shouldn't be in the response for this subaccount role.
+        json["permissions"].keys.should_not include("become_user")
       end
 
       it "should set explicit and prior default if enabled was provided" do

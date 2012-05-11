@@ -16,8 +16,20 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-var INST;
-I18n.scoped('select_content_dialog', function(I18n) {
+define([
+  'INST' /* INST */,
+  'i18n!select_content_dialog',
+  'jquery' /* $ */,
+  'jquery.ajaxJSON' /* ajaxJSONFiles, ajaxJSON */,
+  'jquery.instructure_forms' /* getFormData, errorBox */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jquery.instructure_misc_helpers' /* replaceTags, getUserServices, findLinkForService */,
+  'jquery.instructure_misc_plugins' /* showIf */,
+  'jquery.keycodes' /* keycodes */,
+  'jquery.loadingImg' /* loadingImage */,
+  'jquery.templateData' /* fillTemplateData */
+], function(INST, I18n, $) {
+
 $(document).ready(function() {
   var external_services = null;
   var $dialog = $("#select_context_content_dialog");
@@ -96,7 +108,7 @@ $(document).ready(function() {
     } else if(item_type == 'context_external_tool') {
       var item_data = {
         'item[type]': $("#add_module_item_select").val(),
-        'item[id]': $("#external_urls_select .tools .tool.selected").data('id'),
+        'item[id]': $("#context_external_tools_select .tools .tool.selected").data('id'),
         'item[new_tab]': $("#external_tool_create_new_tab").attr('checked') ? '1' : '0',
         'item[indent]': $("#content_tag_indent").val()
       }

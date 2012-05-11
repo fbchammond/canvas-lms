@@ -3,8 +3,12 @@ require File.expand_path(File.dirname(__FILE__) + '/common')
 describe "learning outcome test" do
   it_should_behave_like "in-process server selenium tests"
 
-  it "should create a learning outcome with a new rating" do
+  before (:each) do
     course_with_teacher_logged_in
+  end
+
+  it "should create a learning outcome with a new rating" do
+    skip_if_ie("Out of memory / Stack overflow")
     get "/courses/#{@course.id}/outcomes"
 
     #create learning outcome
@@ -18,7 +22,7 @@ describe "learning outcome test" do
     #add a new rating
     driver.find_element(:css, '#edit_outcome_form .add_rating_link').click
     rating_table = driver.find_element(:css, '#edit_outcome_form .rubric_criterion')
-    new_rating_row = rating_table.find_element(:css, 'tr:nth-child(6)')
+    new_rating_row = find_with_jquery('#edit_outcome_form .rubric_criterion tr:nth-child(6)')
     new_rating_row.find_element(:css, 'input.outcome_rating_description').clear
     new_rating_row.find_element(:css, 'input.outcome_rating_description').send_keys('New Expectation')
     new_rating_points = new_rating_row.find_element(:name, 'learning_outcome[rubric_criterion][ratings][5][description]')
@@ -37,47 +41,158 @@ describe "learning outcome test" do
     find_all_with_jquery('#outcomes .rubric_criterion .rating:visible').size.should eql(3)
   end
 
-  it "should allow dragging and dropping outside of the outcomes list without throwing an error" do
-    course_with_teacher_logged_in
-    @context = @course
-
-    get "/courses/#{@course.id}/outcomes"
-    %w{test_group_1 test_group_2}.each do |name|
-      driver.find_element(:css, '.add_outcome_group_link').click
-      driver.find_element(:id, 'learning_outcome_group_title').send_keys name
-      driver.find_element(:css, '#edit_outcome_group_form button.submit_button').click
+  def create_groups(names)
+    button = driver.find_element(:css, '.add_outcome_group_link')
+    records = []
+    names.each do |name|
+      button.click
+      input = driver.find_element(:id, 'learning_outcome_group_title').send_keys(name, :enter)
       wait_for_ajax_requests
+      records << LearningOutcomeGroup.find_by_title(name)
+    end
+    records
+  end
+
+  def create_outcomes(names)
+    button = driver.find_element(:css, '.add_outcome_link')
+    records = []
+    names.each do |name|
+      button.click
+      input = driver.find_element(:id, 'learning_outcome_short_description').send_keys(name, :enter)
+      wait_for_ajax_requests
+      records << LearningOutcome.find_by_short_description(name)
+    end
+    records
+  end
+
+  context 'drag and drop' do
+
+    before(:each) do
+      get "/courses/#{@course.id}/outcomes"
+      @group1, @group2 = create_groups ['group1', 'group2']
+      @outcome1, @outcome2 = create_outcomes ['outcome1', 'outcome2']
+      get "/courses/#{@course.id}/outcomes"
+
+      # drag/drop handles
+      @gh1, @gh2, @oh1, @oh2 = driver.find_elements(:css, '.reorder_link')
+
+      # drag and drop is flakey in selenium mac
+      load_simulate_js
     end
 
-    draggable = driver.find_element(:css, '.outcome_group .reorder_link')
-    drag_to   = driver.find_element(:css, '#section-tabs')
-    driver.action.drag_and_drop(draggable, drag_to).perform
+    it "should allow dragging and dropping outside of the outcomes list without throwing an error" do
+      draggable = driver.find_element(:css, '.outcome_group .reorder_link')
+      drag_to = driver.find_element(:css, '#section-tabs')
+      driver.action.drag_and_drop(draggable, drag_to).perform
+      driver.execute_script('return INST.errorCount;').should eql 0
+    end
 
-    driver.execute_script('return INST.errorCount;').should eql 0
+    it "re-order sibling outcomes" do
+      #   <-
+      # g1
+      # g2
+      # o1
+      # o2->
+      driver.action.drag_and_drop(@oh2, @gh1).perform
+      wait_for_js
+      wait_for_ajax_requests
+      get "/courses/#{@course.id}/outcomes"
+
+      # get the elements in the order we expect
+      o2, g1, g2, o1 = driver.find_elements(:css, '#outcomes > .outcome_group .outcome_item')
+
+      # verify they are in the order we expect
+      g1.attribute(:id).should == "group_#{@group1.id}"
+      g2.attribute(:id).should == "group_#{@group2.id}"
+      o1.attribute(:id).should == "outcome_#{@outcome1.id}"
+      o2.attribute(:id).should == "outcome_#{@outcome2.id}"
+    end
+
+    it "should nest an outcome into a group" do
+      # g1<-
+      # g2
+      # o1
+      # o2->
+      drag_with_js('.reorder_link:eq(3)', 0, -165)
+      wait_for_ajax_requests
+      get "/courses/#{@course.id}/outcomes"
+      only_first_level_items_selector = '#outcomes > .outcome_group > .child_outcomes > .outcome_item'
+      g1, g2, o1, *extras = driver.find_elements :css, only_first_level_items_selector
+
+      # test top level items, make sure the fourth is gone and the others are as we expect
+      extras.length.should == 0
+      g1.attribute(:id).should == "group_#{@group1.id}"
+      g2.attribute(:id).should == "group_#{@group2.id}"
+      o1.attribute(:id).should == "outcome_#{@outcome1.id}"
+
+      # check that the outcome is nested
+      o2 = g1.find_element(:id, "outcome_#{@outcome2.id}")
+      o2.should be_displayed
+    end
+
+    it 'should re-order groups with children' do
+      # first we have to nest the outcomes
+      #   g1<-
+      # ->g2
+      #   o1->
+      # <-o2
+
+      # drag o1 into g1
+      drag_with_js('.reorder_link:eq(2)', 0, -100)
+      wait_for_ajax_requests
+
+      # drag o2 into g2
+      drag_with_js('.reorder_link:eq(3)', 0, -30)
+      wait_for_ajax_requests
+
+      # re-order the groups
+      # ->
+      #   g1
+      #     o1
+      # <-g2
+      #     o2
+      driver.action.drag_and_drop(@gh2, @gh1).perform
+      drag_with_js('.reorder_link:eq(2)', 0, -200)
+      wait_for_ajax_requests
+
+      get "/courses/#{@course.id}/outcomes"
+      only_first_level_items_selector = '#outcomes > .outcome_group > .child_outcomes > .outcome_item'
+
+      # get them in the order we expect
+      g2, g1, *extras = driver.find_elements :css, only_first_level_items_selector
+
+      # make sure we only have two
+      extras.length.should == 0
+
+      # verify they're in order
+      g1.attribute(:id).should == "group_#{@group1.id}"
+      g2.attribute(:id).should == "group_#{@group2.id}"
+
+      g1.find_element(:id, "outcome_#{@outcome1.id}").should be_displayed
+      g2.find_element(:id, "outcome_#{@outcome2.id}").should be_displayed
+    end
   end
 
   it "should create a rubric" do
-    course_with_teacher_logged_in
     @context = @course
     @first_outcome = outcome_model
     @second_outcome = outcome_model({:short_description => 'second outcome'})
- 
+
     get "/courses/#{@course.id}/outcomes"
 
     #create rubric
-    driver.find_element(:css, '#right-side a:last-child').click
+    find_with_jquery('#right-side a:last-child').click
     driver.find_element(:css, '.add_rubric_link').click
-    driver.find_element(:css, '#rubric_new input[name="title"]').send_keys('New Rubric')
+    driver.find_element(:css, '#rubrics input[name="title"]').send_keys('New Rubric')
 
     #edit first criterion
-    driver.execute_script('$(".links").show();')#couldn't get mouseover to work
-    edit_desc_img = driver.
-      find_element(:css, '#criterion_1 .criterion_description .edit_criterion_link img').click
+    driver.execute_script('$(".links").show();') #couldn't get mouseover to work
+    driver.find_element(:css, '#criterion_1 .criterion_description .edit_criterion_link img').click
     driver.find_element(:css, '#edit_criterion_form input[name="description"]').clear
     driver.find_element(:css, '#edit_criterion_form input[name="description"]').send_keys('important criterion')
     driver.find_element(:id, 'edit_criterion_form').submit
-    rating_row = driver.find_element(:css, '#criterion_1 td:nth-child(2) table tr')
-    first_rating = rating_row.find_element(:css, '.edit_rating_link img').click
+    rating_row = find_with_jquery('#criterion_1 td:nth-child(2) table tr')
+    rating_row.find_element(:css, '.edit_rating_link img').click
     rating_row.find_element(:css, '#edit_rating_form input[name="description"]').clear
     rating_row.find_element(:css, '#edit_rating_form input[name="description"]').send_keys('really good')
     rating_row.find_element(:css, '#edit_rating_form input[name="points"]').clear
@@ -108,8 +223,8 @@ describe "learning outcome test" do
 
     #add second outcome
     driver.find_element(:css, '#rubric_new .find_outcome_link').click
-    driver.find_element(:css, '#find_outcome_criterion_dialog .outcomes_select:last-child').click
-    outcome_div = driver.find_element(:css, '#find_outcome_criterion_dialog table tr td.right .outcome_' + @second_outcome.id.to_s)
+    find_with_jquery('#find_outcome_criterion_dialog .outcomes_select:last-child').click
+    outcome_div = find_with_jquery('#find_outcome_criterion_dialog table tr td.right .outcome_' + @second_outcome.id.to_s)
     outcome_div.find_element(:css, '.select_outcome_link').click
     driver.find_element(:id, 'find_outcome_criterion_dialog').should_not be_displayed
     driver.find_element(:css, '#criterion_4 .learning_outcome_flag').should be_displayed
@@ -120,10 +235,9 @@ describe "learning outcome test" do
     wait_for_ajaximations
     driver.find_element(:css, '#rubrics .edit_rubric_link img').should be_displayed
     find_all_with_jquery('#rubrics tr.criterion:visible').size.should == 4
-    driver.find_element(:css, '#left-side .outcomes').click
-    driver.find_element(:link, "Outcomes").click
-    driver.find_element(:css, '#right-side a:last-child').click
+    expect_new_page_load { driver.find_element(:css, '#left-side .outcomes').click }
+    expect_new_page_load { driver.find_element(:link, "Outcomes").click }
+    find_with_jquery('#right-side a:last-child').click
     driver.find_element(:css, '#rubrics .details').should include_text('15')
   end
-
 end

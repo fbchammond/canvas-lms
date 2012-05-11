@@ -17,8 +17,9 @@
 #
 
 class ContextController < ApplicationController
-  before_filter :require_user_for_context, :except => [:inbox, :inbox_item, :destroy_inbox_item, :mark_inbox_as_read, :create_media_object, :kaltura_notifications, :media_object_redirect, :media_object_inline, :media_object_thumbnail, :object_snippet, :discussion_replies]
+  before_filter :require_context, :except => [:inbox, :inbox_item, :destroy_inbox_item, :mark_inbox_as_read, :create_media_object, :kaltura_notifications, :media_object_redirect, :media_object_inline, :media_object_thumbnail, :object_snippet, :discussion_replies]
   before_filter :require_user, :only => [:inbox, :inbox_item, :report_avatar_image, :discussion_replies]
+  before_filter :reject_student_view_student, :only => [:inbox, :inbox_item, :discussion_replies]
   protect_from_forgery :except => [:kaltura_notifications, :object_snippet]
 
   def create_media_object
@@ -141,6 +142,10 @@ class ContextController < ApplicationController
   # session. see lib/user_content.rb and the user_content calls throughout the
   # views.
   def object_snippet
+    if HostUrl.has_file_host? && !HostUrl.is_file_host?(request.host_with_port)
+      return render(:nothing => true, :status => 400)
+    end
+
     @snippet = params[:object_data] || ""
     hmac = Canvas::Security.hmac_sha1(@snippet)
 
@@ -278,15 +283,16 @@ class ContextController < ApplicationController
   end
   
   def roster
-    get_context
-
     if authorized_action(@context, @current_user, [:read_roster, :manage_students, :manage_admin_users])
       log_asset_access("roster:#{@context.asset_string}", "roster", "other")
       if @context.is_a?(Course)
-        @enrollments_hash = {}
-        @context.enrollments.sort_by{|e| [e.state_sortable, e.rank_sortable] }.each{|e| @enrollments_hash[e.user_id] ||= e }
-        @students = @context.students_visible_to(@current_user).find(:all, :order => User.sortable_name_order_by_clause).uniq
-        @teachers = @context.admins.find(:all, :order => User.sortable_name_order_by_clause).uniq
+        @enrollments_hash = Hash.new{ |hash,key| hash[key] = [] }
+        @context.enrollments.sort_by{|e| [e.state_sortable, e.rank_sortable] }.each{ |e| @enrollments_hash[e.user_id] << e }
+        @students = @context.
+          students_visible_to(@current_user).
+          scoped(:conditions => "enrollments.type != 'StudentViewEnrollment'").
+          find(:all, :order => User.sortable_name_order_by_clause).uniq
+        @teachers = @context.instructors.find(:all, :order => User.sortable_name_order_by_clause).uniq
         user_ids = @students.map(&:id) + @teachers.map(&:id)
         if @context.visibility_limited_to_course_sections?(@current_user)
           user_ids = @students.map(&:id) + [@current_user.id]
@@ -297,7 +303,7 @@ class ContextController < ApplicationController
         @users = @context.participating_users.find(:all, :order => User.sortable_name_order_by_clause).uniq
         @primary_users = {t('roster.group_members', 'Group Members') => @users}
         if @context.context && @context.context.is_a?(Course)
-          @secondary_users = {t('roster.teachers', 'Teachers & TAs') => @context.context.admins.find(:all, :order => User.sortable_name_order_by_clause).uniq}
+          @secondary_users = {t('roster.teachers', 'Teachers & TAs') => @context.context.instructors.find(:all, :order => User.sortable_name_order_by_clause).uniq}
         end
       end
       @secondary_users ||= {}
@@ -306,14 +312,12 @@ class ContextController < ApplicationController
   end
   
   def prior_users
-    get_context
     if authorized_action(@context, @current_user, [:manage_students, :manage_admin_users, :read_prior_roster])
-      @prior_memberships = @context.enrollments.scoped(:conditions => {:workflow_state => 'completed'}, :include => :user).to_a.once_per(&:user_id).sort_by{|e| [e.rank_sortable(true), e.user.sortable_name.downcase] }
+      @prior_memberships = @context.enrollments.not_fake.scoped(:conditions => {:workflow_state => 'completed'}, :include => :user).to_a.once_per(&:user_id).sort_by{|e| [e.rank_sortable(true), e.user.sortable_name.downcase] }
     end
   end
 
   def roster_user_services
-    get_context
     if authorized_action(@context, @current_user, :read_roster)
       @users = @context.users.order_by_sortable_name
       @users_hash = {}
@@ -330,7 +334,6 @@ class ContextController < ApplicationController
   end
   
   def roster_user_usage
-    get_context
     if authorized_action(@context, @current_user, :read_reports)
       @user = @context.users.find(params[:user_id])
       @accesses = AssetUserAccess.for_user(@user).for_context(@context).most_recent.paginate(:page => params[:page], :per_page => 50)
@@ -342,7 +345,6 @@ class ContextController < ApplicationController
   end
   
   def roster_user
-    get_context
     if authorized_action(@context, @current_user, :read_roster)
       if @context.is_a?(Course)
         @membership = @context.enrollments.find_by_user_id(params[:id])

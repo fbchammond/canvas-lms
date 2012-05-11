@@ -279,7 +279,9 @@ jQuery.fn = jQuery.prototype = {
 		jQuery.bindReady();
 
 		// Add the callback
-		readyList.done( fn );
+		setTimeout(function() {
+			readyList.done( fn );
+		}, 1);
 
 		return this;
 	},
@@ -9044,4 +9046,9 @@ jQuery.each([ "Height", "Width" ], function( i, name ) {
 
 // Expose jQuery to the global object
 window.jQuery = window.$ = jQuery;
+
+// expose as module
+define(function () { return jQuery });
+
 })(window);
+

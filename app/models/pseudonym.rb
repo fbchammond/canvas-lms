@@ -30,12 +30,12 @@ class Pseudonym < ActiveRecord::Base
   has_many :groups, :through => :group_memberships
   belongs_to :sis_communication_channel, :class_name => 'CommunicationChannel'
   validates_length_of :unique_id, :maximum => maximum_string_length
+  validates_presence_of :account_id, :user_id
   before_validation :validate_unique_id
   before_destroy :retire_channels
   
   before_save :set_password_changed
   before_validation :infer_defaults, :verify_unique_sis_user_id
-  before_save :set_update_account_associations_if_account_changed
   after_save :update_passwords_on_related_pseudonyms
   after_save :update_account_associations_if_account_changed
   has_a_broadcast_policy
@@ -76,18 +76,13 @@ class Pseudonym < ActiveRecord::Base
     }
   end
   
-  def set_update_account_associations_if_account_changed
-    @should_update_user_account_associations = self.account_id_changed?
-    @should_update_account_associations_immediately = self.new_record?
-    true
-  end
-  
   def update_account_associations_if_account_changed
     return unless self.user && !User.skip_updating_account_associations?
-    if @should_update_account_associations_immediately
+    if self.new_record?
+      return if %w{creation_pending deleted}.include?(self.user.workflow_state)
       self.user.update_account_associations(:incremental => true, :precalculated_associations => {self.account_id => 0})
-    else
-      self.user.update_account_associations_later if self.user && @should_update_user_account_associations
+    elsif self.account_id_changed?
+      self.user.update_account_associations_later
     end
   end
   
@@ -138,6 +133,7 @@ class Pseudonym < ActiveRecord::Base
     if !crypted_password || crypted_password == ""
       self.generate_temporary_password
     end
+    self.sis_user_id = nil if self.sis_user_id.blank?
   end
   
   def update_passwords_on_related_pseudonyms
@@ -170,7 +166,7 @@ class Pseudonym < ActiveRecord::Base
     :email_login
   end
 
-  def works_for_account?(account)
+  def works_for_account?(account, allow_implicit = false)
     true
   end
 
@@ -295,11 +291,9 @@ class Pseudonym < ActiveRecord::Base
   end
   
   def generate_temporary_password
-    pw = AutoHandle.generate('tmp-pw', 15)
-    self.password = pw
-    self.password_confirmation = pw
+    self.reset_password
     self.password_auto_generated = true
-    pw
+    self.password
   end
   
   def move_to_user(user, migrate=true)
@@ -333,16 +327,10 @@ class Pseudonym < ActiveRecord::Base
   
   def ldap_bind_result(password_plaintext)
     self.account.account_authorization_configs.each do |config|
-      ldap = config.ldap_connection
-      filter = config.ldap_filter(self.unique_id)
-      begin
-        res = ldap.bind_as(:base => ldap.base, :filter => filter, :password => password_plaintext)
-        return res if res
-      rescue Net::LDAP::LdapError
-        ErrorReport.log_exception(:ldap, $!)
-      end
+      res = config.ldap_bind_result(self.unique_id, password_plaintext)
+      return res if res
     end
-    nil
+    return nil
   end
   
   def add_ldap_channel
@@ -381,8 +369,6 @@ class Pseudonym < ActiveRecord::Base
     {:conditions => {:account_id => account.id, :unique_id => unique_ids}, :order => :unique_id}
   }
   named_scope :active, :conditions => ['pseudonyms.workflow_state IS NULL OR pseudonyms.workflow_state != ?', 'deleted']
-  # returns pseudonyms not from account, but that can be used by account
-  named_scope :trusted_by, lambda { |account| {:conditions => ['account_id<>?', account.id]} }
   named_scope :trusted_by_including_self, lambda { |account| {} }
 
   def self.serialization_excludes; [:crypted_password, :password_salt, :reset_password_token, :persistence_token, :single_access_token, :perishable_token, :sis_ssha]; end

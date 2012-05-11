@@ -326,4 +326,130 @@ describe UsersController do
       end
     end
   end
+
+  context "GET 'grades'" do
+    it "should not include designers in the teacher enrollments" do
+      # teacher needs to be in two courses to get to the point where teacher
+      # enrollments are queried
+      @course1 = course(:active_all => true)
+      @course2 = course(:active_all => true)
+      @teacher = user(:active_all => true)
+      @designer = user(:active_all => true)
+      @course1.enroll_teacher(@teacher).accept!
+      @course2.enroll_teacher(@teacher).accept!
+      @course2.enroll_designer(@designer).accept!
+
+      user_session(@teacher)
+      get 'grades', :course_id => @course.id
+      response.should be_success
+
+      assigns[:teacher_enrollments].should_not be_nil
+      teachers = assigns[:teacher_enrollments].map{ |e| e.user }
+      teachers.should be_include(@teacher)
+      teachers.should_not be_include(@designer)
+    end
+
+    it "should not redirect to an observer enrollment with no observee" do
+      @course1 = course(:active_all => true)
+      @course2 = course(:active_all => true)
+      @user = user(:active_all => true)
+      @course1.enroll_user(@user, 'ObserverEnrollment').accept!
+      @course2.enroll_student(@user).accept!
+
+      user_session(@user)
+      get 'grades'
+      response.should redirect_to course_grades_url(@course2)
+    end
+  end
+  
+  describe "GET 'avatar_image_url'" do
+    it "should redirect to no-pic if avatars are disabled" do
+      course_with_student_logged_in(:active_all => true)
+      get 'avatar_image_url', :user_id  => @user.id
+      response.should redirect_to 'http://test.host/images/no_pic.gif'
+    end
+    it "should handle passing an absolute fallback" do
+      course_with_student_logged_in(:active_all => true)
+      get 'avatar_image_url', :user_id  => @user.id, :fallback => "http://foo.com/my/custom/fallback/url.png"
+      response.should redirect_to 'http://foo.com/my/custom/fallback/url.png'
+    end
+    it "should handle passing a host-relative fallback" do
+      course_with_student_logged_in(:active_all => true)
+      get 'avatar_image_url', :user_id  => @user.id, :fallback => "/my/custom/fallback/url.png"
+      response.should redirect_to 'http://test.host/my/custom/fallback/url.png'
+    end
+    it "should pass along the default fallback to gravatar" do
+      course_with_student_logged_in(:active_all => true)
+      @account = Account.default
+      @account.enable_service(:avatars)
+      @account.save!
+      @account.service_enabled?(:avatars).should be_true
+      get 'avatar_image_url', :user_id  => @user.id
+      response.should redirect_to "https://secure.gravatar.com/avatar/000?s=50&d=#{CGI.escape("http://test.host/images/no_pic.gif")}"
+    end
+    it "should handle passing an absolute fallback when avatars are enabled" do
+      course_with_student_logged_in(:active_all => true)
+      @account = Account.default
+      @account.enable_service(:avatars)
+      @account.save!
+      @account.service_enabled?(:avatars).should be_true
+      get 'avatar_image_url', :user_id  => @user.id, :fallback => "https://test.domain/my/custom/fallback/url.png"
+      response.should redirect_to "https://secure.gravatar.com/avatar/000?s=50&d=#{CGI.escape("https://test.domain/my/custom/fallback/url.png")}"
+    end
+    it "should handle passing a host-relative fallback when avatars are enabled" do
+      course_with_student_logged_in(:active_all => true)
+      @account = Account.default
+      @account.enable_service(:avatars)
+      @account.save!
+      @account.service_enabled?(:avatars).should be_true
+      get 'avatar_image_url', :user_id  => @user.id, :fallback => "/my/custom/fallback/url.png"
+      response.should redirect_to "https://secure.gravatar.com/avatar/000?s=50&d=#{CGI.escape("http://test.host/my/custom/fallback/url.png")}"
+    end
+    it "should take an invalid id and return no_pic" do
+      @account = Account.default
+      @account.enable_service(:avatars)
+      @account.save!
+      @account.service_enabled?(:avatars).should be_true
+      get 'avatar_image_url', :user_id  => 'a'
+      response.should redirect_to 'http://test.host/images/no_pic.gif'
+    end
+    it "should take an invalid id with a hyphen and return no_pic" do
+      @account = Account.default
+      @account.enable_service(:avatars)
+      @account.save!
+      @account.service_enabled?(:avatars).should be_true
+      get 'avatar_image_url', :user_id  => 'a-1'
+      response.should redirect_to 'http://test.host/images/no_pic.gif'
+    end
+  end
+
+  describe "GET 'public_feed.atom'" do
+    before(:each) do
+      course_with_student(:active_all => true)
+      assignment_model(:course => @course)
+      @course.discussion_topics.create!(:title => "hi", :message => "blah", :user => @student)
+      wiki_page_model(:course => @course)
+    end
+
+    it "should require authorization" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code + 'x'
+      assigns[:problem].should match /The verification code is invalid/
+    end
+
+    it "should include absolute path for rel='self' link" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.links.first.rel.should match(/self/)
+      feed.links.first.href.should match(/http:\/\//)
+    end
+
+    it "should include an author for each entry" do
+      get 'public_feed', :format => 'atom', :feed_code => @user.feed_code
+      feed = Atom::Feed.load_feed(response.body) rescue nil
+      feed.should_not be_nil
+      feed.entries.should_not be_empty
+      feed.entries.all?{|e| e.authors.present?}.should be_true
+    end
+  end
 end

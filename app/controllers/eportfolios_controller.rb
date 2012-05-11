@@ -19,6 +19,7 @@
 class EportfoliosController < ApplicationController
   include EportfolioPage
   before_filter :require_user, :only => [:index, :user_index]
+  before_filter :reject_student_view_student
   
   def index
     user_index
@@ -163,12 +164,12 @@ class EportfoliosController < ApplicationController
         respond_to do |format|
           if @attachment.zipped?
             if Attachment.s3_storage?
-              format.html { redirect_to @attachment.cacheable_s3_url }
-              format.zip { redirect_to @attachment.cacheable_s3_url }
+              format.html { redirect_to @attachment.cacheable_s3_inline_url }
+              format.zip { redirect_to @attachment.cacheable_s3_inline_url }
             else
               cancel_cache_buster
-              format.html { send_file(@attachment.full_filename, :type => @attachment.content_type, :disposition => 'inline') }
-              format.zip { send_file(@attachment.full_filename, :type => @attachment.content_type, :disposition => 'inline') }
+              format.html { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
+              format.zip { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
             end
             format.json { render :json => @attachment.to_json(:methods => :readable_size) }
           else
@@ -184,22 +185,22 @@ class EportfoliosController < ApplicationController
   
   def public_feed
     @portfolio = Eportfolio.find(params[:eportfolio_id])
-    respond_to do |format|
-      if @portfolio.public || params[:verifier] == @portfolio.uuid
-        @entries = @portfolio.eportfolio_entries.find(:all, :order => 'eportfolio_entries.created_at DESC')
-        feed = Atom::Feed.new do |f|
-          f.title = t(:title, "%{portfolio_name} Feed", :portfolio_name => @portfolio.name)
-          f.links << Atom::Link.new(:href => eportfolio_url(@portfolio.id))
-          f.updated = @entries.first.updated_at rescue Time.now
-          f.id = eportfolio_url(@portfolio.id)
-        end
-        @entries.each do |e|
-          feed.entries << e.to_atom(:private => params[:verifier] == @portfolio.uuid)
-        end
-        format.atom { render :text => feed.to_xml }
-      else
-        authorized_action(nil, nil, :bad_permission)
+    if @portfolio.public || params[:verifier] == @portfolio.uuid
+      @entries = @portfolio.eportfolio_entries.find(:all, :order => 'eportfolio_entries.created_at DESC')
+      feed = Atom::Feed.new do |f|
+        f.title = t(:title, "%{portfolio_name} Feed", :portfolio_name => @portfolio.name)
+        f.links << Atom::Link.new(:href => eportfolio_url(@portfolio.id), :rel => 'self')
+        f.updated = @entries.first.updated_at rescue Time.now
+        f.id = eportfolio_url(@portfolio.id)
       end
+      @entries.each do |e|
+        feed.entries << e.to_atom(:private => params[:verifier] == @portfolio.uuid)
+      end
+      respond_to do |format|
+        format.atom { render :text => feed.to_xml }
+      end
+    else
+      authorized_action(nil, nil, :bad_permission)
     end
   end
 end

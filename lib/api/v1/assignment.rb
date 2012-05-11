@@ -22,11 +22,12 @@ module Api::V1::Assignment
 
   def assignment_json(assignment, user, session, includes = [], show_admin_fields = false)
     # no includes supported right now
-    hash = api_json(assignment, user, session, :only => %w(id grading_type points_possible position due_at description))
+    hash = api_json(assignment, user, session, :only => %w(id grading_type points_possible position due_at description assignment_group_id group_category_id))
 
     hash['course_id'] = assignment.context_id
     hash['name'] = assignment.title
     hash['description'] = api_user_content(hash['description'], @context || assignment.context)
+    hash['html_url'] = course_assignment_url(assignment.context_id, assignment)
 
     if show_admin_fields
       hash['needs_grading_count'] = assignment.needs_grading_count
@@ -40,6 +41,10 @@ module Api::V1::Assignment
 
     hash['muted'] = assignment.muted?
 
+    if assignment.allowed_extensions.present?
+      hash['allowed_extensions'] = assignment.allowed_extensions
+    end
+
     if assignment.rubric_association
       hash['use_rubric_for_grading'] =
         !!assignment.rubric_association.use_for_grading
@@ -49,11 +54,18 @@ module Api::V1::Assignment
       end
     end
 
-    hash['rubric'] = assignment.rubric.data.map do |row|
-      row_hash = row.slice(:id, :points, :description, :long_description)
-      row_hash["ratings"] = row[:ratings].map { |c| c.slice(:id, :points, :description) }
-      row_hash
-    end if assignment.rubric
+    if assignment.rubric
+      rubric = assignment.rubric
+      hash['rubric'] = rubric.data.map do |row|
+        row_hash = row.slice(:id, :points, :description, :long_description)
+        row_hash["ratings"] = row[:ratings].map { |c| c.slice(:id, :points, :description) }
+        row_hash
+      end
+      hash['rubric_settings'] = {
+        'points_possible' => rubric.points_possible,
+        'free_form_criterion_comments' => !!rubric.free_form_criterion_comments,
+      }
+    end
 
     if assignment.discussion_topic
       hash['discussion_topic'] = discussion_topic_api_json(assignment.discussion_topic, assignment.discussion_topic.context, user, session)

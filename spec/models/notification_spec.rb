@@ -16,7 +16,7 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper.rb')
 
 describe Notification do
 
@@ -43,6 +43,26 @@ describe Notification do
     n.body.should_not be_nil
     n.subject.should_not be_nil
     n.sms_body.should_not be_nil
+  end
+
+  context "by_name" do
+    before do
+      Notification.create(:name => "foo")
+      Notification.create(:name => "bar")
+    end
+
+    it "should look up all notifications once and cache them thereafter" do
+      Notification.expects(:all).once.returns{ Notification.find(:all) }
+      Notification.by_name("foo").should eql(Notification.find_by_name("foo"))
+      Notification.by_name("bar").should eql(Notification.find_by_name("bar"))
+    end
+
+    it "should give you different object for the same notification" do
+      n1 = Notification.by_name("foo")
+      n2 = Notification.by_name("foo")
+      n1.should eql n2
+      n1.should_not equal n2
+    end
   end
   
   context "create_message" do
@@ -199,6 +219,7 @@ describe Notification do
     
     it "should not send messages after the user's limit" do
       notification_set
+      NotificationPolicy.count.should == 1
       Rails.cache.delete(['recent_messages_for', @user.id].cache_key)
       User.stubs(:max_messages_per_day).returns(1)
       User.max_messages_per_day.times do 
@@ -209,29 +230,34 @@ describe Notification do
       messages = @notification.create_message(@assignment, @user)
       messages.select{|m| m.to != 'dashboard'}.should be_empty
       DelayedMessage.count.should eql(1)
-    end
-    
-    it "should not send messages after the category limit" do
-      notification_set
-      Rails.cache.delete(['recent_messages_for', "#{@user.id}_#{@notification.category}"].cache_key)
-      @notification.stubs(:max_for_category).returns(1)
-      @notification.max_for_category.times do
-        messages = @notification.create_message(@assignment, @user)
-        messages.select{|m| m.to != 'dashboard'}.should_not be_empty
-      end
-      DelayedMessage.count.should eql(0)
+      NotificationPolicy.count.should == 2
+      # should not create more dummy policies
       messages = @notification.create_message(@assignment, @user)
       messages.select{|m| m.to != 'dashboard'}.should be_empty
-      DelayedMessage.count.should eql(1)
+      NotificationPolicy.count.should == 2
     end
-
+    
     it "should not use notification policies for unconfirmed communication channels" do
       notification_set
       cc = communication_channel_model(:user_id => @user.id, :workflow_state => 'unconfirmed', :path => "nope")
-      notification_policy_model(:communication_channel_id => cc.id, :notification_id => @notification.id, :user_id => @user.id )
+      notification_policy_model(:communication_channel_id => cc.id, :notification_id => @notification.id)
       messages = @notification.create_message(@assignment, @user)
       messages.size.should == 2
       messages.map(&:to).sort.should == ['dashboard', 'value for path']
+    end
+
+    context "sharding" do
+      it_should_behave_like "sharding"
+
+      it "should create the message on the user's shard" do
+        notification_set
+        @shard1.activate do
+          user_with_pseudonym(:active_all => 1)
+          messages = @notification.create_message(@assignment, @user)
+          messages.length.should >= 1
+          messages.each { |m| m.shard.should == @shard1 }
+        end
+      end
     end
   end
 
@@ -242,7 +268,9 @@ describe Notification do
       @cc.confirm
       notification_model
       # Universal context
+      old_user = @user
       assignment_model
+      @user = old_user
       @valid_record_delayed_messages_opts = {
         :user => @user,
         :communication_channel => @cc,
@@ -276,8 +304,7 @@ describe Notification do
         NotificationPolicy.delete_all
 
         @trifecta_opts = {
-          :user_id => @user.id, 
-          :communication_channel_id => @communication_channel.id, 
+          :communication_channel_id => @communication_channel.id,
           :notification_id => @notification.id
         }
       end
@@ -352,7 +379,6 @@ def notification_set(opts={})
   communication_channel_model(:user_id => @user).confirm!
   notification_policy_model(
     :notification_id => @notification.id, 
-    :user_id => @user.id,
     :communication_channel_id => @communication_channel.id
   )
   @notification.reload

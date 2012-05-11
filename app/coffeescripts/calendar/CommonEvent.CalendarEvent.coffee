@@ -1,16 +1,16 @@
-define 'compiled/calendar/CommonEvent.CalendarEvent', [
-  'i18n'
+define [
+  'i18n!calendar'
   'compiled/util/semanticDateRange'
   'compiled/calendar/CommonEvent'
+  'jquery.instructure_date_and_time'
+  'jquery.instructure_misc_helpers'
 ], (I18n, semanticDateRange, CommonEvent) ->
-
-  I18n = I18n.scoped 'calendar'
 
   deleteConfirmation = I18n.t('prompts.delete_event', "Are you sure you want to delete this event?")
 
   class CalendarEvent extends CommonEvent
-    constructor: (data, contextInfo) ->
-      super data, contextInfo
+    constructor: (data, contextInfo, actualContextInfo) ->
+      super data, contextInfo, actualContextInfo
       @eventType = 'calendar_event'
       @deleteConfirmation = deleteConfirmation
       @deleteURL = contextInfo.calendar_event_url
@@ -26,6 +26,7 @@ define 'compiled/calendar/CommonEvent.CalendarEvent', [
       @end = if data.end_at then $.parseFromISO(data.end_at).time else null
       @allDay = data.all_day
       @editable = true
+      @lockedTitle = @object.parent_event_id?
       @addClass "group_#{@contextCode()}"
       if @isAppointmentGroupEvent()
         @addClass "scheduler-event"
@@ -50,7 +51,7 @@ define 'compiled/calendar/CommonEvent.CalendarEvent', [
       if @isAppointmentGroupEvent()
         return null
 
-      $.replaceTags(@contextInfo.calendar_event_url, 'id', @calendarEvent.id)
+      $.replaceTags(@contextInfo.calendar_event_url, 'id', @calendarEvent.parent_event_id ? @calendarEvent.id)
 
     displayTimeString: () ->
       semanticDateRange(@calendarEvent.start_at, @calendarEvent.end_at)
@@ -64,8 +65,8 @@ define 'compiled/calendar/CommonEvent.CalendarEvent', [
     methodAndURLForSave: () ->
       if @isNewEvent()
         method = 'POST'
-        url = @contextInfo.create_calendar_event_url
+        url = '/api/v1/calendar_events'
       else
         method = 'PUT'
-        url = $.replaceTags(@contextInfo.calendar_event_url, 'id', @object.id)
+        url = @calendarEvent.url
       [ method, url ]

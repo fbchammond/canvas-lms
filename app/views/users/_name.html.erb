@@ -5,7 +5,7 @@
   account ||= managed_accounts.first
   root_account = account.root_account if account
 %>
-<% jammit_js :user_name %>
+<% js_bundle :user_name %>
   <fieldset id="name_and_email">
     <legend><%= t('titles.name_and_email', 'Name and Email') %></legend>
     <table class="profile_table details user_details">
@@ -44,10 +44,10 @@
         <th><%= before_label('time_zone', 'Time Zone') %></th>
         <td class="time_zone"><%= @user.time_zone || t('none', "None") %></td>
       </tr>
-      <% if can_manage_admin_users || (!@enrollments.any?(&:admin?) && !@user.creation_sis_batch_id && can_do(@context, @current_user, :manage_students)) %>
+      <% if can_manage_admin_users || (!@enrollments.any?(&:admin?) && !@user.sis_pseudonym_for(@context.root_account) && can_do(@context, @current_user, :manage_students)) %>
         <td class="links" colspan="2" style="text-align: right; font-size: 0.8em; padding-top: 10px;">
           <a href="#" class="edit_user_link"><%= t('edit', 'Edit') %></a>
-          <% if @user.id != @current_user.id && can_do(@user, @real_current_user || @current_user, :become_user) %>
+          <% if @user != @current_user && @user.can_masquerade?(@real_current_user || @current_user, @domain_root_account) %>
             |
             <% if @context && !@context.is_a?(Account) %>
               <a href="<%= context_url(@context, :context_url, :become_user_id => @user.id) %>"> <%= t('become', 'Become') %></a>

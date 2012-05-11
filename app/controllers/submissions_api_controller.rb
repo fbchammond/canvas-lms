@@ -157,12 +157,40 @@ class SubmissionsApiController < ApplicationController
 
   # @API
   #
+  # Upload a file to a submission.
+  #
+  # This API endpoint is the first step in uploading a file to a submission as a student.
+  # See the {file:file_uploads.html File Upload Documentation} for details on the file upload workflow.
+  #
+  # The final step of the file upload workflow will return the attachment data,
+  # including the new file id. The caller can then POST to submit the
+  # +online_upload+ assignment with these file ids.
+  #
+  def create_file
+    @assignment = @context.assignments.active.find(params[:assignment_id])
+    @user = get_user_considering_section(params[:user_id])
+    permission = @assignment.submission_types.include?("online_upload") ? :submit : :nothing
+    # rationale for allowing other user ids at all: eventually, you'll be able
+    # to use this api for uploading an attachment to a submission comment.
+    # teachers will be able to do that for any submission they can grade, so
+    # they need to be able to specify the target user.
+    permission = :nothing if @user != @current_user
+    # we don't check quota when uploading a file for assignment submission
+    if authorized_action(@assignment, @current_user, permission)
+      api_attachment_preflight(@user, request, :check_quota => false)
+    end
+  end
+
+  # @API
+  #
   # Comment on and/or update the grading for a student's assignment submission.
   # If any submission or rubric_assessment arguments are provided, the user
   # must have permission to manage grades in the appropriate context (course or
   # section).
   #
   # @argument comment[text_comment] Add a textual comment to the submission.
+  #
+  # @argument comment[group_comment] [Boolean] Whether or not this comment should be sent to the entire group (defaults to false). Ignored if this is not a group assignment or if no text_comment is provided.
   #
   # @argument submission[posted_grade] Assign a score to the submission,
   #   updating both the "score" and "grade" fields on the submission record.
@@ -254,8 +282,9 @@ class SubmissionsApiController < ApplicationController
           # but we need to implement a way to abstract it away from kaltura and
           # make it generic. This will probably involve a proxy outside of
           # rails.
-          comment.slice(:media_comment_id, :media_comment_type))
-          @submission.add_comment(comment)
+          comment.slice(:media_comment_id, :media_comment_type, :group_comment)
+        ).with_indifferent_access
+        @assignment.update_submission(@submission.user, comment)
       end
       # We need to reload because some of this stuff is getting set on the
       # submission without going through the model instance -- it'd be nice to
@@ -268,13 +297,6 @@ class SubmissionsApiController < ApplicationController
 
   def map_user_ids(user_ids)
     Api.map_ids(user_ids, User, @domain_root_account)
-  end
-
-  def get_course_from_section
-    if params[:section_id]
-      @section = api_find(CourseSection, params.delete(:section_id))
-      params[:course_id] = @section.course_id
-    end
   end
 
   def get_user_considering_section(user_id)

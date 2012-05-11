@@ -33,7 +33,7 @@ class Account < ActiveRecord::Base
   has_many :all_group_categories, :class_name => 'GroupCategory', :as => :context
   has_many :groups, :as => :context
   has_many :enrollment_terms, :foreign_key => 'root_account_id'
-  has_many :enrollments, :foreign_key => 'root_account_id'
+  has_many :enrollments, :foreign_key => 'root_account_id', :conditions => ["enrollments.type != 'StudentViewEnrollment'"]
   has_many :sub_accounts, :class_name => 'Account', :foreign_key => 'parent_account_id', :conditions => ['workflow_state != ?', 'deleted']
   has_many :all_accounts, :class_name => 'Account', :foreign_key => 'root_account_id', :order => 'name'
   has_many :account_users, :dependent => :destroy
@@ -80,12 +80,12 @@ class Account < ActiveRecord::Base
   has_many :created_learning_outcomes, :class_name => 'LearningOutcome', :as => :context
   has_many :learning_outcome_tags, :class_name => 'ContentTag', :as => :context, :conditions => ['content_tags.tag_type = ? AND workflow_state != ?', 'learning_outcome_association', 'deleted']
   has_many :associated_learning_outcomes, :through => :learning_outcome_tags, :source => :learning_outcome
-  has_many :page_views
   has_many :error_reports
-  has_many :account_notifications
+  has_many :announcements, :class_name => 'AccountNotification'
   has_many :alerts, :as => :context, :include => :criteria
   has_many :associated_alerts, :through => :associated_courses, :source => :alerts, :include => :criteria
   has_many :user_account_associations
+  has_many :report_snapshots
 
   before_validation :verify_unique_sis_source_id
   before_save :ensure_defaults
@@ -145,7 +145,7 @@ class Account < ActiveRecord::Base
   add_setting :enable_alerts, :boolean => true, :root_only => true
   add_setting :enable_eportfolios, :boolean => true, :root_only => true
   add_setting :users_can_edit_name, :boolean => true, :root_only => true
-  add_setting :open_registration, :boolean => true, :root_only => true, :default => false, :condition => :non_delegated_authentication
+  add_setting :open_registration, :boolean => true, :root_only => true, :default => false
   add_setting :enable_scheduler, :boolean => true, :root_only => true, :default => false
 
   def settings=(hash)
@@ -406,108 +406,20 @@ class Account < ActiveRecord::Base
     res << Account.site_admin if opts[:include_site_admin] && !self.site_admin?
     res.compact
   end
+
+  def associated_accounts
+    self.account_chain
+  end
   
   def account_chain_ids(opts={})
     account_chain(opts).map(&:id)
   end
   memoize :account_chain_ids
-  
-  def all_page_views
-    PageView.of_account(self)
-  end
-  
+
   def membership_for_user(user)
     self.account_users.find_by_user_id(user && user.id)
   end
-  
-  def page_views_by_day(*args)
-    dates = (!args.empty? && args) || [1.year.ago, Time.now ]
-    PageView.count(
-      :group => "date(created_at)", 
-      :order => "date(created_at)",
-      :conditions => {
-        :account_id => self_and_all_sub_accounts,
-        :created_at => (dates.first)..(dates.last)
-      }
-    )
-  end
-  memoize :page_views_by_day
-  
-  def page_views_by_hour(*args)
-    dates = (!args.empty? && args) || [1.year.ago, Time.now ]
-    group = case PageView.connection.adapter_name
-    when "SQLite"
-      "strftime('%H', created_at)"
-    else
-      "extract(hour from created_at)"
-    end
-    PageView.count(
-      :group => group,
-      :order => group,
-      :conditions => {
-        :account_id => self_and_all_sub_accounts,
-        :created_at => (dates.first)..(dates.last)
-      }
-    )
-  end
-  memoize :page_views_by_hour
-  
-  def page_view_hourly_report(*args)
-    # if they dont supply a date range then use the first day returned by page_views_by_day (which should be the first day that there is pageview statistics gathered)
-    hours = []
-    max = page_views_by_hour(*args).map{|key, val| val}.compact.max
-    24.times do |hour|
-      utc_hour = ActiveSupport::TimeWithZone.new(Time.parse("#{hour}:00"), Time.zone).utc.hour
-      hours << [hour, ((page_views_by_hour(*args)[utc_hour.to_s].to_f / max.to_f * 100.0).to_i rescue 0) ]
-    end
-    hours
-  end
-  
-  def page_view_data(*args)
-    # if they dont supply a date range then use the first day returned by page_views_by_day (which should be the first day that there is pageview statistics gathered)
-    dates = args.empty? ? [page_views_by_day.sort.first.first.to_datetime, Time.now] : args 
-    days = []
-    dates.first.to_datetime.upto(dates.last) do |d| 
-      # this * 1000 part is because the Highcharts expects something like what Date.UTC(2006, 2, 28) would give you,
-      # which is MILLISECONDS from the unix epoch, ruby's to_f gives you SECONDS since then.
-      days << [ (d.at_beginning_of_day.to_f * 1000).to_i , page_views_by_day[d.to_date.to_s].to_i ]
-    end
-    days
-  rescue
-    return []
-  end
-  memoize :page_view_data
-  
-  def most_popular_courses(options={})
-    conditions = {
-      :account_id => self_and_all_sub_accounts
-    }
-    if options[:dates]
-      conditions.merge!({
-        :created_at => (options[:dates].first)..(options[:dates].last)
-      })
-    end
-    PageView.scoped(
-      :select => 'count(*) AS page_views_count, context_type, context_id',
-      :group => "context_type, context_id", 
-      :conditions => conditions,
-      :order => "page_views_count DESC"
-    ).map do |context|
-      context.attributes.merge({"page_views_count" => context.page_views_count.to_i}).with_indifferent_access
-    end
-  end
-  memoize :most_popular_courses
-  
-  def popularity_of(context)
-    index = most_popular_courses.index( most_popular_courses.detect { |i| 
-      i[:context_type] == context.class.to_s && i[:context_id] == context.id 
-    })
-    index ? 
-      { :rank => index, :page_views_count => most_popular_courses[index][:page_views_count] } :
-      { :rank => courses.count, :page_views_count => 0 } 
-  end
-  memoize :popularity_of
-  
+
   def account_membership_types
     res = ['AccountAdmin']
     res += self.parent_account.account_membership_types if self.parent_account
@@ -518,7 +430,7 @@ class Account < ActiveRecord::Base
   def add_account_membership_type(type)
     types = account_membership_types
     types += type.split(",")
-    self.membership_types  = types.join(',')
+    self.membership_types = types.join(',')
     self.save
   end
   
@@ -560,15 +472,36 @@ class Account < ActiveRecord::Base
   def account_users_for(user)
     @account_chain_ids ||= self.account_chain(:include_site_admin => true).map { |a| a.active? ? a.id : nil }.compact
     @account_users_cache ||= {}
-    @account_users_cache[user] ||= AccountUser.find(:all, :conditions => { :account_id => @account_chain_ids, :user_id => user.id }) if user
+    @account_users_cache[user] ||= Shard.partition_by_shard(@account_chain_ids) do |account_chain_ids|
+      AccountUser.find(:all, :conditions => { :account_id => account_chain_ids, :user_id => user.id })
+    end if user
     @account_users_cache[user] ||= []
     @account_users_cache[user]
   end
-  
+
+  # returns all account users for this entire account tree
+  def all_account_users_for(user)
+    raise "must be a root account" unless self.root_account?
+    Shard.partition_by_shard([self, Account.site_admin].uniq) do |accounts|
+      ids = accounts.map(&:id)
+      AccountUser.find(:all, :include => :account, :joins => :account, :conditions => ["user_id=? AND (root_account_id IN (?) OR account_id IN (?))", user.id, ids, ids])
+    end
+  end
+
   set_policy do
-    RoleOverride.permissions.each_key do |permission|
+    enrollment_types = RoleOverride.enrollment_types.map { |role| role[:name] }
+    RoleOverride.permissions.each do |permission, details|
       given { |user| self.account_users_for(user).any? { |au| au.has_permission_to?(permission) } }
       can permission
+      can :create_courses if permission == :manage_courses
+
+      next unless details[:account_only]
+      ((details[:available_to] | details[:true_for]) & enrollment_types).each do |role|
+        given { |user| user && RoleOverride.permission_for(self, permission, role)[:enabled] &&
+          self.course_account_associations.find(:first, :joins => 'INNER JOIN enrollments ON course_account_associations.course_id=enrollments.course_id',
+            :conditions => ["enrollments.type=? AND enrollments.workflow_state IN ('active', 'completed') AND user_id=?", role, user.id]) }
+        can permission
+      end
     end
 
     given { |user| !self.account_users_for(user).empty? }
@@ -603,11 +536,7 @@ class Account < ActiveRecord::Base
     self.deleted_at = Time.now
     save!
   end
-  
-  def self.site_admin_user?(user, permission = :site_admin)
-    !!(user && Account.site_admin.grants_right?(user, permission))
-  end
-  
+
   def to_atom
     Atom::Entry.new do |entry|
       entry.title     = self.name
@@ -652,10 +581,6 @@ class Account < ActiveRecord::Base
     !!(self.account_authorization_config && self.account_authorization_config.delegated_authentication?)
   end
 
-  def non_delegated_authentication?
-    !delegated_authentication?
-  end
-
   def forgot_password_external_url
     account_authorization_config.try(:change_password_url)
   end
@@ -690,37 +615,43 @@ class Account < ActiveRecord::Base
   end
 
   def self.site_admin
-    get_special_account('site_admin', 'Site Admin')
+    get_special_account(:site_admin, 'Site Admin')
   end
 
   def self.default
-    get_special_account('default', 'Default Account')
+    get_special_account(:default, 'Default Account')
+  end
+
+  def self.clear_special_account_cache!
+    @special_accounts = {}
   end
 
   def self.get_special_account(special_account_type, default_account_name)
+    @special_account_ids ||= {}
     @special_accounts ||= {}
 
-    if Rails.env.test?
-      # TODO: we have to do this because tests run in transactions. maybe it'd
-      # be good to create some sort of of memoize_if_safe method, that only
-      # memoizes when we're caching classes and not in test mode? I dunno. But
-      # this stinks.
-      @special_accounts[special_account_type] = Account.find_by_parent_account_id_and_name(nil, default_account_name)
-      return @special_accounts[special_account_type] ||= Account.create(:parent_account => nil, :name => default_account_name)
-    end
-
     account = @special_accounts[special_account_type]
-    return account if account
-    if (account_id = Setting.get("#{special_account_type}_account_id", nil)) && account_id.present?
-      account = Account.find_by_id(account_id)
+    unless account
+      special_account_id = @special_account_ids[special_account_type] ||= Setting.get("#{special_account_type}_account_id", nil)
+      account = @special_accounts[special_account_type] = Account.find_by_id(special_account_id) if special_account_id
     end
-    return @special_accounts[special_account_type] = account if account
-    # TODO i18n
-    t '#account.default_site_administrator_account_name', 'Site Admin'
-    t '#account.default_account_name', 'Default Account'
-    account = Account.create!(:name => default_account_name)
-    Setting.set("#{special_account_type}_account_id", account.id)
-    return @special_accounts[special_account_type] = account
+    # another process (i.e. selenium spec) may have changed the setting
+    unless account
+      special_account_id = Setting.get("#{special_account_type}_account_id", nil)
+      if special_account_id && special_account_id != @special_account_ids[special_account_type]
+        @special_account_ids[special_account_type] = special_account_id
+        account = @special_accounts[special_account_type] = Account.find_by_id(special_account_id)
+      end
+    end
+    unless account
+      # TODO i18n
+      t '#account.default_site_administrator_account_name', 'Site Admin'
+      t '#account.default_account_name', 'Default Account'
+      account = @special_accounts[special_account_type] = Account.create!(:name => default_account_name)
+      Setting.set("#{special_account_type}_account_id", account.id)
+      @special_account_ids[special_account_type] = account.id
+    end
+    account
   end
 
   def site_admin?
@@ -833,7 +764,7 @@ class Account < ActiveRecord::Base
   TAB_QUESTION_BANKS = 13
 
   def external_tool_tabs(opts)
-    tools = ContextExternalTool.find_all_for(self, :account_navigation)
+    tools = ContextExternalTool.active.find_all_for(self, :account_navigation)
     tools.sort_by(&:id).map do |tool|
      {
         :id => tool.asset_string,
@@ -850,6 +781,7 @@ class Account < ActiveRecord::Base
     manage_settings = user && self.grants_right?(user, nil, :manage_account_settings)
     if site_admin?
       tabs = []
+      tabs << { :id => TAB_USERS, :label => t('#account.tab_users', "Users"), :css_class => 'users', :href => :account_users_path } if user && self.grants_right?(user, nil, :read_roster)
       tabs << { :id => TAB_PERMISSIONS, :label => t('#account.tab_permissions', "Permissions"), :css_class => 'permissions', :href => :account_permissions_path } if user && self.grants_right?(user, nil, :manage_role_overrides)
       tabs << { :id => TAB_AUTHENTICATION, :label => t('#account.tab_authentication', "Authentication"), :css_class => 'authentication', :href => :account_account_authorization_configs_path } if manage_settings
     else
@@ -1043,10 +975,15 @@ class Account < ActiveRecord::Base
     self.root_account.sub_accounts.find_or_create_by_name(t('#account.manually_created_courses', "Manually-Created Courses"))
   end
 
-  def open_registration_for?(user, session = nil)
-    root_account = self.root_account
-    return true if root_account.open_registration?
-    root_account.grants_right?(user, session, :manage_user_logins)
+  def trusted_account_ids
+    return [] if !root_account? || self == Account.site_admin
+    [ Account.site_admin.id ]
+  end
+
+  def user_list_search_mode_for(user)
+    return :preferred if self.root_account.open_registration?
+    return :preferred if self.root_account.grants_right?(user, :manage_user_logins)
+    :closed
   end
 
   named_scope :root_accounts, :conditions => {:root_account_id => nil}

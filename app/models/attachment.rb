@@ -35,7 +35,6 @@ class Attachment < ActiveRecord::Base
   belongs_to :scribd_account
   has_one :sis_batch
   has_one :thumbnail, :foreign_key => "parent_id", :conditions => {:thumbnail => "thumb"}
-  validates_length_of :cached_s3_url, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
 
   before_save :infer_display_name
   before_save :default_values
@@ -44,7 +43,7 @@ class Attachment < ActiveRecord::Base
   before_destroy :delete_scribd_doc
   acts_as_list :scope => :folder
   after_save :touch_context_if_appropriate
-  after_create :build_media_object
+  after_save :build_media_object
   
   attr_accessor :podcast_associated_asset
 
@@ -112,9 +111,28 @@ class Attachment < ActiveRecord::Base
       send_later_enqueue_args(:submit_to_scribd!, { :strand => 'scribd', :max_attempts => 1 })
     end
 
+    send_later(:infer_encoding) if self.encoding.nil? && self.content_type =~ /text/
     if respond_to?(:process_attachment_with_processing) && thumbnailable? && !attachment_options[:thumbnails].blank? && parent_id.nil?
       temp_file = temp_path || create_temp_file
       self.class.attachment_options[:thumbnails].each { |suffix, size| send_later_if_production(:create_thumbnail_size, suffix) }
+    end
+  end
+
+  def infer_encoding
+    return unless self.encoding.nil?
+    begin
+      Iconv.open('UTF-8', 'UTF-8') do |iconv|
+        self.open do |chunk|
+          iconv.iconv(chunk)
+        end
+        iconv.iconv(nil)
+      end
+      self.encoding = 'UTF-8'
+      Attachment.update_all({:encoding => 'UTF-8'}, {:id => self.id})
+    rescue Iconv::Failure
+      self.encoding = ''
+      Attachment.update_all({:encoding => ''}, {:id => self.id})
+      return
     end
   end
   
@@ -140,6 +158,7 @@ class Attachment < ActiveRecord::Base
     dup.write_attribute(:filename, self.filename)
     dup.root_attachment_id = self.root_attachment_id || self.id
     dup.context = context
+    dup.migration_id = CC::CCHelper.create_key(self)
     context.log_merge_result("File \"#{dup.folder.full_name rescue ''}/#{dup.display_name}\" created") if context.respond_to?(:log_merge_result)
     dup.updated_at = Time.now
     dup.clone_updated = true
@@ -148,17 +167,20 @@ class Attachment < ActiveRecord::Base
   
   def build_media_object
     return true if self.class.skip_media_object_creation?
-    if self.content_type && self.content_type.match(/\A(video|audio)/)
-      MediaObject.send_later(:add_media_files, self, false)
+    in_the_right_state = self.file_state == 'available' && self.workflow_state !~ /^unattached/
+    transitioned_to_this_state = self.id_was == nil || self.file_state_changed? && self.workflow_state_was =~ /^unattached/
+    if in_the_right_state && transitioned_to_this_state &&
+        self.content_type && self.content_type.match(/\A(video|audio)/)
+      delay = Setting.get_cached('attachment_build_media_object_delay_seconds', 10.to_s).to_i
+      MediaObject.send_later_enqueue_args(:add_media_files, { :run_at => delay.seconds.from_now }, self, false)
     end
   end
 
   def self.process_migration(data, migration)
     attachments = data['file_map'] ? data['file_map']: {}
     # TODO i18n
-    to_import = migration.to_import 'files'
     attachments.values.each do |att|
-      if !att['is_folder'] && att['migration_id'] && (!to_import || to_import[att['migration_id']])
+      if !att['is_folder'] && migration.import_object?("files", att['migration_id'])
         begin
           import_from_migration(att, migration.context)
         rescue
@@ -200,7 +222,7 @@ class Attachment < ActiveRecord::Base
       item.locked = true if hash[:locked]
       item.file_state = 'hidden' if hash[:hidden]
       item.display_name = hash[:display_name] if hash[:display_name]
-      item.save_without_broadcasting!
+      item.save!
       context.imported_migration_items << item if context.imported_migration_items
     end
     item
@@ -380,8 +402,26 @@ class Attachment < ActiveRecord::Base
     end
   end
   protected :default_values
-  
+
+  def root_account_id
+    # see note in infer_namespace below
+    splits = namespace.try(:split, /_/)
+    return nil if splits.blank?
+    if splits[1] == "localstorage"
+      splits[3].to_i
+    else
+      splits[1].to_i
+    end
+  end
+
   def infer_namespace
+    # If you are thinking about changing the format of this, take note: some
+    # code relies on the namespace as a hacky way to efficiently get the
+    # attachment's account id. Look for anybody who is accessing namespace and
+    # splitting the string, etc.
+    #
+    # I've added the root_account_id accessor above, but I didn't verify there
+    # isn't any code still accessing the namespace for the account id directly.
     ns = Attachment.domain_namespace
     ns ||= self.context.root_account.file_namespace rescue nil
     ns ||= self.context.account.file_namespace rescue nil
@@ -468,7 +508,10 @@ class Attachment < ActiveRecord::Base
     policy['conditions'] += extras
     # flash won't send the session cookie, so for local uploads we put the user id in the signed
     # policy so we can mock up the session for FilesController#create
-    policy['conditions'] << {'pseudonym_id' => pseudonym.id} if Attachment.local_storage?
+    if Attachment.local_storage?
+      policy['conditions'] << { 'pseudonym_id' => pseudonym.id }
+      policy['attachment_id'] = self.id
+    end
 
     policy_encoded = Base64.encode64(policy.to_json).gsub(/\n/, '')
     signature = Base64.encode64(
@@ -479,15 +522,26 @@ class Attachment < ActiveRecord::Base
 
     res[:id] = id
     res[:upload_params].merge!({
-      'Filename' => '',
-      'folder' => '',
-      'key' => sanitized_filename,
-      'acl' => 'private',
-      'Policy' => policy_encoded,
-      'Signature' => signature,
+       'Filename' => '',
+       'folder' => '',
+       'key' => sanitized_filename,
+       'acl' => 'private',
+       'Policy' => policy_encoded,
+       'Signature' => signature,
     })
     extras.map(&:to_a).each{ |extra| res[:upload_params][extra.first.first] = extra.first.last }
     res
+  end
+
+  def self.decode_policy(policy_str, signature_str)
+    return nil if policy_str.blank? || signature_str.blank?
+    signature = Base64.decode64(signature_str)
+    return nil if OpenSSL::HMAC.digest(OpenSSL::Digest::Digest.new("sha1"), Attachment.shared_secret, policy_str) != signature
+    policy = JSON.parse(Base64.decode64(policy_str))
+    return nil unless Time.zone.parse(policy['expiration']) >= Time.now
+    attachment = Attachment.find(policy['attachment_id'])
+    return nil unless attachment.try(:state) == :unattached
+    return policy, attachment
   end
 
   def unencoded_filename
@@ -601,6 +655,10 @@ class Attachment < ActiveRecord::Base
     )
   end
 
+  def content_type_with_encoding
+    encoding.blank? ? content_type : "#{content_type}; charset=#{encoding}"
+  end
+
   # Returns an IO-like object containing the contents of the attachment file.
   # Any resources are guaranteed to be cleaned up when the object is garbage
   # collected (for instance, using the Tempfile class). Calling close on the
@@ -621,9 +679,21 @@ class Attachment < ActiveRecord::Base
   # If opts[:temp_folder] is given, and a local temporary file is created, this
   # path will be used instead of the default system temporary path. It'll be
   # created if necessary.
-  def open(opts = {})
+  def open(opts = {}, &block)
     if Attachment.local_storage?
-      File.open(self.full_filename, 'rb')
+      if block
+        File.open(self.full_filename, 'rb') { |file|
+          chunk = file.read(4096)
+          while chunk
+            yield chunk
+            chunk = file.read(4096)
+          end
+        }
+      else
+        File.open(self.full_filename, 'rb')
+      end
+    elsif block
+      AWS::S3::S3Object.stream(self.full_filename, self.bucket_name, &block)
     else
       # TODO: !need_local_file -- net/http and thus AWS::S3::S3Object don't
       # natively support streaming the response, except when a block is given.
@@ -672,18 +742,7 @@ class Attachment < ActiveRecord::Base
     end
     filename
   end
-  has_a_broadcast_policy
 
-  set_broadcast_policy do |p|
-    p.dispatch :new_file_added
-    p.to { context.participants - [user] }
-    p.whenever { |record| 
-      !@skip_broadcast_messages and 
-      record.context.state == :available and record.just_created and
-      record.folder.visible?
-    }
-  end
-  
   def infer_display_name
     self.display_name ||= unencoded_filename
   end
@@ -736,14 +795,20 @@ class Attachment < ActiveRecord::Base
   end
   
   def clear_cached_urls
-    self.cached_s3_url = nil
-    self.s3_url_cached_at = nil
+    Rails.cache.delete(['cacheable_s3_urls', self].cache_key)
     self.cached_scribd_thumbnail = nil
   end
   
-  def cacheable_s3_url
-    cached = cached_s3_url && s3_url_cached_at && s3_url_cached_at >= (Time.now - 24.hours.to_i)
-    if !cached
+  def cacheable_s3_download_url
+    cacheable_s3_urls['attachment']
+  end
+
+  def cacheable_s3_inline_url
+    cacheable_s3_urls['inline']
+  end
+
+  def cacheable_s3_urls
+    Rails.cache.fetch(['cacheable_s3_urls', self].cache_key, :expires_in => 24.hours) do
       ascii_filename = Iconv.conv("ASCII//TRANSLIT//IGNORE", "UTF-8", display_name)
 
       # response-content-disposition will be url encoded in the depths of
@@ -751,19 +816,19 @@ class Attachment < ActiveRecord::Base
       # quote the filename string, though.
       quoted_ascii = ascii_filename.gsub(/([\x00-\x1f"\x7f])/, '\\\\\\1')
 
-      quoted_unicode = "UTF-8''#{URI.escape(display_name)}"
+      # awesome browsers will use the filename* and get the proper unicode filename,
+      # everyone else will get the sanitized ascii version of the filename
+      quoted_unicode = "UTF-8''#{URI.escape(display_name, /[^A-Za-z0-9.]/)}"
+      filename = %(filename="#{quoted_ascii}"; filename*=#{quoted_unicode})
 
-      self.cached_s3_url = authenticated_s3_url(
-        :expires_in => 144.hours,
-        # awesome browsers will use the filename* and get the proper unicode filename,
-        # everyone else will get the sanitized ascii version of the filename
-        "response-content-disposition" => %(attachment; filename="#{quoted_ascii}"; filename*=#{quoted_unicode})
-      )
-      self.s3_url_cached_at = Time.now
-      save
+      # we need to have versions of the url for each content-disposition
+      {
+        'inline' => authenticated_s3_url(:expires_in => 6.days, "response-content-disposition" => "inline; " + filename),
+        'attachment' => authenticated_s3_url(:expires_in => 6.days, "response-content-disposition" => "attachment; " + filename)
+      }
     end
-    cached_s3_url
   end
+  protected :cacheable_s3_urls
   
   def attachment_path_id
     a = (self.respond_to?(:root_attachment) && self.root_attachment) || self
@@ -789,13 +854,14 @@ class Attachment < ActiveRecord::Base
   
   def to_atom(opts={})
     Atom::Entry.new do |entry|
-      entry.title     = t(:feed_title_with_context, "File, %{course_or_group}: %{title}", :course_or_group => self.context.name, :title => self.context.name) if opts[:include_context]
       entry.title     = t(:feed_title, "File: %{title}", :title => self.context.name) unless opts[:include_context]
+      entry.title     = t(:feed_title_with_context, "File, %{course_or_group}: %{title}", :course_or_group => self.context.name, :title => self.context.name) if opts[:include_context]
+      entry.authors  << Atom::Person.new(:name => self.context.name)
       entry.updated   = self.updated_at
       entry.published = self.created_at
       entry.id        = "tag:#{HostUrl.default_host},#{self.created_at.strftime("%Y-%m-%d")}:/files/#{self.feed_code}"
       entry.links    << Atom::Link.new(:rel => 'alternate', 
-                                    :href => "http://#{HostUrl.context_host(self.context)}/#{context_url_prefix}/files/#{self.id}")
+                                       :href => "http://#{HostUrl.context_host(self.context)}/#{context_url_prefix}/files/#{self.id}")
       entry.content   = Atom::Content::Html.new("#{self.display_name}")
     end
   end
@@ -1235,7 +1301,7 @@ class Attachment < ActiveRecord::Base
   named_scope :uploadable, :conditions => ['workflow_state = ?', 'pending_upload']
   named_scope :active, :conditions => ['file_state = ?', 'available']
   named_scope :thumbnailable?, :conditions => {:content_type => Technoweenie::AttachmentFu.content_types}  
-  def self.serialization_excludes; [:uuid, :cached_s3_url, :namespace]; end
+  def self.serialization_excludes; [:uuid, :namespace]; end
   def set_serialization_options
     if self.scribd_doc
       @scribd_password = self.scribd_doc.secret_password

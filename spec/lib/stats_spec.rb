@@ -115,5 +115,36 @@ describe Stats do
       h.should == {:bin_width=>2.5, :bin_base=>1.5, :data=>{1.5=>2, 4.0=>3, -3.5=>1, -8.5=>1, -1.0=>2}}
     end
     
+    it "should return quarties properly" do
+      c = Stats::Counter.new([6,4,2,-7,0,1,3,5,-3,20])
+      q = c.quartiles
+      q.should == [-0.75, 2.5, 5.25]
+    end
+    
+    it "should return nils for quartiles when there is no data" do
+      c = Stats::Counter.new([])
+      q = c.quartiles
+      q.should == [nil, nil, nil]
+    end
+    
+    it "should return a single number for quartiles if that is the only thing in the data" do
+      c = Stats::Counter.new([5])
+      q = c.quartiles
+      q.should == [5, 5, 5]
+    end
+    
+    it "should return properly for a dataset of length 3" do
+       c = Stats::Counter.new([1,2,10])
+       q = c.quartiles
+       q.should == [1, 2, 10]
+    end
+
+    it "should return properly for a dataset of length 2" do
+       c = Stats::Counter.new([1,10])
+       q = c.quartiles
+       q.should == [1, 5.5, 10]
+    end
+    
+    
   end
 end

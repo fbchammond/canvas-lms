@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2012 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -70,8 +70,8 @@ class AssignmentsController < ApplicationController
       @assignment_module = @assignment.context_module_tag
       @assignment.context_module_action(@current_user, :read) if @unlocked && !@assignment.new_record?
       if @assignment.grants_right?(@current_user, session, :grade)
-        student_ids = @context.students.map(&:id)
-        @current_student_submissions = @assignment.submissions.having_submission.select{|s| student_ids.include?(s.user_id) }
+        visible_student_ids = @context.enrollments_visible_to(@current_user).find(:all, :select => 'user_id').map(&:user_id)
+        @current_student_submissions = @assignment.submissions.scoped(:conditions => "submissions.submission_type IS NOT NULL").select{|s| visible_student_ids.include?(s.user_id) }
       end
       if @assignment.grants_right?(@current_user, session, :read_own_submission) && @context.grants_right?(@current_user, session, :read_grades)
         @current_user_submission = @assignment.submissions.find_by_user_id(@current_user.id) if @current_user
@@ -93,7 +93,7 @@ class AssignmentsController < ApplicationController
       respond_to do |format|
         if @assignment.submission_types == 'online_quiz' && @assignment.quiz && !@editing
           format.html { redirect_to named_context_url(@context, :context_quiz_url, @assignment.quiz.id) }
-        elsif @assignment.submission_types == 'discussion_topic' && @assignment.discussion_topic && !@editing
+        elsif @assignment.submission_types == 'discussion_topic' && @assignment.discussion_topic && !@editing && @assignment.discussion_topic.grants_right?(@current_user, session, :read)
           format.html { redirect_to named_context_url(@context, :context_discussion_topic_url, @assignment.discussion_topic.id) }
         elsif @assignment.submission_types == 'attendance' && !@editing
           format.html { redirect_to named_context_url(@context, :context_attendance_url, :anchor => "assignment/#{@assignment.id}") }
@@ -190,8 +190,7 @@ class AssignmentsController < ApplicationController
       return unless tab_enabled?(@context.class::TAB_SYLLABUS)
       @groups = @context.assignment_groups.active.find(:all, :order => 'position, name')
       @assignment_groups = @groups
-      @events = @context.calendar_events.active.to_a
-      @events.concat @context.assignments.active.to_a
+      @events = @context.events_for(@current_user)
       @undated_events = @events.select {|e| e.start_at == nil}
       @dates = (@events.select {|e| e.start_at != nil}).map {|e| e.start_at.to_date}.uniq.sort.sort
       
@@ -217,22 +216,12 @@ class AssignmentsController < ApplicationController
   end
 
   def new
-    if !params[:model_key]
-      args = request.query_parameters
-      args[:model_key] = rand(999999).to_s
-      redirect_to(args)
-      return
-    end
     @assignment ||= Assignment.new(:context => @context)
-    if params[:model_key] && session["assignment_#{params[:model_key]}"].present?
-      @assignment = @context.assignments.find_by_id(session["assignment_#{params[:model_key]}"])
-    else
-      @assignment.title = params[:title]
-      @assignment.due_at = params[:due_at]
-      @assignment.points_possible = params[:points_possible]
-      @assignment.assignment_group_id = params[:assignment_group_id]
-      @assignment.submission_types = params[:submission_types]
-    end
+    @assignment.title = params[:title]
+    @assignment.due_at = params[:due_at]
+    @assignment.points_possible = params[:points_possible]
+    @assignment.assignment_group_id = params[:assignment_group_id]
+    @assignment.submission_types = params[:submission_types]
     if authorized_action(@assignment, @current_user, :create)
       @assignment.title = params[:title]
       @assignment.due_at = params[:due_at]
@@ -247,10 +236,6 @@ class AssignmentsController < ApplicationController
   def create
     params[:assignment][:time_zone_edited] = Time.zone.name if params[:assignment]
     group = get_assignment_group(params[:assignment])
-    if params[:model_key] && session["assignment_#{params[:model_key]}"].present?
-      @assignment = @context.assignments.find_by_id(session["assignment_#{params[:model_key]}"])
-      @assignment.attributes = params[:assignment] if @assignment
-    end
     @assignment ||= @context.assignments.build(params[:assignment])
     @assignment.workflow_state = "available"
     @assignment.content_being_saved_by(@current_user)
@@ -260,9 +245,6 @@ class AssignmentsController < ApplicationController
     if authorized_action(@assignment, @current_user, :create)
       respond_to do |format|
         if @assignment.save
-          if params[:model_key]
-            session["assignment_#{params[:model_key]}"] = @assignment.id
-          end
           flash[:notice] = t 'notices.created', "Assignment was successfully created."
           format.html { redirect_to named_context_url(@context, :context_assignment_url, @assignment.id) }
           format.json { render :json => @assignment.to_json(:permissions => {:user => @current_user, :session => session}), :status => :created}

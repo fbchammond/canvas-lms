@@ -1,12 +1,17 @@
-define 'compiled/calendar/Scheduler', [
-  'i18n'
+define [
+  'jquery',
+  'i18n!calendar'
   'jst/calendar/appointmentGroupList'
   'jst/calendar/schedulerRightSideAdminSection'
   'compiled/calendar/EditAppointmentGroupDialog'
+  'compiled/calendar/MessageParticipantsDialog'
   'jst/calendar/deleteItem'
-], (I18n, appointmentGroupListTemplate, schedulerRightSideAdminSectionTemplate, EditAppointmentGroupDialog, deleteItemTemplate) ->
-
-  I18n = I18n.scoped 'calendar'
+  'jquery.instructure_date_and_time'
+  'jquery.instructure_jquery_patches'
+  'jquery.instructure_misc_plugins'
+  'vendor/jquery.ba-tinypubsub'
+  'vendor/jquery.spin'
+], ($, I18n, appointmentGroupListTemplate, schedulerRightSideAdminSectionTemplate, EditAppointmentGroupDialog, MessageParticipantsDialog, deleteItemTemplate) ->
 
   class Scheduler
     constructor: (selector, @calendar) ->
@@ -19,6 +24,7 @@ define 'compiled/calendar/Scheduler', [
 
       @div.delegate('.view_calendar_link', 'click', @viewCalendarLinkClick)
       @listDiv.delegate('.edit_link', 'click', @editLinkClick)
+      @listDiv.delegate('.message_link', 'click', @messageLinkClick)
       @listDiv.delegate('.delete_link', 'click', @deleteLinkClick)
       @listDiv.delegate('.show_event_link', 'click', @showEventLinkClick)
 
@@ -135,6 +141,8 @@ define 'compiled/calendar/Scheduler', [
           for contextInfo in @contexts when contextInfo.asset_string == group.context_code
             group.context = contextInfo
 
+          group.published = group.workflow_state == "active"
+
           groups.push group
 
         html = appointmentGroupListTemplate
@@ -235,3 +243,8 @@ define 'compiled/calendar/Scheduler', [
           @calendar.dataSource.clearCache()
           @loadData()
 
+    messageLinkClick: (jsEvent) =>
+      jsEvent.preventDefault()
+      group = @groups?[$(jsEvent.target).closest(".appointment-group-item").data('appointment-group-id')]
+      @messageDialog = new MessageParticipantsDialog(group, @calendar.dataSource)
+      @messageDialog.show()

@@ -1,18 +1,23 @@
 <h2 id="dialog_message"><%= t :canceling, "Canceling..." %></h2>
 <% js_block do %>
 <script>
-var parentWindow = window.parent;
-var callback = '<%= params[:service] %>';
+require([
+  'jquery' /* $ */
+], function($) {
+
+window.parentWindow = window.parent;
+window.callback = <%= raw params[:service].to_json %>; // TODO: get this out of global context
 while(parentWindow && !parentWindow[callback]) {
   parentWindow = parentWindow.parent;
 }
 if(parentWindow[callback] && parentWindow[callback].cancel) {
   parentWindow[callback].cancel();
   setTimeout(function() {
-    $("#dialog_message").text("<%= t :popup_success, "Cancelled. This popup should close on its own..." %>");
+    $("#dialog_message").text("<%= t :popup_success, "Canceled. This popup should close on its own..." %>");
   }, 1000);
 } else {
   $("#dialog_message").text("<%= t :popup_failure, "Cannot find the parent window, you'll need to close this popup manually." %>");
 }
+});
 </script>
 <% end %>

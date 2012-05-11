@@ -1,30 +1,69 @@
 # This class both creates the slickgrid instance, and acts as the data source for that instance.
-define 'compiled/Gradebook', [
-  'i18n'
+define [
+  'i18n!gradebook2'
+  'compiled/gradebook2/GRADEBOOK_TRANSLATIONS'
+  'jquery'
+  'compiled/grade_calculator'
+  'vendor/spin'
+  'compiled/multi_grid'
+  'compiled/SubmissionDetailsDialog'
+  'compiled/gradebook2/AssignmentGroupWeightsDialog'
+  'compiled/gradebook2/SubmissionCell'
+  'compiled/gradebook2/GradebookHeaderMenu'
+  'str/htmlEscape'
+  'jst/gradebook_uploads_form'
   'jst/gradebook2/section_to_show_menu'
-], (I18n, sectionToShowMenuTemplate) ->
-  I18n = I18n.scoped 'gradebook2'
+  'jst/gradebook2/column_header'
+  'jst/gradebook2/group_total_cell'
+  'jst/gradebook2/row_student_name'
+  'jst/_avatar' #needed by row_student_name
+  'jquery.ajaxJSON'
+  'jquery.instructure_date_and_time'
+  'jquery.instructure_jquery_patches'
+  'jquery.instructure_misc_helpers'
+  'jquery.instructure_misc_plugins'
+  'vendor/jquery.ba-tinypubsub'
+  'vendor/jquery.store'
+  'jqueryui/mouse'
+  'jqueryui/position'
+  'jqueryui/sortable'
+  'compiled/jquery.kylemenu'
+  'compiled/jquery/fixDialogButtons'
+], (I18n, GRADEBOOK_TRANSLATIONS, $, GradeCalculator, Spinner, MultiGrid, SubmissionDetailsDialog, AssignmentGroupWeightsDialog, SubmissionCell, GradebookHeaderMenu, htmlEscape, gradebook_uploads_form, sectionToShowMenuTemplate, columnHeaderTemplate, groupTotalCellTemplate, rowStudentNameTemplate) ->
 
   class Gradebook
-    minimumAssignmentColumWidth = 10
+    columnWidths =
+      assignment:
+        min: 10
+        max: 200
+      assignmentGroup:
+        min: 35
+        max: 200
+      total:
+        min: 85
+        max: 100
 
     constructor: (@options) ->
       @chunk_start = 0
       @students    = {}
       @rows        = []
-      @sortFn      = (student) -> student.display_name
+      @studentsPage = 1
+      @sortFn      = (student) -> student.sortable_name
       @assignmentsToHide = ($.store.userGet("hidden_columns_#{@options.context_code}") || '').split(',')
       @sectionToShow = Number($.store.userGet("grading_show_only_section#{@options.context_id}")) || undefined
       @show_attendance = $.store.userGet("show_attendance_#{@options.context_code}") == 'true'
       @include_ungraded_assignments = $.store.userGet("include_ungraded_assignments_#{@options.context_code}") == 'true'
       $.subscribe 'assignment_group_weights_changed', @buildRows
-      $.subscribe 'assignment_muting_toggled', @buildRows
+      $.subscribe 'assignment_muting_toggled', @handleAssignmentMutingChange
       $.subscribe 'submissions_updated', @updateSubmissionsFromExternal
+
       promise = $.when(
+        $.ajaxJSON( @options.students_url, "GET"),
         $.ajaxJSON( @options.assignment_groups_url, "GET", {}, @gotAssignmentGroups),
-        $.ajaxJSON( @options.sections_and_students_url, "GET", @sectionToShow && {sections: [@sectionToShow]})
-      ).then (assignmentGroupsArgs, studentsArgs) =>
-        @gotStudents.apply(this, studentsArgs)
+        $.ajaxJSON( @options.sections_url, "GET", {}, @gotSections)
+      ).then ([students, status, xhr]) =>
+        @gotChunkOfStudents(students, xhr)
+
       @spinner = new Spinner()
       $(@spinner.spin().el).css(
         opacity: 0.5
@@ -40,36 +79,55 @@ define 'compiled/Gradebook', [
       # an assigmentGroup's .group_weight and @options.group_weighting_scheme
       new AssignmentGroupWeightsDialog context: @options, assignmentGroups: assignmentGroups
       for group in assignmentGroups
-        $.htmlEscapeValues(group)
+        htmlEscape(group)
         @assignmentGroups[group.id] = group
         for assignment in group.assignments
-          $.htmlEscapeValues(assignment)
+          htmlEscape(assignment)
           assignment.assignment_group = group
           assignment.due_at = $.parseFromISO(assignment.due_at) if assignment.due_at
           @assignments[assignment.id] = assignment
 
-    gotStudents: (sections) =>
+    gotSections: (sections) =>
       @sections = {}
-      @rows = []
       for section in sections
-        $.htmlEscapeValues(section)
+        htmlEscape(section)
         @sections[section.id] = section
-        for student in section.students
-          $.htmlEscapeValues(student)
-          student.computed_current_score ||= 0
-          student.computed_final_score ||= 0
-          student.secondary_identifier = student.sis_login_id || student.login_id
-          @students[student.id] = student
-          student.section = section
-          # fill in dummy submissions, so there's something there even if the
-          # student didn't submit anything for that assignment
-          for id, assignment of @assignments
-            student["assignment_#{id}"] ||= { assignment_id: id, user_id: student.id }
-          @rows.push(student)
       @sections_enabled = sections.length > 1
+
+    gotChunkOfStudents: (studentEnrollments, xhr) =>
+      for studentEnrollment in studentEnrollments
+        student = studentEnrollment.user
+        student.enrollment = studentEnrollment
+        @students[student.id] ||= htmlEscape(student)
+        @students[student.id].sections ||= []
+        @students[student.id].sections.push(studentEnrollment.course_section_id)
+
+      link = xhr.getResponseHeader('Link')
+      if link && link.match /rel="next"/
+        @studentsPage += 1
+        $.ajaxJSON( @options.students_url, "GET", { "page": @studentsPage}, @gotChunkOfStudents)
+      else
+        @gotAllStudents()
+
+    gotAllStudents: ->
       for id, student of @students
-        student.display_name = "<div class='student-name'>#{student.name}</div>"
-        student.display_name += "<div class='student-section'>#{student.section.name}</div>" if @sections_enabled
+        student.computed_current_score ||= 0
+        student.computed_final_score ||= 0
+        student.secondary_identifier = student.sis_login_id || student.login_id
+
+        if @sections_enabled
+          sectionNames = $.toSentence((@sections[sectionId].name for sectionId in student.sections).sort())
+        student.display_name = rowStudentNameTemplate
+          avatar_image_url: student.avatar_url
+          display_name: student.name
+          url: student.enrollment.grades.html_url
+          sectionNames: sectionNames
+
+        # fill in dummy submissions, so there's something there even if the
+        # student didn't submit anything for that assignment
+        for id, assignment of @assignments
+          student["assignment_#{id}"] ||= { assignment_id: id, user_id: student.id }
+        @rows.push(student)
       @initGrid()
       @buildRows()
       @getSubmissionsChunks()
@@ -113,7 +171,15 @@ define 'compiled/Gradebook', [
       throw "unhandled column sort condition"
 
     rowFilter: (student) =>
-      !@sectionToShow || (student.section.id == @sectionToShow)
+      !@sectionToShow || (@sectionToShow in student.sections)
+
+    handleAssignmentMutingChange: (assignment) =>
+      idx = @gradeGrid.getColumnIndex("assignment_#{assignment.id}")
+      colDef = @gradeGrid.getColumns()[idx]
+      colDef.name = @assignmentHeaderHtml(assignment)
+      @gradeGrid.setColumns(@gradeGrid.getColumns())
+      @fixColumnReordering()
+      @buildRows()
 
     # filter, sort, and build the dataset for slickgrid to read from, then force
     # a full redraw
@@ -201,16 +267,20 @@ define 'compiled/Gradebook', [
 
     groupTotalFormatter: (row, col, val, columnDef, student) =>
       return '' unless val?
-      gradeToShow = val
-      percentage = Math.round((gradeToShow.score / gradeToShow.possible) * 100)
+
+      # rounds percentage to one decimal place
+      percentage = Math.round((val.score / val.possible) * 1000) / 10
       percentage = 0 if isNaN(percentage)
-      if !gradeToShow.possible then percentage = '-' else percentage += "%"
-      """
-      <div class="gradebook-cell">
-        <div class="gradebook-tooltip">#{gradeToShow.score} / #{gradeToShow.possible}</div>
-        #{percentage}
-      </div>
-      """
+
+      if val.possible and @options.grading_standard and columnDef.type is 'total_grade'
+        letterGrade = GradeCalculator.letter_grade(@options.grading_standard, percentage)
+
+      groupTotalCellTemplate({
+        score: val.score
+        possible: val.possible
+        letterGrade
+        percentage
+      })
 
     calculateStudentGrade: (student) =>
       if student.loaded
@@ -273,8 +343,8 @@ define 'compiled/Gradebook', [
       columnDef.unselectable = true
       columnDef.unminimizedName = columnDef.name
       columnDef.name = ''
-      @$grid.find(".c#{colIndex}").add($columnHeader).addClass('minimized')
-      $columnHeader.data('minimized', true)
+      columnDef.minimized = true
+      @$grid.find(".l#{colIndex}").add($columnHeader).addClass('minimized')
       @assignmentsToHide.push(columnDef.id)
       $.store.userSet("hidden_columns_#{@options.context_code}", $.uniq(@assignmentsToHide).join(','))
 
@@ -284,8 +354,9 @@ define 'compiled/Gradebook', [
       columnDef.cssClass = (columnDef.cssClass || '').replace(' minimized', '')
       columnDef.unselectable = false
       columnDef.name = columnDef.unminimizedName
-      @$grid.find(".c#{colIndex}").add($columnHeader).removeClass('minimized')
-      $columnHeader.removeData('minimized')
+      columnDef.minimized = false
+      @$grid.find(".l#{colIndex}").add($columnHeader).removeClass('minimized')
+      $columnHeader.find('.slick-column-name').html(columnDef.name)
       @assignmentsToHide = $.grep @assignmentsToHide, (el) -> el != columnDef.id
       $.store.userSet("hidden_columns_#{@options.context_code}", $.uniq(@assignmentsToHide).join(','))
 
@@ -326,6 +397,14 @@ define 'compiled/Gradebook', [
         else
           $tooltip.remove()
 
+    # this is because of a limitation with SlickGrid,
+    # when it makes the header row it does this:
+    # $("<div class='slick-header-columns' style='width:10000px; left:-1000px' />")
+    # if a course has a ton of assignments then it will not be wide enough to
+    # contain them all
+    fixMaxHeaderWidth: ->
+      @$grid.find('.slick-header-columns').width(1000000)
+
     onGridInit: () ->
       @fixColumnReordering()
       tooltipTexts = {}
@@ -351,19 +430,19 @@ define 'compiled/Gradebook', [
           'mouseenter' : @hoverMinimizedCell,
           'mouseleave' : @unhoverMinimizedCell
 
+      @fixMaxHeaderWidth()
       $('#gradebook_grid .slick-resizable-handle').live 'drag', (e,dd) =>
-        @$grid.find('.slick-header-column').each (i, elem) =>
+        @$grid.find('.slick-header-column').each (colIndex, elem) =>
           $columnHeader = $(elem)
-          isMinimized = $columnHeader.data('minimized')
+          columnDef = @gradeGrid.getColumns()[colIndex]
           if $columnHeader.outerWidth() <= minimumAssignmentColumWidth
-            @minimizeColumn($columnHeader) unless isMinimized
-          else if isMinimized
+            @minimizeColumn($columnHeader) unless columnDef.minimized
+          else if columnDef.minimized
             @unminimizeColumn($columnHeader)
       $(document).trigger('gridready')
 
     initHeader: =>
       if @sections_enabled
-        $section_being_shown = $('#section_being_shown')
         allSectionsText = I18n.t('all_sections', 'All Sections')
         sections = [{ name: allSectionsText, checked: !@sectionToShow}]
         for id, s of @sections
@@ -374,7 +453,7 @@ define 'compiled/Gradebook', [
 
         $sectionToShowMenu = $(sectionToShowMenuTemplate(sections: sections, scrolling: sections.length > 15))
         (updateSectionBeingShownText = =>
-          $section_being_shown.text(if @sectionToShow then @sections[@sectionToShow].name else allSectionsText)
+          $('#section_being_shown').html(if @sectionToShow then @sections[@sectionToShow].name else allSectionsText)
         )()
         $('#section_to_show').after($sectionToShowMenu).show().kyleMenu
           buttonOpts: {icons: {primary: "ui-icon-sections", secondary: "ui-icon-droparrow"}}
@@ -389,8 +468,8 @@ define 'compiled/Gradebook', [
         $settingsMenu.find("##{setting}").prop('checked', @[setting]).change (event) =>
           @[setting] = $(event.target).is(':checked')
           $.store.userSet "#{setting}_#{@options.context_code}", (''+@[setting])
-          @gradeGrid.setColumns @getVisibleGradeGridColumns()
-          @gradeGrid.invalidate()
+          @gradeGrid.setColumns @getVisibleGradeGridColumns() if setting is 'show_attendance'
+          @buildRows()
 
       # don't show the "show attendance" link in the dropdown if there's no attendance assignments
       unless ($.detect @gradeGrid.getColumns(), -> this.object?.submission_types == "attendance")
@@ -413,7 +492,7 @@ define 'compiled/Gradebook', [
             download_gradebook_csv_url: "#{@options.context_url}/gradebook.csv"
             action: "#{@options.context_url}/gradebook_uploads"
             authenticityToken: $("#ajax_authenticity_token").text()
-          $upload_modal = $(Template('gradebook_uploads_form', locals))
+          $upload_modal = $(gradebook_uploads_form(locals))
             .dialog
               bgiframe: true
               autoOpen: false
@@ -430,15 +509,25 @@ define 'compiled/Gradebook', [
       res = []
       for column in @allAssignmentColumns
         submissionType = ''+ column.object.submission_types
-        res.push(column) unless submissionType is "not_graded" and !@include_ungraded_assignments or
+        res.push(column) unless submissionType is "not_graded" or
                                 submissionType is "attendance" and !@show_attendance
       res.concat(@aggregateColumns)
+
+    assignmentHeaderHtml: (assignment) ->
+      columnHeaderTemplate
+        assignment: assignment
+        href: assignment.html_url
+        showPointsPossible: assignment.points_possible?
 
     initGrid: =>
       #this is used to figure out how wide to make each column
       $widthTester = $('<span style="padding:10px" />').appendTo('#content')
-      testWidth = (text, minWidth) -> Math.max($widthTester.text(text).outerWidth(), minWidth)
+      testWidth = (text, minWidth, maxWidth) ->
+        width = Math.max($widthTester.text(text).outerWidth(), minWidth)
+        Math.min width, maxWidth
 
+      # I would like to make this width a little larger, but there's a dependency somewhere else that
+      # I can't find and if I change it, the layout gets messed up.
       @parentColumns = [{
         id: 'student'
         name: I18n.t 'student_name', 'Student Name'
@@ -459,10 +548,6 @@ define 'compiled/Gradebook', [
       }]
 
       @allAssignmentColumns = for id, assignment of @assignments
-        href = "#{@options.context_url}/assignments/#{assignment.id}"
-        html = "<a class='assignment-name' href='#{href}'>#{assignment.name}</a>
-                <a class='gradebook-header-drop' data-assignment-id='#{assignment.id}' href='#' role='button'>#{I18n.t 'assignment_options', 'Assignment Options'}</a>"
-        html += "<div class='assignment-points-possible'>#{I18n.t 'points_out_of', "out of %{points_possible}", points_possible: assignment.points_possible}</div>" if assignment.points_possible?
         outOfFormatter = assignment &&
                          assignment.grading_type == 'points' &&
                          assignment.points_possible? &&
@@ -472,21 +557,18 @@ define 'compiled/Gradebook', [
         columnDef =
           id: fieldName
           field: fieldName
-          name: html
+          name: @assignmentHeaderHtml(assignment)
           object: assignment
           formatter: this.cellFormatter
           editor: outOfFormatter ||
                   SubmissionCell[assignment.grading_type] ||
                   SubmissionCell
-          minWidth: minimumAssignmentColumWidth,
-          maxWidth:200,
-          width: testWidth(assignment.name, minWidth),
+          minWidth: columnWidths.assignment.min,
+          maxWidth: columnWidths.assignment.max,
+          width: testWidth(assignment.name, minWidth, columnWidths.assignment.max),
           sortable: true
-          toolTip: true
+          toolTip: assignment.name
           type: 'assignment'
-
-        if ''+assignment.submission_types is "not_graded"
-          columnDef.cssClass = (columnDef.cssClass || '') + ' ungraded'
 
         if fieldName in @assignmentsToHide
           columnDef.width = 10
@@ -494,7 +576,7 @@ define 'compiled/Gradebook', [
             $(document)
               .bind('gridready', => @minimizeColumn(@$grid.find("[id*='#{fieldName}']")))
               .unbind('gridready.render')
-              .bind('gridready.render', @gradeGrid.invalidate)
+              .bind('gridready.render', => @gradeGrid.invalidate() )
         columnDef
 
       @aggregateColumns = for id, group of @assignmentGroups
@@ -511,10 +593,11 @@ define 'compiled/Gradebook', [
           field: "assignment_group_#{id}"
           formatter: @groupTotalFormatter
           name: html
+          toolTip: group.name
           object: group
-          minWidth: 35,
-          maxWidth:200,
-          width: testWidth(group.name, 35)
+          minWidth: columnWidths.assignmentGroup.min,
+          maxWidth: columnWidths.assignmentGroup.max,
+          width: testWidth(group.name, columnWidths.assignmentGroup.min, columnWidths.assignmentGroup.max)
           cssClass: "meta-cell assignment-group-cell",
           sortable: true
           type: 'assignment_group'
@@ -525,10 +608,10 @@ define 'compiled/Gradebook', [
         field: "total_grade"
         formatter: @groupTotalFormatter
         name: "Total"
-        minWidth: 50,
-        maxWidth: 100,
-        width: testWidth("Total", 50)
-        cssClass: "total-cell",
+        minWidth: columnWidths.total.min
+        maxWidth: columnWidths.total.max
+        width: testWidth("Total", columnWidths.total.min, columnWidths.total.max)
+        cssClass: "total-cell"
         sortable: true
         type: 'total_grade'
 
@@ -562,8 +645,7 @@ define 'compiled/Gradebook', [
       @gradeGrid = @multiGrid.grids[1]
       @gradeGrid.onCellChange.subscribe (event, data) =>
         @calculateStudentGrade(data.item)
-        @gradeGrid.invalidate
-      @gradeGrid.onBeforeCellEditorDestroy.subscribe (event,data) -> debugger
+        @gradeGrid.invalidate()
       sortRowsBy = (sortFn) =>
         @rows.sort(sortFn)
         student.row = i for student, i in @rows
@@ -587,3 +669,4 @@ define 'compiled/Gradebook', [
         # TODO: start editing automatically when a number or letter is typed
         false
       @onGridInit()
+

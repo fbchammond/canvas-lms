@@ -16,7 +16,32 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-I18n.scoped('files', function(I18n) {
+define([
+  'INST' /* INST */,
+  'i18n!files',
+  'jquery' /* jQuery, $ */,
+  'str/htmlEscape',
+  'instructure-jquery.ui.draggable-patch' /* /\.draggable/ */,
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.doc_previews' /* loadDocPreview */,
+  'jquery.inst_tree' /* instTree */,
+  'jquery.instructure_date_and_time' /* parseFromISO */,
+  'jquery.instructure_forms' /* formSubmit, handlesHTML5Files, ajaxFileUpload, fileData, fillFormData, formErrors */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/, /\.scrollTop/ */,
+  'jquery.instructure_misc_helpers' /* replaceTags, /\$\.underscore/ */,
+  'jquery.instructure_misc_plugins' /* confirmDelete, fragmentChange, showIf */,
+  'jquery.keycodes' /* keycodes */,
+  'jquery.loadingImg' /* loadingImage */,
+  'jquery.scrollToVisible' /* scrollToVisible */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */,
+  'media_comments' /* mediaComment */,
+  'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
+  'jqueryui/droppable' /* /\.droppable/ */,
+  'jqueryui/progressbar' /* /\.progressbar/ */,
+  'jqueryui/sortable' /* /\.sortable/ */,
+  'vendor/scribd.view' /* scribd */
+], function(INST, I18n, $, htmlEscape) {
+
   var files = {};
   var fileStructureData = [];
   (function() {
@@ -114,23 +139,16 @@ I18n.scoped('files', function(I18n) {
               if(unzip) {
                 var file = filesToUpload[0];
                 folder.context_string;
-                var batch_id = folder.context_string + '_full_files_' + Math.round(Math.random() * 999999);
                 var url = $("." + folder.context_string + "_zip_import_url").attr('href');
                 var params = {
-                  'zip_import_batch_id': batch_id,
                   'folder_id': folder.id,
                   'zip_file': filesToUpload[0],
                   'format': 'json'
                 };
-                $.ajaxFileUpload({
-                  url: url,
-                  data: params,
-                  method: 'POST',
-                  success: function(data) { },
-                  error: function(data) { }
-                });
+                var import_id = null;
+                
                 var $dialog = $("<div/>");
-                $dialog.append("Extracting <b>" + $.htmlEscape(file.name) + "</b><br/>to " + $.htmlEscape(folder.name) + "...");
+                $dialog.append("Uploading and extracting <b>" + htmlEscape(file.name) + "</b><br/>to " + htmlEscape(folder.name) + "...");
                 $dialog.append("<div class='progress'/>");
                 var $progress = $dialog.find(".progress");
                 $progress.css('margin', '10px');
@@ -145,6 +163,7 @@ I18n.scoped('files', function(I18n) {
                     }, 500);
                   }
                 }).dialog('open');
+                
                 var importFailed = function(errors) {
                   $dialog.text(I18n.t('errors.extracting', "There were errors extracting the zip file.  Please try again."));
                   var $ul = $("<ul/>");
@@ -156,31 +175,34 @@ I18n.scoped('files', function(I18n) {
                   }
                   $dialog.append($ul);
                 };
-                var pollImport = function() {
+                var pollImport = function(zip_import_id) {
                   var pollUrl = $("#file_context_links ." + folder.context_string + "_zip_import_status_url").attr('href');
-                  pollUrl = pollUrl + "?batch_id=" + batch_id;
+                  pollUrl = $.replaceTags(pollUrl, 'id', zip_import_id);
                   $.ajaxJSON(pollUrl, 'GET', {}, function(data) {
+                    var zfi = data.zip_file_import;
                     if($dialog.data('closed')) { return; }
-                    if(data && data.errors) {
-                      importFailed(data.errors);
-                    } else if(data && data.complete) {
+                    if(zfi && zfi.data && zfi.data.errors) {
+                      importFailed(zfi.data.errors);
+                    } else if(zfi && zfi.workflow_state == 'imported') {
                       $progress.progressbar('value', 100);
-                      $dialog.append(I18n.t('messages.extraction_complete', "Extraction complete!  Updating File Structure..."));
+                      $dialog.append(I18n.t('messages.extraction_complete', "Extraction complete!  Updating..."));
                       files.refreshContext(folder.context_string, function() {
                         $dialog.dialog('close');
                       });
-                    } else if(!data || data.length == 0) {
+                    } else if(!zfi) {
                       pollImport.blankCount = pollImport.blankCount || 0;
                       pollImport.blankCount++;
                       if(pollImport.blankCount > 30) {
                         importFailed([I18n.t('errors.server_returned_invalid_status', "The server stopped returning a valid status")]);
                       } else {
-                        setTimeout(pollImport, 2000);
+                        setTimeout(function() { pollImport(zip_import_id) }, 2000);
                       }
+                    } else if (zfi && zfi.workflow_state == 'failed') {
+                      importFailed([]);
                     } else {
                       pollImport.errorCount = 0;
-                      setTimeout(pollImport, 2000);
-                      $progress.progressbar('value', ((data.progress || 0) * 100));
+                      setTimeout(function() { pollImport(zip_import_id) }, 2000);
+                      $progress.progressbar('value', ((zfi.progress || 0) * 100));
                     }
                   }, function(data) {
                     pollImport.errorCount = pollImport.errorCount || 0;
@@ -188,11 +210,22 @@ I18n.scoped('files', function(I18n) {
                     if(pollImport.errorCount > 5) {
                       importFailed([I18n.t('errors.server_unresponsive', "The server stopped responding to status requests")]);
                     } else {
-                      setTimeout(pollImport, 2000);
+                      setTimeout(function() { pollImport(zip_import_id) }, 2000);
                     }
                   });
                 };
-                setTimeout(pollImport, 3000);
+                $.ajaxFileUpload({
+                  url: url,
+                  data: params,
+                  method: 'POST',
+                  success: function(data) {
+                    zip_import_id = data.zip_file_import.id;
+                    pollImport(zip_import_id);
+                  },
+                  error: function(data) {
+                    $dialog.text(I18n.t('errors.uploading_zip', "There were errors uploading the zip file."));
+                  }
+                });
               } else {
                 var folder = files.currentItemData();
                 var filenames = [];
@@ -231,7 +264,7 @@ I18n.scoped('files', function(I18n) {
               I18n.t('prompts.duplicate_filenames', "Files with the following names already exist in this folder. Do you want to replace them, or rename the new files with unique names?"));
             var duplicatesHtml = '';
             for (idx in data.duplicates) {
-              duplicatesHtml += "<span class='duplicate_filename'>" + $.htmlEscape(data.duplicates[idx]) + "</span>";
+              duplicatesHtml += "<span class='duplicate_filename'>" + htmlEscape(data.duplicates[idx]) + "</span>";
             }
             $dialog.find(".duplicate_filenames").html(duplicatesHtml);
             $dialog.dialog('close').dialog({
@@ -525,7 +558,7 @@ I18n.scoped('files', function(I18n) {
           $(ui.helper).find(".header .sub_header").text("move to " + droppable.name);
           if(draggable && droppable && draggable.context_string != droppable.context_string) {
             $(ui.helper).addClass('copy_drag');
-            $(ui.helper).find(".header .sub_header").html("<strong>copy</strong> to " + $.htmlEscape(droppable.name));
+            $(ui.helper).find(".header .sub_header").html("<strong>copy</strong> to " + htmlEscape(droppable.name));
           }
         },
         out: function(event, ui) {
@@ -965,6 +998,10 @@ I18n.scoped('files', function(I18n) {
                 $files_structure.find(".collaboration_" + collab.id).each(function() {
                   var folder = files.itemData($(this).parent("ul").parent("li"));
                   $(this).fillTemplateData({data: {'name': data.collaboration.title}});
+
+                  // add 'title="this is the filename.txt" so you can read files/folders that have really long names
+                  if (data.collaboration.title) $(this).find('.name').attr('title', data.collaboration.title);
+
                 });
                 found = true;
               }
@@ -977,6 +1014,10 @@ I18n.scoped('files', function(I18n) {
               $collab.addClass('collaboration collaboration_' + collab.id + ' ' + collab.collaboration_type);
               collab.name = collab.title;
               $collab.fillTemplateData({data: collab});
+
+              // add 'title="this is the filename.txt" so you can read files/folders that have really long names
+              if (collab.title) $collab.find('.name').attr('title', collab.title);
+
               $files_structure.find("." + context_string + " .collaborations").children("ul").prepend($collab.show());
             }
           }
@@ -1002,6 +1043,10 @@ I18n.scoped('files', function(I18n) {
                     var folder = files.itemData($(this).parent("ul").parent("li"));
                     if(folder.id == data.attachment.folder_id) {
                       $(this).fillTemplateData({data: {'name': data.attachment.display_name}});
+
+                      // add 'title="this is the filename.txt" so you can read files/folders that have really long names
+                      if (data.attachment.display_name) $(this).find('.name').attr('title', data.attachment.display_name);
+
                     } else {
                       moved = true;
                     }
@@ -1024,6 +1069,10 @@ I18n.scoped('files', function(I18n) {
               $file.addClass(attachment.mime_class);
               attachment.name = attachment.display_name;
               $file.fillTemplateData({data: attachment});
+
+              // add 'title="this is the filename.txt" so you can read files/folders that have really long names
+              if (attachment.name) $file.find('.name').attr('title', attachment.name);
+
               $files_structure.find(".folder_" + attachment.folder_id).children("ul").append($file.show());
             }
           }
@@ -1058,7 +1107,9 @@ I18n.scoped('files', function(I18n) {
                   folder = folder || {parent_folder_id: null};
                   if(folder.id == data.folder.parent_folder_id) {
                     if(!$(this).hasClass('context')) {
-                      $(this).children(".name").text(data.folder.name);
+                      $(this).children(".name").text(data.folder.name)
+                        // add 'title="this is the filename.txt" so you can read files/folders that have really long names
+                        .attr('title', data.folder.name);
                     }
                     if(!already_in_place) {
                       $(this).prev("li.separator").remove();
@@ -1252,6 +1303,14 @@ I18n.scoped('files', function(I18n) {
       $(".folder_item.ui-draggable").live('mouseover', function() {
         $(this).find(".item_icon").attr('title', I18n.t('titles.drag_to_move', 'Drag to move to a different folder'));
       });
+      // on hover of the swfupload link, manually set the underline on
+      // the add files link because otherwise the swf keeps the link from
+      // registering mouseover events.
+      $swfupload_holder.hover(function(e) {
+        $add_file_link.css('text-decoration', 'underline');
+      }, function(e) {
+        $add_file_link.css('text-decoration', 'none');
+      });
       $add_file_link.bind('show', function() {
         var linkWidth = $add_file_link.width();
         var linkHeight = $add_file_link.height();
@@ -1410,7 +1469,7 @@ I18n.scoped('files', function(I18n) {
                   $panel.find(".lock_item_link").showIf(data.parent_folder_id && !data.currently_locked);
                   $panel.find(".unlock_item_link").showIf(data.parent_folder_id && data.currently_locked);
                   $panel.find(".download_zip").showIf(data.permissions && data.permissions.read_contents);
-                  $panel.find(".upload_zip").showIf(data.context && data.context.permissions && data.context.permissions.manage_files && (data.context_type && data.context_type == 'Course'));
+                  $panel.find(".upload_zip").showIf(data.context && data.context.permissions && data.context.permissions.manage_files);
                   $panel.find(".edit_link").showIf(data.context && data.context.permissions && data.context.permissions.manage_files);
                   $panel.fillTemplateData({data: data});
                   $panel.data('node', node);
@@ -2375,7 +2434,7 @@ I18n.scoped('files', function(I18n) {
       $file.addClass('done');
       if(!$file.hasClass('errored') && !$file.hasClass('error_cancelled')) {
         $file.find(".cancel_upload_link").hide().end()
-          .find(".status").text("Cancelled");
+          .find(".status").text("Canceled");
         fileUpload.swfFiles = $.grep(fileUpload.swfFiles, function(f) { return f.id != file.id; });
       }
       fileUpload.swfUploadNext();
@@ -2505,3 +2564,4 @@ I18n.scoped('files', function(I18n) {
     file_details: {}
   };
 });
+

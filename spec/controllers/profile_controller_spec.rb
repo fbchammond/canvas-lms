@@ -47,6 +47,15 @@ describe ProfileController do
       @cc2.reload.position.should == 1
       @cc.reload.position.should == 2
     end
+
+    it "should not allow a student view student profile to be edited" do
+      course_with_teacher_logged_in(:active_all => true)
+      @fake_student = @course.student_view_student
+      session[:become_user_id] = @fake_student.id
+
+      put 'update', :user_id => @fake_student.id
+      assert_unauthorized
+    end
   end
 
   describe "GET 'communication'" do
@@ -58,7 +67,7 @@ describe ProfileController do
       user_model
       user_session(@user)
       cc = @user.communication_channels.create!(:path => 'user@example.com', :path_type => 'email') { |cc| cc.workflow_state = 'active' }
-      @user.notification_policies.create!(:notification => nil, :communication_channel => cc, :frequency => 'daily')
+      cc.notification_policies.create!(:notification => nil, :frequency => 'daily')
 
       get 'communication'
       response.should be_success

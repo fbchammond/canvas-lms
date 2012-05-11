@@ -17,6 +17,9 @@ the CSV as "Chevy ""The Man"" Chase".
 
 All text should be UTF-8 encoded.
 
+All timestamps are sent and returned in ISO 8601 format.  All timestamps default to UTC time zone unless specified.
+
+    YYYY-MM-DDTHH:MM:SSZ
 
 Batch Mode
 ----------
@@ -97,7 +100,7 @@ still be provided.</td>
 <p>When a student is 'deleted' all of its enrollments will also be deleted and
 they won't be able to log in to the school's account. If you still want the
 student to be able to log in but just not participate, leave the student
-'active' but set the enrollments to 'concluded'.</p>
+'active' but set the enrollments to 'completed'.</p>
 
 Sample:
 
@@ -225,7 +228,7 @@ Sample:
 <pre>
 term_id,name,status,start_date,end_date
 T001,Winter2011,active,,
-T002,Spring2011,active,2010-9-03 00:00:00,2010-12-14 00:00:00
+T002,Spring2011,active,2010-9-03 00:00:00,2010-12-14 00:00:00-06:00
 T003,Fall2011,active,,
 </pre>
 

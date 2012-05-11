@@ -17,9 +17,13 @@
 #
 
 class FilesController < ApplicationController
-  before_filter :require_context, :except => [:public_feed,:full_index,:assessment_question_show,:image_thumbnail,:show_thumbnail,:preflight,:create_pending,:s3_success,:show]
+  before_filter :require_user, :only => :create_pending
+  before_filter :require_context, :except => [:public_feed,:full_index,:assessment_question_show,:image_thumbnail,:show_thumbnail,:preflight,:create_pending,:s3_success,:show,:api_create,:api_create_success]
   before_filter :check_file_access_flags, :only => [:show_relative, :show]
   prepend_around_filter :load_pseudonym_from_policy, :only => :create
+  skip_before_filter :verify_authenticity_token, :only => :api_create
+
+  include Api::V1::Attachment
 
   before_filter { |c| c.active_tab = "files" }
 
@@ -273,8 +277,8 @@ class FilesController < ApplicationController
   # a canvas URL are at least on a separate subdomain and the javascript 
   # won't be able to access or update data with AJAX requests.
   def safer_domain_available?
-    if !@files_domain && request.host_with_port != HostUrl.file_host(@domain_root_account)
-      @safer_domain_host = HostUrl.file_host(@domain_root_account)
+    if !@files_domain && request.host_with_port != HostUrl.file_host(@domain_root_account, request.host)
+      @safer_domain_host = HostUrl.file_host(@domain_root_account, request.host)
     end
     !!@safer_domain_host
   end
@@ -327,13 +331,13 @@ class FilesController < ApplicationController
     elsif Attachment.local_storage?
       @headers = false if @files_domain
       cancel_cache_buster
-      send_file(attachment.full_filename, :type => attachment.content_type, :disposition => (inline ? 'inline' : 'attachment'))
+      send_file(attachment.full_filename, :type => attachment.content_type_with_encoding, :disposition => (inline ? 'inline' : 'attachment'))
     elsif redirect_to_s3
-      redirect_to attachment.cacheable_s3_url
+      redirect_to(inline ? attachment.cacheable_s3_inline_url : attachment.cacheable_s3_download_url)
     else
       require 'aws/s3'
       cancel_cache_buster
-      send_file_headers!( :length=>AWS::S3::S3Object.about(attachment.full_filename, attachment.bucket_name)["content-length"], :filename=>attachment.filename, :disposition => 'inline', :type => attachment.content_type)
+      send_file_headers!( :length=>AWS::S3::S3Object.about(attachment.full_filename, attachment.bucket_name)["content-length"], :filename=>attachment.filename, :disposition => 'inline', :type => attachment.content_type_with_encoding)
       render :status => 200, :text => Proc.new { |response, output|
         AWS::S3::S3Object.stream(attachment.full_filename, attachment.bucket_name) do |chunk|
          output.write chunk
@@ -397,7 +401,6 @@ class FilesController < ApplicationController
     elsif @context && intent == 'message'
       permission_object = @context
       permission = :send_messages
-      workflow_state = 'unattached_temporary'
       @check_quota = false
     elsif @context && intent && intent != 'upload'
       # In other cases (like unzipping a file, extracting a QTI, etc.
@@ -459,6 +462,40 @@ class FilesController < ApplicationController
     end
   end
 
+  # for local file uploads
+  def api_create
+    @policy, @attachment = Attachment.decode_policy(params[:Policy], params[:Signature])
+    if !@policy
+      return render(:nothing => true, :status => :bad_request)
+    end
+    @context = @attachment.context
+    @attachment.workflow_state = nil
+    @attachment.uploaded_data = params[:file]
+    if @attachment.save
+      # for consistency with the s3 upload client flow, we redirect to the success url here to finish up
+      redirect_to api_v1_files_create_success_url(@attachment, :uuid => @attachment.uuid, :on_duplicate => params[:on_duplicate])
+    else
+      render(:nothing => true, :status => :bad_request)
+    end
+  end
+
+  def api_create_success
+    @attachment = Attachment.find_by_id_and_uuid(params[:id], params[:uuid])
+    return render(:nothing => true, :status => :bad_request) unless @attachment.try(:file_state) == 'deleted'
+    duplicate_handling = check_duplicate_handling_option(request)
+    return unless duplicate_handling
+    if Attachment.s3_storage?
+      return render(:nothing => true, :status => :bad_request) unless @attachment.state == :unattached
+      details = AWS::S3::S3Object.about(@attachment.full_filename, @attachment.bucket_name)
+      @attachment.process_s3_details!(details)
+    else
+      @attachment.file_state = 'available'
+      @attachment.save!
+    end
+    @attachment.handle_duplicates(duplicate_handling)
+    render :json => attachment_json(@attachment)
+  end
+
   # POST /files
   # POST /files.xml
   def create
@@ -503,7 +540,7 @@ class FilesController < ApplicationController
           @attachment.errors.add_to_base(t('errors.missing_field', "Upload failed, expected form field missing"))
         end
         deleted_attachments = @attachment.handle_duplicates(duplicate_handling)
-        unless (@attachment.cacheable_s3_url rescue nil)
+        unless @attachment.downloadable?
           success = false
           if (params[:attachment][:uploaded_data].size == 0 rescue false)
             @attachment.errors.add_to_base(t('errors.empty_file', "That file is empty.  Please upload a different file."))
@@ -619,9 +656,9 @@ class FilesController < ApplicationController
     return unless get_feed_context
     feed = Atom::Feed.new do |f|
       f.title = t :feed_title, "%{course_or_group} Files Feed", :course_or_group => @context.name
-      f.links << Atom::Link.new(:href => named_context_url(@context, :context_files_url))
+      f.links << Atom::Link.new(:href => polymorphic_url([@context, :files]), :rel => 'self')
       f.updated = Time.now
-      f.id = named_context_url(@context, :context_files_url)
+      f.id = polymorphic_url([@context, :files])
     end
     @entries = []
     @entries.concat @context.attachments.active

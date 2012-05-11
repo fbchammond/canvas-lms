@@ -382,6 +382,32 @@ describe ContextModule do
       @progression = @module.evaluate_for(@user)
       @progression.should be_completed
     end
+    
+    it "should mark progression completed for min_score on discussion topic assignment" do
+      asmnt = assignment_model(:submission_types => "discussion_topic", :points_possible => 10)
+      topic = asmnt.discussion_topic
+      course_with_student(:active_all => true, :course => @course)
+      mod = @course.context_modules.create!(:name => "some module")
+      
+      tag = mod.add_item({:id => topic.id, :type => 'discussion_topic'})
+      mod.completion_requirements = {tag.id => {:type => 'min_score', :min_score => 5}}
+      mod.save!
+      
+      p = mod.evaluate_for(@student)
+      p.requirements_met.should == []
+      p.workflow_state.should == 'unlocked'
+      
+      entry = topic.discussion_entries.create!(:message => "hi", :user => @student)
+      asmnt.reload
+      sub = asmnt.submissions.first
+      sub.score = 5
+      sub.workflow_state = 'graded'
+      sub.save!
+      
+      p = mod.evaluate_for(@student)
+      p.requirements_met.should == [{:type=>"min_score", :min_score=>5, :max_score=>nil, :id=>tag.id}]
+      p.workflow_state.should == 'completed'
+    end
   end
   describe "require_sequential_progress" do
     it "should update progression status on grading and view events" do
@@ -554,8 +580,10 @@ describe ContextModule do
       @old_module = @module
       @old_assignment = @course.assignments.create!(:title => "my assignment")
       @old_tag = @old_module.add_item({:type => 'assignment', :id => @old_assignment.id})
+      ct = @old_module.add_item({ :title => 'Broken url example', :type => 'external_url', :url => 'http://example.com/with%20space' })
+      ContentTag.update_all({:url => "http://example.com/with space"}, "id=#{ct.id}")
       @old_module.reload
-      @old_module.content_tags.length.should eql(1)
+      @old_module.content_tags.length.should eql(2)
       course_model
       @module = @old_module.clone_for(@course)
       @module.should_not eql(@old_module)
@@ -565,13 +593,16 @@ describe ContextModule do
       @module.reload
       @course.reload
       @old_tag.reload
-      @module.content_tags.length.should eql(1)
+      
+      @module.content_tags.length.should eql(2)
       @tag = @module.content_tags.first
       @tag.should_not eql(@old_tag)
       @tag.cloned_item_id.should eql(@old_tag.cloned_item_id)
       @tag.content.should_not eql(@old_tag.content)
       @tag.content.should eql(@course.assignments.first)
       @tag.content.cloned_item_id.should eql(@old_tag.content.cloned_item_id)
+      ct2 = @module.content_tags[1]
+      ct2.url.should == 'http://example.com/with%20space'
     end
     
     it "should update module requirements to reflect new tag id's" do

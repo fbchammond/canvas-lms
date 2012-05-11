@@ -31,6 +31,11 @@
 #course_form .date_entry {
   width: 100px;
 }
+.user-list-wrapper {
+  margin-bottom: 32px;
+  min-height: 32px;
+  position: relative;
+}
 ul.user_list {
   list-style: none;
   padding-left: 0px;
@@ -99,7 +104,7 @@ h3 .tally {
     <td><%= f.blabel :name, :en => "Section Name" %></td>
     <td><%= f.text_field :name %></td>
   </tr>
-  <% if @section.sis_source_id || can_do(@context.root_account, @current_user, :manage_sis) %>
+  <% if @section.sis_source_id && can_do(@context.root_account, @current_user, :read_sis) || can_do(@context.root_account, @current_user, :manage_sis) %>
     <tr>
       <td><%= f.blabel :sis_source_id, :en => "SIS ID" %></td>
       <td>
@@ -142,10 +147,26 @@ h3 .tally {
 <% end %>
 <h2 id="section_name"><%= @section.name %></h2>
 <div style="margin-bottom: 20px;">
-  <div>
-    <%= t('enrollment', 'Enrollment', :count => (@current_enrollments + @completed_enrollments).length) %>
+  <div id="enrollments_div">
+    <table id="enrollment_table">
+    <% if @pending_enrollments_count > 0 %>
+          <tr>
+            <td class="pending_enrollments"><%= t('pending_enrollment', {:one => '1 Pending Enrollment', :other => '%{count} Pending Enrollments'}, :count => @pending_enrollments_count) %></td>
+          </tr>
+    <% end %>
+    <% if @enrollments_count > 0 %>
+      <tr>
+        <td class="active_enrollments"><%= t('active_enrollment', {:one => '1 Active Enrollment', :other => '%{count} Active Enrollments'}, :count => @enrollments_count) %></td>
+      </tr>
+    <% end %>
+    <% if @completed_enrollments_count > 0 %>
+          <tr>
+            <td class="completed_enrollments"><%= t('completed_enrollment', {:one => '1 Completed Enrollment', :other => '%{count} Completed Enrollments'}, :count => @completed_enrollments_count) %></td>
+          </tr>
+    <% end %>
+    </table>
   </div>
-  <% if @section && ( @section.sis_source_id || can_do(@context.root_account, @current_user, :manage_sis))%>
+  <% if @section && ( @section.sis_source_id && can_do(@context.root_account, @current_user, :read_sis) || can_do(@context.root_account, @current_user, :manage_sis))%>
     <div><%= before_label('sis_id', "SIS ID") %> <span class="sis_source_id"><%= @section.sis_source_id %></span></div>
   <% end %>
   <% if @section.start_at || @section.end_at %>
@@ -164,24 +185,18 @@ h3 .tally {
   <% end %>
 </div>
 <% if can_do @context, @current_user, :read_roster, :manage_students, :manage_admin_users %>
-  <% unless @current_enrollments.empty? %>
+  <div class="enrollments-lists">
     <h3><%= t('titles.current_enrollments', 'Current Enrollments') %></h3>
-    <ul class="user_list">
-      <% @current_enrollments.each do |enrollment| %>
-        <%= render :partial => "shared/enrollment", :object => enrollment, :locals => {:include_type => true} %>
-      <% end %>
-    </ul>
-  <% end %>
-  <% unless @completed_enrollments.empty? %>
-    <h2><%= t('titles.completed_enrollments', 'Completed Enrollments') %></h2>
-    <ul class="user_list">
-      <% @completed_enrollments.each do |enrollment| %>
-        <%= render :partial => "shared/enrollment", :object => enrollment, :locals => {:include_type => true} %>
-      <% end %>
-    </ul>
-  <% end %>
+    <div class="user-list-wrapper" id="current-enrollment-list">
+      <ul class="user_list"></ul>
+    </div>
+    <h3><%= t('titles.completed_enrollments', 'Completed Enrollments') %></h3>
+    <div class="user-list-wrapper" id="completed-enrollment-list">
+      <ul class="user_list"></ul>
+    </div>
+  </div>
 <% end %>
-<% jammit_js :section %>
+<% js_bundle :section %>
 
 <div style="display: none;">
   <% form_tag context_url(@context, :context_section_crosslist_url, @section.id), :id => "crosslist_course_form", :title => t('titles.crosslist_this_section', 'Cross-List this Section'), :method => :post do %>
@@ -235,10 +250,10 @@ h3 .tally {
         <%= mt('decrosslist_description', 'This will move the section back to its original course, **%{course_name}**.', :course_name => @section.nonxlist_course.name) %>
       <% end %>
     </p>
-    <% if @student_enrollments.length > 0 %>
+    <% if @student_enrollments_count > 0 %>
       <p>
         <%= t('decrosslist_long_description', %{
-        All grades for students in this course will no longer be visible.  
+        All grades for students in this course will no longer be visible.
         You can retrieve the grades later by re-cross-listing the course, 
         but in the mean time the grades for these students will come from the original course.
         }) %>

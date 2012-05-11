@@ -29,8 +29,12 @@ class Shard
     default
   end
 
-  def self.partition_by_shard(array)
-    yield array
+  def self.partition_by_shard(array, partition_proc = nil)
+    Array(yield array)
+  end
+
+  def self.with_each_shard
+    Array(yield)
   end
 
   def activate
@@ -39,6 +43,24 @@ class Shard
 
   def default?
     true
+  end
+
+  def settings
+    {}
+  end
+
+  yaml_as "tag:instructure.com,2012:Shard"
+
+  def self.yaml_new(klass, tag, val)
+    default
+  end
+
+  module RSpec
+    def self.included(klass)
+      klass.before do
+        pending "needs a sharding implementation"
+      end
+    end
   end
 end
 

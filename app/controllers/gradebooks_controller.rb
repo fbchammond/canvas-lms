@@ -19,7 +19,7 @@
 class GradebooksController < ApplicationController
   include ActionView::Helpers::NumberHelper
 
-  before_filter :require_user_for_context, :except => :public_feed
+  before_filter :require_context, :except => :public_feed
 
   add_crumb("Grades", :except => :public_feed) { |c| c.send :named_context_url, c.instance_variable_get("@context"), :context_grades_url }
   before_filter { |c| c.active_tab = "grades" }
@@ -31,16 +31,20 @@ class GradebooksController < ApplicationController
       return
     end
 
-    id = params[:id]
-    if !id
-      if @context_enrollment && @context_enrollment.is_a?(ObserverEnrollment) && @context_enrollment.associated_user_id
-        id = @context_enrollment.associated_user_id
-      else
-        id = @current_user.id
-      end
+    @observed_students = ObserverEnrollment.observed_students(@context, @current_user)
+
+    # always use id if given
+    if params[:id]
+      @student_enrollment = @context.all_student_enrollments.find_by_user_id(params[:id])
+    # otherwise try to find an observed student
+    elsif @observed_students.present?
+      # be consistent about which student we return by default
+      @student_enrollment = (@observed_students.to_a.sort_by {|e| e[0].sortable_name}.first)[1].first
+    # or just fall back to @current_user
+    else
+      @student_enrollment = @context.all_student_enrollments.find_by_user_id(@current_user.id)
     end
 
-    @student_enrollment = @context.all_student_enrollments.find_by_user_id(id)
     @student = @student_enrollment && @student_enrollment.user
     if !@student || !@student_enrollment
       authorized_action(nil, @current_user, :permission_fail)
@@ -132,7 +136,6 @@ class GradebooksController < ApplicationController
   end
 
   # GET /gradebooks/1
-  # GET /gradebooks/1.xml
   # GET /gradebooks/1.json
   # GET /gradebooks/1.csv
   def show
@@ -140,44 +143,49 @@ class GradebooksController < ApplicationController
       return submissions_json if params[:updated] && request.format == :json
       return gradebook_init_json if params[:init] && request.format == :json
       @context.require_assignment_group
-      @groups = @context.assignment_groups.active
-      @groups_order = {}
-      @groups.each_with_index{|group, idx| @groups_order[group.id] = idx }
-      @just_assignments = @context.assignments.active.gradeable.find(:all, :order => 'due_at, title').select{|a| @groups_order[a.assignment_group_id] }
-      newest = Time.parse("Jan 1 2010")
-      @just_assignments = @just_assignments.sort_by{|a| [a.due_at || newest, @groups_order[a.assignment_group_id] || 0, a.position || 0] }
-      @assignments = @just_assignments.dup + groups_as_assignments(@groups)
-      @gradebook_upload = @context.build_gradebook_upload
-      @submissions = []
-      @submissions = @context.submissions
-      @new_submissions = @submissions
-      if params[:updated]
-        d = DateTime.parse(params[:updated])
-        @new_submissions = @submissions.select{|s| s.updated_at > d}
-      end
-      @enrollments_hash = {}
-      @context.enrollments.sort_by{|e| [e.state_sortable, e.rank_sortable] }.each{|e| @enrollments_hash[e.user_id] ||= e }
-      @students = @context.students_visible_to(@current_user).sort_by{|u| u.sortable_name.downcase }.uniq
 
       log_asset_access("gradebook:#{@context.asset_string}", "grades", "other")
       respond_to do |format|
-        if params[:view] == "simple"
-          @headers = false
-          format.html { render :action => "show_simple" }
-        else
-          format.html { render :action => "show" }
-        end
+        format.html {
+          @groups = @context.assignment_groups.active
+          @groups_order = {}
+          @groups.each_with_index{|group, idx| @groups_order[group.id] = idx }
+          @just_assignments = @context.assignments.active.gradeable.find(:all, :order => 'due_at, title').select{|a| @groups_order[a.assignment_group_id] }
+          newest = Time.parse("Jan 1 2010")
+          @just_assignments = @just_assignments.sort_by{|a| [a.due_at || newest, @groups_order[a.assignment_group_id] || 0, a.position || 0] }
+          @assignments = @just_assignments.dup + groups_as_assignments(@groups)
+          @gradebook_upload = @context.build_gradebook_upload
+          @submissions = @context.submissions
+          @new_submissions = @submissions
+          if params[:updated]
+            d = DateTime.parse(params[:updated])
+            @new_submissions = @submissions.select{|s| s.updated_at > d}
+          end
+          @enrollments_hash = Hash.new{ |hash,key| hash[key] = [] }
+          @context.enrollments.sort_by{|e| [e.state_sortable, e.rank_sortable] }.each{ |e| @enrollments_hash[e.user_id] << e }
+          @students = @context.students_visible_to(@current_user).sort_by{|u| u.sortable_name.downcase }.uniq
+          if params[:view] == "simple"
+            @headers = false
+            render :action => "show_simple"
+          else
+            render :action => "show"
+          end
+        }
         format.csv {
           cancel_cache_buster
           Enrollment.recompute_final_score_if_stale @context
           send_data(
-            @context.gradebook_to_csv(:include_sis_id => @context.grants_right?(@current_user, session, :manage_students)),
+            @context.gradebook_to_csv(:include_sis_id => @context.grants_rights?(@current_user, session, :read_sis, :manage_sis).values.any?),
             :type => "text/csv",
             :filename => t('grades_filename', "Grades").gsub(/ /, "_") + "-" + @context.name.to_s.gsub(/ /, "_") + ".csv",
             :disposition => "attachment"
           )
         }
-        format.json  { render :json => @new_submissions.to_json(:include => [:quiz_submission, :submission_comments, :attachments]) }
+        format.json  {
+          @submissions = @context.submissions
+          @new_submissions = @submissions
+          render :json => @new_submissions.to_json(:include => [:quiz_submission, :submission_comments, :attachments])
+        }
       end
     end
   end
@@ -215,15 +223,26 @@ class GradebooksController < ApplicationController
       else
         @submissions = @context.submissions.scoped(scope_options)
       end
-      render :json => @submissions
+      render :json => @submissions.to_json(:include => [:attachments, :quiz_submission, :submission_comments])
     end
   end
   protected :gradebook_init_json
 
   def history
     if authorized_action(@context, @current_user, :manage_grades)
-      # TODO this whole thing could go a LOT faster if you just got ALL the versions of ALL the submissions in this course then did a ruby sort_by day then grader
-      @days = SubmissionList.days(@context)
+      #
+      # Temporary disabling of this page for large courses
+      # We need some reworking of the gradebook history to allow using it
+      # in large courses in a performant manner. Until that happens, we're
+      # disabling it over a certain threshold.
+      #
+      submissions_count = @context.submissions.count
+      submissions_limit = Setting.get('gradebook_history_submission_count_threshold', '0').to_i
+      if submissions_limit == 0 || submissions_count <= submissions_limit
+        # TODO this whole thing could go a LOT faster if you just got ALL the versions of ALL the submissions in this course then did a ruby sort_by day then grader
+        @days = SubmissionList.days(@context)
+      end
+
       respond_to do |format|
         format.html
       end
@@ -242,7 +261,11 @@ class GradebooksController < ApplicationController
       @submissions = []
       submissions.compact.each do |submission|
         @assignment = @context.assignments.active.find(submission[:assignment_id])
-        @user = @context.students_visible_to(@current_user).find(submission[:user_id].to_i)
+        begin
+          @user = @context.students_visible_to(@current_user).find(submission[:user_id].to_i)
+        rescue ActiveRecord::RecordNotFound
+          next
+        end
         submission[:grader] = @current_user
         submission.delete :comment_attachments
         if params[:attachments]
@@ -313,7 +336,7 @@ class GradebooksController < ApplicationController
           log_asset_access("speed_grader:#{@context.asset_string}", "grades", "other")
           render :action => "speed_grader"
         }
-        format.json { render :json => @assignment.speed_grader_json(@current_user) }
+        format.json { render :json => @assignment.speed_grader_json(@current_user, service_enabled?(:avatars)) }
       end
     end
   end
@@ -329,9 +352,9 @@ class GradebooksController < ApplicationController
     respond_to do |format|
       feed = Atom::Feed.new do |f|
         f.title = t('titles.feed_for_course', "%{course} Gradebook Feed", :course => @context.name)
-        f.links << Atom::Link.new(:href => named_context_url(@context, :context_gradebook_url))
+        f.links << Atom::Link.new(:href => course_gradebook_url(@context), :rel => 'self')
         f.updated = Time.now
-        f.id = named_context_url(@context, :context_gradebook_url)
+        f.id = course_gradebook_url(@context)
       end
       @context.submissions.each do |e|
         feed.entries << e.to_atom

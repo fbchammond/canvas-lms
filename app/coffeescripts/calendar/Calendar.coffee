@@ -4,8 +4,9 @@
 
 # requires jQuery, and vendor/fullcalendar
 
-define 'compiled/calendar/Calendar', [
-  'i18n'
+define [
+  'i18n!calendar'
+  'jquery'
   'compiled/util/hsvToRgb'
   'jst/calendar/calendarApp'
   'compiled/calendar/EventDataSource'
@@ -13,16 +14,21 @@ define 'compiled/calendar/Calendar', [
   'compiled/calendar/ShowEventDetailsDialog'
   'compiled/calendar/EditEventDetailsDialog'
   'compiled/calendar/Scheduler'
-], (I18n, hsvToRgb, calendarAppTemplate, EventDataSource, commonEventFactory, ShowEventDetailsDialog, EditEventDetailsDialog, Scheduler) ->
+  'vendor/fullcalendar'
 
-  I18n = I18n.scoped 'calendar'
+  'jquery.instructure_misc_helpers'
+  'jquery.instructure_misc_plugins'
+  'vendor/jquery.ba-tinypubsub'
+  'jqueryui/button'
+], (I18n, $, hsvToRgb, calendarAppTemplate, EventDataSource, commonEventFactory, ShowEventDetailsDialog, EditEventDetailsDialog, Scheduler) ->
 
   class Calendar
-    constructor: (selector, @contexts, @manageContexts, @dataSource) ->
+    constructor: (selector, @contexts, @manageContexts, @dataSource, @options) ->
       @contextCodes = (context.asset_string for context in contexts)
       @visibleContextList = []
       # Display appointment slots for the specified appointment group
       @displayAppointmentEvents = null
+      @activateEvent = @options?.activateEvent
 
       @activeAjax = 0
 
@@ -85,6 +91,9 @@ define 'compiled/calendar/Calendar', [
         drop: @drop
 
       data = @dataFromDocumentHash()
+      if not data.view_start and @options?.viewStart
+        data.view_start = @options.viewStart
+        location.hash = $.encodeToHex(JSON.stringify(data))
       if data.view_start
         date = $.fullCalendar.parseISO8601(data.view_start)
         if date
@@ -155,7 +164,7 @@ define 'compiled/calendar/Calendar', [
                 # If there is not a reserve_url set, then it is an
                 # actual, scheduled event and not just a placeholder.
                 keep = true
-              else if event.calendarEvent.child_events?.length > 0 && !event.calendarEvent.reserved
+              else if event.calendarEvent.child_events_count > 0 && !event.calendarEvent.reserved
                 # If this *is* a placeholder, and it has child events, and it's not reserved by me,
                 # that means people have signed up for it, so we want to display it.
                 keep = true
@@ -214,6 +223,13 @@ define 'compiled/calendar/Calendar', [
       if event.eventType == 'assignment' && view.name == "agendaWeek"
         element.height('') # this fixes it so it can wrap and not be forced onto 1 line
           .find('.ui-resizable-handle').remove()
+      if event.eventType == 'calendar_event' && @options?.activateEvent && event.id == "calendar_event_#{@options?.activateEvent}"
+        @options.activateEvent = null
+        @eventClick event,
+          # fake up the jsEvent
+          currentTarget: element
+          pageX: element.offset().left + parseInt(element.width() / 2)
+          view
 
     eventDrop: (event, dayDelta, minuteDelta, allDay, revertFunc, jsEvent, ui, view) =>
       # isDueAtMidnight() will read cached midnightFudged property

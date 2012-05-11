@@ -28,7 +28,8 @@ class Submission < ActiveRecord::Base
   belongs_to :media_object
   belongs_to :student, :class_name => 'User', :foreign_key => :user_id
   has_many :submission_comments, :order => 'created_at', :dependent => :destroy
-  has_many :visible_submission_comments, :class_name => 'SubmissionComment', :order => 'created_at', :conditions => { :hidden => false }
+  has_many :visible_submission_comments, :class_name => 'SubmissionComment', :order => 'created_at, id', :conditions => { :hidden => false }
+  has_many :hidden_submission_comments, :class_name => 'SubmissionComment', :order => 'created_at, id', :conditions => { :hidden => true }
   has_many :assessment_requests, :as => :asset
   has_many :assigned_assessments, :class_name => 'AssessmentRequest', :as => :assessor_asset
   belongs_to :quiz_submission
@@ -36,6 +37,7 @@ class Submission < ActiveRecord::Base
   has_many :rubric_assessments, :as => :artifact
   has_many :attachment_associations, :as => :context
   has_many :attachments, :through => :attachment_associations
+  has_many :conversation_messages, :as => :asset # one message per private conversation
   serialize :turnitin_data, Hash
   validates_presence_of :assignment_id, :user_id
   validates_length_of :body, :maximum => maximum_long_text_length, :allow_nil => true, :allow_blank => true
@@ -60,33 +62,6 @@ class Submission < ActiveRecord::Base
     { :conditions => {:context_code => context_codes} }
   }
 
-  named_scope :for_conversation_participant, lambda { |p|
-    # John is looking at his conversation with Jane. Show submissions where:
-    #   1) John authored the submission and Jane has commented; or
-    #   2) Jane authored the submission and John is an admin in the
-    #      submission's course and anyone has commented and:
-    #      i) no admin has commented on the submission yet, or
-    #      ii) John has commented on the submission
-    { :select => 'DISTINCT submissions.*',
-      :joins => "INNER JOIN (
-          SELECT s.id AS submission_id FROM submissions AS s
-          INNER JOIN submission_comments AS sc ON sc.submission_id = s.id
-            AND sc.author_id = #{p.other_participant.id}
-          WHERE s.user_id = #{p.user_id}
-        UNION
-          SELECT DISTINCT s.id AS submission_id FROM submissions AS s
-          INNER JOIN assignments AS a ON a.id = s.assignment_id
-          INNER JOIN courses AS c ON c.id = a.context_id AND a.context_type = 'Course'
-            AND c.workflow_state <> 'deleted'
-          INNER JOIN enrollments AS e ON e.course_id = c.id AND e.user_id = #{p.user_id}
-            AND e.workflow_state = 'active' AND e.type IN ('TeacherEnrollment', 'TaEnrollment')
-          INNER JOIN submission_comments AS sc ON sc.submission_id = s.id
-            AND (NOT s.has_admin_comment OR sc.author_id = #{p.user_id})
-          WHERE s.user_id = #{p.other_participant.id})
-        AS related_submissions ON related_submissions.submission_id = submissions.id"
-    }
-  }
-
   # This should only be used in the course drop down to show assignments recently graded.
   named_scope :recently_graded_assignments, lambda{|user_id, date, limit|
     {
@@ -102,11 +77,11 @@ class Submission < ActiveRecord::Base
   }
 
   named_scope :needs_grading, :conditions => <<-SQL
-    submissions.submission_type IS NOT NULL
-    AND (
-      submissions.score IS NULL
-      OR NOT submissions.grade_matches_current_submission
-      OR submissions.workflow_state IN ('submitted', 'pending_review')
+    submissions.submission_type IS NOT NULL 
+    AND (submissions.workflow_state = 'pending_review'
+      OR (submissions.workflow_state = 'submitted' 
+        AND (submissions.score IS NULL OR NOT submissions.grade_matches_current_submission)
+      )
     )
     SQL
   def self.needs_grading_conditions(prefix = nil)
@@ -118,6 +93,7 @@ class Submission < ActiveRecord::Base
   
   sanitize_field :body, Instructure::SanitizeField::SANITIZE
   
+  attr_accessor :saved_by
   before_save :update_if_pending
   before_save :validate_single_submission, :validate_enrollment, :infer_values, :set_context_code
   before_save :prep_for_submitting_to_turnitin
@@ -129,6 +105,7 @@ class Submission < ActiveRecord::Base
   after_save :update_final_score
   after_save :submit_to_turnitin_later
   after_save :update_admins_if_just_submitted
+  after_save :update_quiz_submission
 
   trigger.after(:update) do |t|
     t.where('(#{Submission.needs_grading_conditions("OLD")}) <> (#{Submission.needs_grading_conditions("NEW")})') do
@@ -204,6 +181,12 @@ class Submission < ActiveRecord::Base
     true
   end
   
+  def update_quiz_submission
+    return true if @saved_by == :quiz_submission || !self.quiz_submission || self.score == self.quiz_submission.kept_score
+    self.quiz_submission.set_final_score(self.score)
+    true
+  end
+  
   def url
     read_body = read_attribute(:body) && CGI::unescapeHTML(read_attribute(:body))
     if read_body && read_attribute(:url) && read_body[0..250] == read_attribute(:url)[0..250]
@@ -275,7 +258,8 @@ class Submission < ActiveRecord::Base
   
   def submit_to_turnitin_later
     if self.turnitinable? && @submit_to_turnitin
-      send_later(:submit_to_turnitin)
+      delay = Setting.get_cached('turnitin_submission_delay_seconds', 60.to_s).to_i
+      send_at(delay.seconds.from_now, :submit_to_turnitin)
     end
   end
   
@@ -395,7 +379,7 @@ class Submission < ActiveRecord::Base
     if self.score_changed?
       @score_changed = true
       if self.assignment
-        self.grade = self.assignment.score_to_grade(self.score) if self.assignment.points_possible.to_f > 0.0 || self.assignment.grading_type != 'pass_fail'
+        self.grade = self.assignment.score_to_grade(self.score, self.grade)
       else
         self.grade = self.score.to_s
       end
@@ -412,7 +396,6 @@ class Submission < ActiveRecord::Base
     end
     true
   end
-  attr_accessor :created_correctly_from_assignment_rb
 
   def update_admins_if_just_submitted
     if @just_submitted
@@ -472,7 +455,7 @@ class Submission < ActiveRecord::Base
   #   Grade changed - "Grade Changes"
   set_broadcast_policy do |p|
     p.dispatch :assignment_submitted_late
-    p.to { assignment.context.admins_in_charge_of(user_id) }
+    p.to { assignment.context.instructors_in_charge_of(user_id) }
     p.whenever {|record| 
       !record.suppress_broadcast and
       record.assignment.context.state == :available and 
@@ -483,7 +466,7 @@ class Submission < ActiveRecord::Base
     }
     
     p.dispatch :assignment_submitted
-    p.to { assignment.context.admins_in_charge_of(user_id) }
+    p.to { assignment.context.instructors_in_charge_of(user_id) }
     p.whenever {|record| 
       !record.suppress_broadcast and
       record.assignment.context.state == :available and 
@@ -493,7 +476,7 @@ class Submission < ActiveRecord::Base
     }
 
     p.dispatch :assignment_resubmitted
-    p.to { assignment.context.admins_in_charge_of(user_id) }
+    p.to { assignment.context.instructors_in_charge_of(user_id) }
     p.whenever {|record| 
       !record.suppress_broadcast and
       record.assignment.context.state == :available and 
@@ -506,7 +489,7 @@ class Submission < ActiveRecord::Base
     }
 
     p.dispatch :group_assignment_submitted_late
-    p.to { assignment.context.admins_in_charge_of(user_id) }
+    p.to { assignment.context.instructors_in_charge_of(user_id) }
     p.whenever {|record| 
       !record.suppress_broadcast and
       record.group_submission_broadcast and
@@ -626,7 +609,7 @@ class Submission < ActiveRecord::Base
     {:conditions => ['submissions.grade IS NULL'], :include => :assignment}
   }
   named_scope :having_submission, lambda {
-    {:conditions => ['submissions.submission_type IS NOT NULL'] }
+    {:conditions => ["submissions.submission_type IS NOT NULL AND submissions.workflow_state = 'submitted'"] }
   }
   named_scope :include_user, lambda {
     {:include => [:user] }
@@ -651,7 +634,7 @@ class Submission < ActiveRecord::Base
   }
   named_scope :for_user, lambda {|user|
     user_id = user.is_a?(User) ? user.id : user
-    {:conditions => ['submissions.user_id = ?', user_id]}
+    {:conditions => ['submissions.user_id IN (?)', Array(user_id)]}
   }
   named_scope :needing_screenshot, lambda {
     {:conditions => ['submissions.submission_type = ? AND submissions.attachment_id IS NULL AND submissions.process_attempts < 3', 'online_url'], :order => :updated_at}
@@ -663,12 +646,10 @@ class Submission < ActiveRecord::Base
 
   def readable_state
     case workflow_state
-    when 'submitted'
+    when 'submitted', 'pending_review'
       t 'state.submitted', 'submitted'
     when 'unsubmitted'
       t 'state.unsubmitted', 'unsubmitted'
-    when 'pending_review'
-      t 'state.pending_review', 'pending review'
     when 'graded'
       t 'state.graded', 'graded'
     end
@@ -742,30 +723,88 @@ class Submission < ActiveRecord::Base
     comment
   end
 
+  def conversation_groups
+    participating_instructors.map{ |i| [user_id, i.id] }
+  end
+
+  def conversation_message_data
+    latest = visible_submission_comments.scoped(:conditions => ["author_id IN (?)", possible_participants_ids]).last or return
+    {
+      :created_at => latest.created_at,
+      :author_id => latest.author_id,
+      :body => latest.comment
+    }
+  end
+
+  def comment_authors
+    visible_submission_comments(:include => :author).map(&:author)
+  end
+
+  def commenting_instructors
+    comment_authors & context.instructors
+  end
+  memoize :commenting_instructors
+
+  def participating_instructors
+    commenting_instructors.present? ? commenting_instructors : context.participating_instructors.uniq
+  end
+
+  def possible_participants_ids
+    [user_id] + context.participating_instructors.uniq.map(&:id)
+  end
+
+  # ensure that conversations/messages are created/updated for all relevant
+  # participants as submission comments are added/removed. there should be a
+  # conversation between the submitter and each participating admin, and it
+  # should have a single conversation_message that represents the submission
+  # (there may of course be other regular messages in the conversation)
+  def create_or_update_conversations!(trigger, overrides={})
+    options = {}
+    case trigger
+    when :create
+      options[:update_participants] = true
+      options[:skip_ids] = overrides[:skip_ids]
+      if commenting_instructors.empty?
+        # until the first instructor comments, we don't want the submitter to see
+        # the message (whether the submitter is the author, or someone in the group is)
+        options[:update_for_skips] = false
+        options[:skip_ids] = [user_id]
+      end
+    when :destroy
+      options[:delete_all] = visible_submission_comments.empty?
+      options[:only_existing] = true
+    when :migrate # don't mark-as-unread for anybody or add to empty conversations
+      return unless conversation_message_data
+      options[:recalculate_count] = true
+      options[:recalculate_last_authored_at] = true
+      options[:only_existing] = true
+    end
+
+    Conversation.update_all_for_asset(self, options)
+  end
+
+  def self.batch_migrate_conversations!(ids)
+    find_all_by_id(ids).each do |sub|
+      sub.create_or_update_conversations!(:migrate)
+    end
+  end
+
   def limit_comments(user, session=nil)
     @comment_limiting_user = user
     @comment_limiting_session = session
   end
 
-  def limit_if_comment_limiting_user(res)
-   if @comment_limiting_user
-      res = res.select{|sc| sc.grants_right?(@comment_limiting_user, @comment_limiting_session, :read) }
-   end
-   res
+  [:submission_comments, :visible_submission_comments].each do |method|
+    alias_method "old_#{method}", method
+    instance_eval <<-CODE
+      def #{method}(options = {})
+        res = old_#{method}(options)
+        res = res.select{|sc| sc.grants_right?(@comment_limiting_user, @comment_limiting_session, :read) } if @comment_limiting_user
+        res
+      end
+    CODE
   end
 
-  alias_method :old_submission_comments, :submission_comments
-  def submission_comments(comment_scope = nil)
-    res = comment_scope.nil? ? old_submission_comments : old_submission_comments.send(comment_scope)
-    limit_if_comment_limiting_user(res)
-  end
-
-  alias_method :old_visible_submission_comments, :visible_submission_comments
-  def visible_submission_comments
-    res = old_visible_submission_comments
-    limit_if_comment_limiting_user(res)
-  end
-  
   def assessment_request_count
     @assessment_requests_count ||= self.assessment_requests.length
   end
@@ -857,18 +896,16 @@ class Submission < ActiveRecord::Base
     self.graded? && (!self.submitted_at || (self.graded_at && self.graded_at >= self.submitted_at))
   end
   
-  def submitted_or_graded?
-    self.submitted? || self.graded?
-  end
-  
   def context(user=nil)
     self.assignment.context if self.assignment
   end
   
   def to_atom(opts={})
     prefix = self.assignment.context_prefix || ""
+    author_name = self.assignment.present? && self.assignment.context.present? ? self.assignment.context.name : t('atom_no_author', "No Author")
     Atom::Entry.new do |entry|
-      entry.title     = "#{self.user && self.user.name} -- #{self.assignment && self.assignment.title}#{", " + self.assignment.context.name if self.assignment && opts[:include_context]}"
+      entry.title     = "#{self.user && self.user.name} -- #{self.assignment && self.assignment.title}#{", " + self.assignment.context.name if opts[:include_context]}"
+      entry.authors  << Atom::Person.new(:name => author_name)
       entry.updated   = self.updated_at
       entry.published = self.created_at
       entry.id        = "tag:#{HostUrl.default_host},#{self.created_at.strftime("%Y-%m-%d")}:/submissions/#{self.feed_code}_#{self.updated_at.strftime("%Y-%m-%d")}"
@@ -899,9 +936,13 @@ class Submission < ActiveRecord::Base
   
   def self.json_serialization_full_parameters(additional_parameters={})
     additional_parameters[:comments] ||= :submission_comments
+    includes = {:attachments => {}, :quiz_submission => {}}
+    if additional_parameters[:comments]
+      includes[additional_parameters[:comments]] = additional_parameters[:avatars] ? {:methods => [:avatar_path]} : {}
+    end
     res = {
-      :methods => [:scribdable?,:conversion_status,:scribd_doc,:formatted_body,:submission_history], 
-      :include => [:attachments,additional_parameters[:comments],:quiz_submission],
+      :methods => [:scribdable?,:conversion_status,:scribd_doc,:formatted_body,:submission_history],
+      :include => includes
     }.merge(additional_parameters || {})
     if additional_parameters[:except]
       additional_parameters[:except].each do |key|

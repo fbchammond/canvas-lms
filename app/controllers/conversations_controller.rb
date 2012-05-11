@@ -22,26 +22,29 @@
 class ConversationsController < ApplicationController
   include ConversationsHelper
   include Api::V1::Submission
+  include Api::V1::Attachment
 
-  before_filter :require_user
+  before_filter :require_user, :except => [:public_feed]
+  before_filter :reject_student_view_student
   before_filter :set_avatar_size
   before_filter :get_conversation, :only => [:show, :update, :destroy, :add_recipients, :remove_messages]
   before_filter :load_all_contexts, :only => [:index, :find_recipients, :create, :add_message]
   before_filter :normalize_recipients, :only => [:create, :add_recipients]
+  before_filter :infer_tags, :only => [:create, :add_message, :add_recipients]
   add_crumb(proc { I18n.t 'crumbs.messages', "Conversations" }) { |c| c.send :conversations_url }
 
   # @API
   # Returns the list of conversations for the current user, most recent ones first.
   #
-  # @argument scope [optional, "unread"|"labeled"|"archived"]
+  # @argument scope [optional, "unread"|"starred"|"archived"]
   #   When set, only return conversations of the specified type. For example,
   #   set to "unread" to return only conversations that haven't been read.
   #   The default behavior is to return all non-archived conversations (i.e.
   #   read and unread).
   #
-  # @argument label [optional, "red"|"orange"|"yellow"|"green"|"blue"|"purple"]
-  #   When scope is set to "labeled", you can use this argument to limit the
-  #   results to a particular label.
+  # @argument interleave_submissions Boolean, default false. If true, the
+  #   message_count will also include these submission-based messages in the
+  #   total. See the show action for more information.
   #
   # @response_field id The unique identifier for the conversation.
   # @response_field workflow_state The current state of the conversation
@@ -54,7 +57,7 @@ class ConversationsController < ApplicationController
   #   subscribed to the conversation
   # @response_field private Indicates whether this is a private conversation
   #   (i.e. audience of one)
-  # @response_field label Current label for this conversation, if set
+  # @response_field starred Whether the conversation is starred
   # @response_field properties Additional conversation flags (last_author,
   #   attachments, media_objects). Each listed property means the flag is
   #   set to true (i.e. the current user is the most recent author, there
@@ -81,7 +84,7 @@ class ConversationsController < ApplicationController
   #       "message_count": 2,
   #       "subscribed": true,
   #       "private": true,
-  #       "label": null,
+  #       "starred": false,
   #       "properties": ["attachments"],
   #       "audience": [2],
   #       "audience_contexts": {"courses": {"1": ["StudentEnrollment"]}, "groups": {}},
@@ -96,19 +99,14 @@ class ConversationsController < ApplicationController
         @view_name = I18n.t('index.inbox_views.unread', 'Unread')
         @no_messages = I18n.t('no_unread_messages', 'You have no unread messages')
         @current_user.conversations.unread
-      when 'labeled'
-        @label, @view_name = ConversationParticipant.labels.detect{ |l| l.first == params[:label] }
-        @view_name ||= I18n.t('index.inbox_views.labeled', 'Labeled')
-        @no_messages = case @label
-          when 'red'; I18n.t('no_red_messages', 'You have no red messages')
-          when 'orange'; I18n.t('no_orange_messages', 'You have no orange messages')
-          when 'yellow'; I18n.t('no_yellow_messages', 'You have no yellow messages')
-          when 'green'; I18n.t('no_green_messages', 'You have no green messages')
-          when 'blue'; I18n.t('no_blue_messages', 'You have no blue messages')
-          when 'purple'; I18n.t('no_purple_messages', 'You have no purple messages')
-          else I18n.t('no_labeled_messages', 'You have no labeled messages')
-        end
-        @current_user.conversations.labeled(@label)
+      when 'starred'
+        @view_name = I18n.t('index.inbox_views.starred', 'Starred')
+        @no_messages = I18n.t('no_starred_messages', 'You have no starred messages')
+        @current_user.conversations.starred
+      when 'sent'
+        @view_name = I18n.t('index.inbox_views.sent', 'Sent')
+        @no_messages = I18n.t('no_sent_messages', 'You have no sent messages')
+        @current_user.all_conversations.sent
       when 'archived'
         @view_name = I18n.t('index.inbox_views.archived', 'Archived')
         @no_messages = I18n.t('no_archived_messages', 'You have no archived messages')
@@ -120,21 +118,52 @@ class ConversationsController < ApplicationController
         @no_messages = I18n.t('no_messages', 'You have no messages')
         @current_user.conversations.default
     end
+    conversations_scope = conversations_scope.for_masquerading_user(@real_current_user) if @real_current_user
     @scope ||= params[:scope].to_sym
+    base_scope = conversations_scope
+    if params[:filter]
+      if params[:filter] =~ /\A(course|group)_(\d+)\z/
+        if context = @contexts[$1.pluralize.to_sym][$2.to_i]
+          @filter = {:id => params[:filter], :name => context[:name]}
+        end
+      elsif params[:filter] =~ /\Auser_(\d+)\z/
+        if user = @current_user.messageable_users(:ids => [$1]).first
+          @filter = {:id => params[:filter], :name => user.name}
+        end
+      end
+      if @filter
+        conversations_scope = conversations_scope.tagged(params[:filter])
+        @no_messages += " (#{@filter[:name]})"
+      end
+    end
+
     @conversations_count = conversations_scope.count
     conversations = Api.paginate(conversations_scope, self, request.request_uri.gsub(/(per_)?page=[^&]*(&|\z)/, '').sub(/[&?]\z/, ''))
     # optimize loading the most recent messages for each conversation into a single query
-    last_messages = ConversationMessage.latest_for_conversations(conversations).human.
-                      inject({}) { |hash, message|
-                        if !hash[message.conversation_id] || hash[message.conversation_id].id < message.id
-                          hash[message.conversation_id] = message
-                        end
-                        hash
-                      }
-    @conversations_json = conversations.each{|c| c.instance_variable_set(:@user, @current_user)}.map{ |c| jsonify_conversation(c, :last_message => last_messages[c.conversation_id], :include_participant_avatars => false, :include_participant_contexts => false) }
-    @user_cache = Hash[*jsonify_users([@current_user]).map{|u| [u[:id], u] }.flatten]
+    ConversationParticipant.preload_latest_messages(conversations, @current_user.id)
+    @conversations_json = conversations.map{ |c| jsonify_conversation(c, :include_participant_avatars => false, :include_participant_contexts => false) }
     respond_to do |format|
-      format.html
+      format.html {
+        # TODO: remove this in a subsequent release, since everything will be
+        # filterable once the data migration has run
+        @filterable = (base_scope.scoped(:conditions => "conversations.tags IS NULL").size == 0)
+
+        notes_enabled = @current_user.associated_accounts.any?{|a| a.enable_user_notes }
+        can_add_notes_for_account = notes_enabled && @current_user.associated_accounts.any?{|a| a.grants_right?(@current_user, nil, :manage_students) }
+        js_env(:CONVERSATIONS => {
+          :USER => jsonify_users([@current_user], :include_participant_contexts => false).first,
+          :CONTEXTS => @contexts,
+          :INITIAL_CONVERSATIONS => @conversations_json,
+          :CONVERSATIONS_COUNT => @conversations_count,
+          :CONVERSATIONS_PER_PAGE => @page_max,
+          :SCOPE => @scope,
+          :NOTES_ENABLED => notes_enabled,
+          :CAN_ADD_NOTES_FOR_ACCOUNT => can_add_notes_for_account,
+          :INITIAL_FILTER => @filter,
+          :SHOW_INTRO => !@current_user.watched_conversations_intro?,
+          :FOLDER_ID => @current_user.conversation_attachments_folder.id
+        })
+      }
       format.json { render :json => @conversations_json }
     end
   end
@@ -144,40 +173,73 @@ class ConversationsController < ApplicationController
   # an existing private conversation with the given recipients, it will be
   # reused.
   #
-  # @argument recipients An array of recipient ids. These may be user ids
+  # @argument recipients[] An array of recipient ids. These may be user ids
   #   or course/group ids prefixed with "course_" or "group_" respectively,
-  #   e.g. [1, 2, "course_3"].
+  #   e.g. recipients[]=1&recipients[]=2&recipients[]=course_3
   # @argument body The message to be sent
   # @argument group_conversation [true|false] Ignored if there is just one
-  #   recipient. If true, this will be a group conversation (i.e. all
-  #   recipients will see all messages and replies). If false, individual
-  #   private conversations will be started with each recipient.
+  #   recipient, defaults to false. If true, this will be a group conversation
+  #   (i.e. all recipients will see all messages and replies). If false,
+  #   individual private conversations will be started with each recipient.
+  # @argument attachment_ids[] An array of attachments ids. These must be
+  #   files that have been previously uploaded to the sender's "conversation
+  #   attachments" folder.
+  # @argument media_comment_id Media comment id of an audio of video file to
+  #   be associated with this message.
+  # @argument media_comment_type ["audio"|"video"] Type of the associated
+  #   media file
   def create
-    if @recipient_ids.present? && params[:body].present?
-      batch_private_messages = !params[:group_conversation] && @recipient_ids.size > 1
-      conversations = (batch_private_messages ? @recipient_ids : [@recipient_ids]).map do |recipients|
-        recipients = Array(recipients)
-        @conversation = @current_user.initiate_conversation(recipients)
-        @message = create_message_on_conversation(@conversation, !batch_private_messages)
-        @conversation
-      end
+    return render_error('recipients', 'blank') if params[:recipients].blank?
+    return render_error('recipients', 'invalid') if @recipients.blank?
+    return render_error('body', 'blank') if params[:body].blank?
+
+    batch_private_messages = !Canvas::Plugin.value_to_boolean(params[:group_conversation]) && @recipients.size > 1
+    recipient_ids = @recipients.keys
+
+    # whether it's a bulk private message, or a big group conversation,
+    # batch up all delayed jobs to make this more responsive to the user
+    Delayed::Batch.serial_batch do
       if batch_private_messages
-        render :json => conversations.each(&:reload).select{|c|c.last_message_at}.map{|c|jsonify_conversation(c)}
+        conversations = []
+        existing_conversations = Conversation.find_all_private_conversations(@current_user.id, recipient_ids)
+        ModelCache.with_cache(:conversations => existing_conversations, :users => {:id => @recipients.update(@current_user.id => @current_user)}) do
+          recipient_ids.each do |recipient_id|
+            conversations << conversation = @current_user.initiate_conversation([recipient_id])
+            create_message_on_conversation(conversation, false)
+          end
+        end
+
+        # reload and preload stuff
+        conversations = ConversationParticipant.find(:all, :conditions => {:id => conversations.map(&:id)}, :include => [:conversation], :order => "visible_last_authored_at DESC, last_message_at DESC, id DESC")
+        Conversation.preload_participants(conversations.map(&:conversation))
+        ConversationParticipant.preload_latest_messages(conversations, @current_user.id)
+        render :json => conversations.map{ |c| jsonify_conversation(c, :include_participant_avatars => false, :include_participant_contexts => false) }
       else
-        render :json => [jsonify_conversation(@conversation.reload,
-                                             :include_context_info => true,
-                                             :include_forwarded_participants => true,
-                                             :messages => [@message])]
+        @conversation = @current_user.initiate_conversation(recipient_ids)
+        message = create_message_on_conversation(@conversation)
+        render :json => [jsonify_conversation(@conversation.reload, :include_indirect_participants => true, :messages => [message])]
       end
-    else
-      render :json => {}, :status => :bad_request
     end
+  end
+
+  def render_error(attribute, message)
+    render :json => [{
+        :attribute => attribute,
+        :message => message,
+      }],
+      :status => :bad_request
   end
 
   # @API
   # Returns information for a single conversation. Response includes all
   # fields that are present in the list/index action, as well as messages,
   # submissions, and extended participant information.
+  #
+  # @argument interleave_submissions Boolean, default false. If true,
+  #   submission data will be returned as first class messages interleaved
+  #   with other messages. The submission details (comments, assignment, etc.)
+  #   will be stored as the submission property on the message. Note that if
+  #   set, the message_count will also include these messages in the total.
   #
   # @response_field participants Array of relevant users. Includes current
   #   user. If there are forwarded messages in this conversation, the authors
@@ -189,7 +251,7 @@ class ConversationsController < ApplicationController
   #   body:: The actual message body
   #   author_id:: The id of the user who sent the message (see audience, participants)
   #   generated:: If true, indicates this is a system-generated message (e.g. "Bob added Alice to the conversation")
-  #   media_comment:: Audio comment data for this message (if applicable). Fields include: display_name, content-type, media_id, media_type, url
+  #   media_comment:: Audio/video comment data for this message (if applicable). Fields include: display_name, content-type, media_id, media_type, url
   #   forwarded_messages:: If this message contains forwarded messages, they will be included here (same format as this list). Note that those messages may have forwarded messages of their own, etc.
   #   attachments:: Array of attachments for this message. Fields include: display_name, content-type, filename, url
   # @response_field submissions Array of assignment submissions having
@@ -207,10 +269,10 @@ class ConversationsController < ApplicationController
   #     "message_count": 2,
   #     "subscribed": true,
   #     "private": true,
-  #     "label": null,
+  #     "starred": false,
   #     "properties": ["attachments"],
   #     "audience": [2],
-  #     "audience_contexts": {"courses": {"1": ["StudentEnrollment"]}, "groups": {}},
+  #     "audience_contexts": {"courses": {"1": []}, "groups": {}},
   #     "avatar_url": "https://canvas.instructure.com/images/messages/avatar-50.png",
   #     "participants": [{"id": 1, "name": "Joe TA"}, {"id": 2, "name": "Jane Teacher"}, {"id": 3, "name": "Bob Student"}],
   #     "messages":
@@ -254,15 +316,18 @@ class ConversationsController < ApplicationController
     return redirect_to "/conversations/#/conversations/#{@conversation.conversation_id}" + (params[:message] ? '?message=' + URI.encode(params[:message], Regexp.new("[^#{URI::PATTERN::UNRESERVED}]")) : '') unless request.xhr? || params[:format] == 'json'
 
     @conversation.update_attribute(:workflow_state, "read") if @conversation.unread?
-    submissions = []
-    if @conversation.one_on_one?
-      submissions = Submission.for_conversation_participant(@conversation).with_comments
-      submissions = submissions.sort_by{ |s| s.submission_comments.last.created_at }.reverse
+    messages = @conversation.messages
+    ConversationMessage.send(:preload_associations, messages, :asset)
+    submissions = messages.map(&:submission).compact
+    Submission.send(:preload_associations, submissions, [:assignment, :submission_comments])
+    if interleave_submissions
+      submissions = nil
+    else
+      messages = messages.select{ |message| message.submission.nil? }
     end
     render :json => jsonify_conversation(@conversation,
-                                         :include_context_info => true,
-                                         :include_forwarded_participants => true,
-                                         :messages => @conversation.messages,
+                                         :include_indirect_participants => true,
+                                         :messages => messages,
                                          :submissions => submissions)
   end
 
@@ -271,11 +336,11 @@ class ConversationsController < ApplicationController
   #
   # Response includes only a subset of the fields that are present in the
   # list/index/show actions: id, workflow_state, last_message, last_message_at
-  # message_count, subscribed, private, lable, properties
+  # message_count, subscribed, private, starred, properties
   #
   # @argument conversation[workflow_state] ["read"|"unread"|"archived"] Change the state of this conversation
   # @argument conversation[subscribed] [true|false] Toggle the current user's subscription to the conversation (only valid for group conversations). If unsubscribed, the user will still have access to the latest messages, but the conversation won't be automatically flagged as unread, nor will it jump to the top of the inbox.
-  # @argument conversation[label] ["red"|"orange"|"yellow"|"green"|"blue"|"purple"|null] Set/unset a flag on this conversation
+  # @argument conversation[starred] [true|false] Toggle the starred state of the current user's view of the conversation.
   #
   # @example_response
   #   {
@@ -286,7 +351,7 @@ class ConversationsController < ApplicationController
   #     "message_count": 2,
   #     "subscribed": true,
   #     "private": true,
-  #     "label": null,
+  #     "starred": false,
   #     "properties": ["attachments"]
   #   }
   def update
@@ -319,7 +384,7 @@ class ConversationsController < ApplicationController
   #     "message_count": 0,
   #     "subscribed": true,
   #     "private": true,
-  #     "label": null,
+  #     "starred": false,
   #     "properties": []
   #   }
   def destroy
@@ -332,9 +397,9 @@ class ConversationsController < ApplicationController
   # the GET/show action, except that omits submissions and only includes the
   # latest message (e.g. "joe was added to the conversation by bob")
   #
-  # @argument recipients An array of recipient ids. These may be user ids
+  # @argument recipients[] An array of recipient ids. These may be user ids
   #   or course/group ids prefixed with "course_" or "group_" respectively,
-  #   e.g. [1, 2, "course_3"].
+  #   e.g. recipients[]=1&recipients[]=2&recipients[]=course_3
   #
   # @example_response
   #   {
@@ -345,7 +410,7 @@ class ConversationsController < ApplicationController
   #     "message_count": 2,
   #     "subscribed": true,
   #     "private": false,
-  #     "label": null,
+  #     "starred": null,
   #     "properties": [],
   #     "audience": [2, 3, 4],
   #     "audience_contexts": {"courses": {"1": []}, "groups": {}},
@@ -367,8 +432,8 @@ class ConversationsController < ApplicationController
   #   }
   #
   def add_recipients
-    if @recipient_ids.present?
-      @conversation.add_participants(@recipient_ids)
+    if @recipients.present?
+      @conversation.add_participants(@recipients.keys, :tags => @tags, :root_account_id => @domain_root_account.id)
       render :json => jsonify_conversation(@conversation.reload, :messages => [@conversation.messages.first])
     else
       render :json => {}, :status => :bad_request
@@ -381,6 +446,13 @@ class ConversationsController < ApplicationController
   # latest message (i.e. what we just sent)
   #
   # @argument body The message to be sent
+  # @argument attachment_ids[] An array of attachments ids. These must be
+  #   files that have been previously uploaded to the sender's "conversation
+  #   attachments" folder.
+  # @argument media_comment_id Media comment id of an audio of video file to
+  #   be associated with this message.
+  # @argument media_comment_type ["audio"|"video"] Type of the associated
+  #   media file
   #
   # @example_response
   #   {
@@ -391,7 +463,7 @@ class ConversationsController < ApplicationController
   #     "message_count": 2,
   #     "subscribed": true,
   #     "private": false,
-  #     "label": null,
+  #     "starred": null,
   #     "properties": [],
   #     "audience": [2, 3],
   #     "audience_contexts": {"courses": {"1": []}, "groups": {}},
@@ -437,7 +509,7 @@ class ConversationsController < ApplicationController
   #     "message_count": 1,
   #     "subscribed": true,
   #     "private": true,
-  #     "label": null,
+  #     "starred": null,
   #     "properties": ["attachments"]
   #   }
   def remove_messages
@@ -447,7 +519,7 @@ class ConversationsController < ApplicationController
         to_delete << message if params[:remove].include?(message.id.to_s)
       end
       @conversation.remove_messages(*to_delete)
-      render :json => @conversation
+      render :json => jsonify_conversation(@conversation)
     end
   end
 
@@ -464,9 +536,9 @@ class ConversationsController < ApplicationController
   #   only results matching all terms will be returned.
   # @argument context Limit the search to a particular course/group (e.g.
   #   "course_3" or "group_4").
-  # @argument exclude Array of ids to exclude from the search. These may be
-  #   user ids or course/group ids prefixed with "course_" or "group_"
-  #   respectively, e.g. [1, 2, "course_3"].
+  # @argument exclude[] Array of ids to exclude from the search. These may be
+  #   user ids or course/group ids prefixed with "course_" or "group_" respectively,
+  #   e.g. exclude[]=1&exclude[]=2&exclude[]=course_3
   # @argument type ["user"|"context"] Limit the search just to users or contexts (groups/courses).
   # @argument user_id [Integer] Search for a specific user id. This ignores the other above parameters, and will never return more than one result.
   # @argument from_conversation_id [Integer] When searching by user_id, only users that could be normally messaged by this user will be returned. This parameter allows you to specify a conversation that will be referenced for a shared context -- if both the current user and the searched user are in the conversation, the user will be returned. This is used to start new side conversations.
@@ -481,7 +553,11 @@ class ConversationsController < ApplicationController
   #   groups/courses, the id is prefixed by "group_"/"course_" respectively.
   # @response_field name The name of the user/context
   # @response_field avatar_url Avatar image url for the user/context
-  # @response_field type ["context"|null] Not set for users, implicitly "user"
+  # @response_field type ["context"|"course"|"section"|"group"|"user"|null]
+  #   Type of recipients to return, defaults to null (all). "context"
+  #   encompasses "course", "section" and "group"
+  # @response_field types[] Array of recipient types to return (see type
+  #   above), e.g. types[]=user&types[]=course
   # @response_field user_count Only set for contexts, indicates number of
   #   messageable users
   # @response_field common_courses Only set for users. Hash of course ids and
@@ -489,9 +565,18 @@ class ConversationsController < ApplicationController
   # @response_field common_groups Only set for users. Hash of group ids and
   #   enrollment types for each group to show what they share with this user
   def find_recipients
+    types = (params[:types] || [] + [params[:type]]).compact
+    types |= [:course, :section, :group] if types.delete('context')
+    types = if types.present?
+      {:user => types.delete('user').present?, :context => types.present? && types.map(&:to_sym)}
+    else
+      {:user => true, :context => [:course, :section, :group]}
+    end
+
+    @blank_fallback = !api_request?
     max_results = [params[:per_page].try(:to_i) || 10, 50].min
     if max_results < 1
-      if params[:type] == 'context' || params[:context]
+      if !types[:user] || params[:context]
         max_results = nil # i.e. all results
       else
         max_results = params[:per_page] = 10
@@ -505,13 +590,14 @@ class ConversationsController < ApplicationController
     recipients = []
     if params[:user_id]
       recipients = matching_participants(:ids => [params[:user_id]], :conversation_id => params[:from_conversation_id])
-    elsif (params[:context] || params[:search]) && ['user', 'context', nil].include?(params[:type])
+    elsif (params[:context] || params[:search])
       options = {:search => params[:search], :context => params[:context], :limit => limit, :offset => offset, :synthetic_contexts => params[:synthetic_contexts]}
 
-      contexts = params[:type] == 'user' ? [] : matching_contexts(options.merge(:exclude_ids => exclude.grep(User::MESSAGEABLE_USER_CONTEXT_REGEX)))
-      participants = params[:type] == 'context' || @skip_users ? [] : matching_participants(options.merge(:exclude_ids => exclude.grep(/\A\d+\z/).map(&:to_i)))
+      rank_results = params[:search].present?
+      contexts = types[:context] ? matching_contexts(options.merge(:rank_results => rank_results, :include_inactive => params[:include_inactive], :exclude_ids => exclude.grep(User::MESSAGEABLE_USER_CONTEXT_REGEX), :types => types[:context])) : []
+      participants = types[:user] && !@skip_users ? matching_participants(options.merge(:rank_results => rank_results, :exclude_ids => exclude.grep(/\A\d+\z/).map(&:to_i))) : []
       if max_results
-        if params[:type]
+        if types[:user] ^ types[:context]
           recipients = contexts + participants
           has_next_page = recipients.size > max_results
           recipients = recipients[0, max_results]
@@ -540,6 +626,63 @@ class ConversationsController < ApplicationController
     render :json => recipients
   end
 
+  def public_feed
+    return unless get_feed_context(:only => [:user])
+    @current_user = @context
+    load_all_contexts
+    feed = Atom::Feed.new do |f|
+      f.title = t('titles.rss_feed', "Conversations Feed")
+      f.links << Atom::Link.new(:href => conversations_url, :rel => 'self')
+      f.updated = Time.now
+      f.id = conversations_url
+    end
+    @entries = []
+    @conversation_contexts = {}
+    @current_user.conversations.each do |conversation|
+      @entries.concat(conversation.messages.human)
+      if @conversation_contexts[conversation.conversation.id].blank?
+        @conversation_contexts[conversation.conversation.id] = feed_context_content(conversation)
+      end
+    end
+    @entries = @entries.sort_by{|e| e.created_at}.reverse
+    @entries.each do |entry|
+      feed.entries << entry.to_atom(:additional_content => @conversation_contexts[entry.conversation.id])
+    end
+    respond_to do |format|
+      format.atom { render :text => feed.to_xml }
+    end
+  end
+
+  def feed_context_content(conversation)
+    content = ""
+    audience = conversation.other_participants
+    audience_names = audience.map(&:name)
+    audience_contexts = contexts_for(audience, conversation.context_tags) # will be 0, 1, or 2 contexts
+    audience_context_names = [:courses, :groups].inject([]) { |ary, context_key|
+      ary + audience_contexts[context_key].keys.map { |k| @contexts[context_key][k] && @contexts[context_key][k][:name] }
+    }.reject(&:blank?)
+
+    content += "<hr />"
+    content += "<div>#{t('conversation_context', "From a conversation with")} "
+    participant_list_cutoff = 2
+    if audience_names.length <= participant_list_cutoff
+      content += "#{ERB::Util.h(audience_names.to_sentence)}"
+    else
+      others_string = t('other_recipients', {
+        :one => "and 1 other",
+        :other => "and %{count} others"
+      },
+        :count => audience_names.length - participant_list_cutoff)
+      content += "#{ERB::Util.h(audience_names[0...participant_list_cutoff].join(", "))} #{others_string}"
+    end
+
+    if !audience_context_names.empty?
+      content += " (#{ERB::Util.h(audience_context_names.to_sentence)})"
+    end
+    content += "</div>"
+    content
+  end
+
   def watched_intro
     unless @current_user.watched_conversations_intro?
       @current_user.watched_conversations_intro
@@ -561,62 +704,96 @@ class ConversationsController < ApplicationController
     if params[:recipients]
       recipient_ids = params[:recipients]
       if recipient_ids.is_a?(String)
-        recipient_ids = recipient_ids.split(/,/)
+        params[:recipients] = recipient_ids = recipient_ids.split(/,/)
       end
-      @recipient_ids = (
-        matching_participants(:ids => recipient_ids.grep(/\A\d+\z/), :conversation_id => params[:from_conversation_id]).map{ |p| p[:id] } +
-        recipient_ids.grep(User::MESSAGEABLE_USER_CONTEXT_REGEX).map{ |context| matching_participants(:context => context)}.flatten.map{ |p| p[:id] }
-      ).uniq
+      recipients = @current_user.messageable_users(:ids => recipient_ids.grep(/\A\d+\z/), :conversation_id => params[:from_conversation_id])
+      recipient_ids.grep(User::MESSAGEABLE_USER_CONTEXT_REGEX).map do |context|
+        recipients.concat @current_user.messageable_users(:context => context)
+      end
+      @recipients = recipients.inject({}){ |hash, user|
+        hash[user.id] ||= user
+        hash
+      }
     end
   end
 
+  def infer_tags
+    tags = Array(params[:tags] || []).concat(params[:recipients] || [])
+    tags = SimpleTags.normalize_tags(tags)
+    tags += tags.grep(/\Agroup_(\d+)\z/){ g = Group.find_by_id($1.to_i) and g.context.asset_string }.compact
+    @tags = tags.uniq
+  end
+
   def load_all_contexts
-    @contexts = {:courses => {}, :groups => {}, :sections => {}}
+    @contexts = Rails.cache.fetch(['all_conversation_contexts', @current_user].cache_key, :expires_in => 10.minutes) do
+      contexts = {:courses => {}, :groups => {}, :sections => {}}
 
-    @current_user.concluded_courses.each do |course|
-      @contexts[:courses][course.id] = {
-        :id => course.id,
-        :url => course_url(course),
-        :name => course.name,
-        :type => :course,
-        :active => course.recently_ended?,
-        :can_add_notes => can_add_notes_to?(course)
-      }
+      term_for_course = lambda do |course|
+        course.enrollment_term.default_term? ? nil : course.enrollment_term.name
+      end
+
+      @current_user.concluded_courses.each do |course|
+        contexts[:courses][course.id] = {
+          :id => course.id,
+          :url => course_url(course),
+          :name => course.name,
+          :type => :course,
+          :term => term_for_course.call(course),
+          :state => course.recently_ended? ? :recently_active : :inactive,
+          :can_add_notes => can_add_notes_to?(course)
+        }
+      end
+
+      @current_user.courses.each do |course|
+        contexts[:courses][course.id] = {
+          :id => course.id,
+          :url => course_url(course),
+          :name => course.name,
+          :type => :course,
+          :term => term_for_course.call(course),
+          :state => :active,
+          :can_add_notes => can_add_notes_to?(course)
+        }
+      end
+
+      section_ids = @current_user.enrollment_visibility[:section_user_counts].keys
+      CourseSection.find(:all, :conditions => {:id => section_ids}).each do |section|
+        contexts[:sections][section.id] = {
+          :id => section.id,
+          :name => section.name,
+          :type => :section,
+          :term => contexts[:courses][section.course_id][:term],
+          :state => contexts[:courses][section.course_id][:state],
+          :parent => {:course => section.course_id},
+          :context_name =>  contexts[:courses][section.course_id][:name]
+        }
+      end if section_ids.present?
+
+      @current_user.messageable_groups.each do |group|
+        contexts[:groups][group.id] = {
+          :id => group.id,
+          :name => group.name,
+          :type => :group,
+          :state => group.active? ? :active : :inactive,
+          :parent => group.context_type == 'Course' ? {:course => group.context.id} : nil,
+          :context_name => group.context.name
+        }
+      end
+
+      contexts
     end
+  end
 
-    @current_user.courses.each do |course|
-      @contexts[:courses][course.id] = {
-        :id => course.id,
-        :url => course_url(course),
-        :name => course.name,
-        :type => :course,
-        :active => true,
-        :can_add_notes => can_add_notes_to?(course)
-      }
-    end
+  def messageable_context_states
+    {:active => true, :recently_active => true, :inactive => false}
+  end
 
-    section_ids = @current_user.enrollment_visibility[:section_user_counts].keys
-    CourseSection.find(:all, :conditions => {:id => section_ids}).each do |section|
-      @contexts[:sections][section.id] = {
-        :id => section.id,
-        :name => section.name,
-        :type => :section,
-        :active => @contexts[:courses][section.course_id][:active],
-        :parent => {:course => section.course_id},
-        :context_name =>  @contexts[:courses][section.course_id][:name]
-      }
-    end if section_ids.present?
+  def context_state_ranks
+    {:active => 0, :recently_active => 1, :inactive => 2}
+  end
 
-    @current_user.messageable_groups.each do |group|
-      @contexts[:groups][group.id] = {
-        :id => group.id,
-        :name => group.name,
-        :type => :group,
-        :active => group.active?,
-        :parent => group.context_type == 'Course' ? {:course => group.context.id} : nil,
-        :context_name => group.context.name
-      }
-    end
+  def context_type_ranks
+    {:course => 0, :section => 1, :group => 2}
   end
 
   def can_add_notes_to?(course)
@@ -625,7 +802,7 @@ class ConversationsController < ApplicationController
 
   def matching_contexts(options)
     context_name = options[:context]
-    avatar_url = avatar_url_for_group(params[:blank_avatar_fallback])
+    avatar_url = avatar_url_for_group(blank_fallback)
     user_counts = {
       :course => @current_user.enrollment_visibility[:user_counts],
       :group => @current_user.group_membership_visibility[:user_counts],
@@ -636,16 +813,16 @@ class ConversationsController < ApplicationController
 
     result = []
     if context_name.nil?
-      result = if params[:search].blank?
+      result = if terms.blank?
                  courses = @contexts[:courses].values
                  group_ids = @current_user.current_groups.map(&:id)
                  groups = @contexts[:groups].slice(*group_ids).values
                  courses + groups
                else
-                 @contexts.values.map(&:values).flatten
+                 @contexts.values_at(*options[:types].map{|t|t.to_s.pluralize.to_sym}).compact.map(&:values).flatten
                end
     elsif options[:synthetic_contexts]
-      if context_name =~ /\Acourse_(\d+)(_(groups|sections))?\z/ && (course = @contexts[:courses][$1.to_i]) && course[:active]
+      if context_name =~ /\Acourse_(\d+)(_(groups|sections))?\z/ && (course = @contexts[:courses][$1.to_i]) && messageable_context_states[course[:state]]
         course = Course.find_by_id(course[:id])
         sections = @contexts[:sections].values.select{ |section| section[:parent] == {:course => course.id} }
         groups = @contexts[:groups].values.select{ |group| group[:parent] == {:course => course.id} }
@@ -666,7 +843,7 @@ class ConversationsController < ApplicationController
             @skip_users = true # ditto
             result = sections
         end
-      elsif context_name =~ /\Asection_(\d+)\z/ && (section = @contexts[:sections][$1.to_i]) && section[:active]
+      elsif context_name =~ /\Asection_(\d+)\z/ && (section = @contexts[:sections][$1.to_i]) && messageable_context_states[section[:state]]
         if terms.present? # we'll just search the users
           result = []
         else
@@ -676,9 +853,19 @@ class ConversationsController < ApplicationController
       end
     end
 
-    result = result.sort_by{ |context| context[:name] }.
-    select{ |context| context[:active] }.
-    map{ |context|
+    result = if options[:rank_results]
+      result.sort_by{ |context|
+        [
+          context_state_ranks[context[:state]],
+          context_type_ranks[context[:type]],
+          context[:name].downcase
+        ]
+      }
+    else
+      result.sort_by{ |context| context[:name].downcase }
+    end
+    result = result.reject{ |context| context[:state] == :inactive } unless options[:include_inactive]
+    result = result.map{ |context|
       ret = {
         :id => "#{context[:type]}_#{context[:id]}",
         :name => context[:name],
@@ -689,7 +876,7 @@ class ConversationsController < ApplicationController
       ret[:context_name] = context[:context_name] if context[:context_name] && context_name.nil?
       ret
     }
-    
+
     result.reject!{ |context| terms.any?{ |part| !context[:name].downcase.include?(part) } } if terms.present?
     result.reject!{ |context| exclude.include?(context[:id]) }
 
@@ -709,7 +896,7 @@ class ConversationsController < ApplicationController
         enrollment_counts[role] += 1
       end
     end
-    avatar_url = avatar_url_for_group(params[:blank_avatar_fallback])
+    avatar_url = avatar_url_for_group(blank_fallback)
     result = []
     result << {:id => "#{context}_teachers", :name => t(:enrollments_teachers, "Teachers"), :user_count => enrollment_counts['TeacherEnrollment'], :avatar_url => avatar_url, :type => :context} if enrollment_counts['TeacherEnrollment'].to_i > 0
     result << {:id => "#{context}_tas", :name => t(:enrollments_tas, "Teaching Assistants"), :user_count => enrollment_counts['TaEnrollment'], :avatar_url => avatar_url, :type => :context} if enrollment_counts['TaEnrollment'].to_i > 0
@@ -719,22 +906,18 @@ class ConversationsController < ApplicationController
   end
 
   def matching_participants(options)
-    jsonify_users(@current_user.messageable_users(options), options.merge(:blank_avatar_fallback => params[:blank_avatar_fallback]))
+    jsonify_users(@current_user.messageable_users(options), options.merge(:include_participant_avatars => true, :include_participant_contexts => true))
   end
 
   def get_conversation(allow_deleted = false)
-    @conversation = (allow_deleted ? @current_user.all_conversations : @current_user.conversations).find_by_conversation_id(params[:id] || params[:conversation_id] || 0)
+    scope = @current_user.all_conversations
+    scope = scope.scoped(:conditions => "message_count > 0") unless allow_deleted
+    @conversation = scope.find_by_conversation_id(params[:id] || params[:conversation_id] || 0)
     raise ActiveRecord::RecordNotFound unless @conversation
   end
 
   def create_message_on_conversation(conversation=@conversation, update_for_sender=true)
-    message = conversation.add_message(params[:body], :forwarded_message_ids => params[:forwarded_message_ids], :update_for_sender => update_for_sender, :context => @domain_root_account) do |m|
-      if params[:attachments]
-        params[:attachments].sort_by{ |k,v| k.to_i }.each do |k,v|
-          m.attachments.create(:uploaded_data => v) if v.present?
-        end
-      end
-
+    message = conversation.add_message(params[:body], :attachment_ids => params[:attachment_ids], :forwarded_message_ids => params[:forwarded_message_ids], :update_for_sender => update_for_sender, :root_account_id => @domain_root_account.id, :tags => @tags) do |m|
       media_id = params[:media_comment_id]
       media_type = params[:media_comment_type]
       if media_id.present? && media_type.present?
@@ -752,32 +935,42 @@ class ConversationsController < ApplicationController
   end
 
   def jsonify_conversation(conversation, options = {})
+    options = {
+      :include_participant_contexts => true
+    }.merge(options)
     result = conversation.as_json(options)
-    audience = conversation.participants.reject{ |u| u.id == conversation.user_id }
+    participants = conversation.participants(options.slice(:include_participant_contexts, :include_indirect_participants))
+    explicit_participants = conversation.participants({:include_participant_contexts => include_private_conversation_enrollments})
+    audience = conversation.other_participants(explicit_participants)
     result[:messages] = jsonify_messages(options[:messages]) if options[:messages]
     result[:submissions] = options[:submissions].map { |s| submission_json(s, s.assignment, @current_user, session, nil, ['assignment', 'submission_comments']) } if options[:submissions]
+    unless interleave_submissions
+      result['message_count'] = result[:submissions] ?
+        result['message_count'] - result[:submissions].size :
+        conversation.messages.human.scoped(:conditions => "asset_id IS NULL").size
+    end
     result[:audience] = audience.map(&:id)
-    result[:audience_contexts] = contexts_for(audience)
-    result[:avatar_url] = avatar_url_for(conversation)
-    result[:participants] = jsonify_users(conversation.participants(options), options)
+    result[:audience_contexts] = contexts_for(audience, conversation.context_tags)
+    result[:avatar_url] = avatar_url_for(conversation, participants)
+    result[:participants] = jsonify_users(participants, options)
     result
   end
 
   def jsonify_messages(messages)
     messages.map{ |message|
-      message = message.as_json
-      message['media_comment'] = media_comment_json(message['media_comment']) if message['media_comment']
-      message['attachments'] = message['attachments'].map{ |attachment| attachment_json(attachment) }
-      message['forwarded_messages'] = jsonify_messages(message['forwarded_messages'])
-      message
+      result = message.as_json
+      result['media_comment'] = media_comment_json(result['media_comment']) if result['media_comment']
+      result['attachments'] = result['attachments'].map{ |attachment| attachment_json(attachment) }
+      result['forwarded_messages'] = jsonify_messages(result['forwarded_messages'])
+      result['submission'] = submission_json(message.submission, message.submission.assignment, @current_user, session, nil, ['assignment', 'submission_comments']) if message.submission
+      result
     }
   end
 
   def jsonify_users(users, options = {})
     options = {
       :include_participant_avatars => true,
-      :blank_avatar_fallback => false,
-      :include_participant_contexts => users.first.respond_to?(:common_courses)
+      :include_participant_contexts => true
     }.merge(options)
     users.map { |user|
       hash = {
@@ -788,8 +981,21 @@ class ConversationsController < ApplicationController
         hash[:common_courses] = user.common_courses
         hash[:common_groups] = user.common_groups
       end
-      hash[:avatar_url] = avatar_url_for_user(user, options[:blank_avatar_fallback]) if options[:include_participant_avatars]
+      hash[:avatar_url] = avatar_url_for_user(user, blank_fallback) if options[:include_participant_avatars]
       hash
     }
+  end
+
+  def interleave_submissions
+    params[:interleave_submissions] || !api_request?
+  end
+
+  def include_private_conversation_enrollments
+    enabled = params[:include_private_conversation_enrollments] || api_request?
+    ["1", "true"].include?(enabled.to_s)
+  end
+
+  def blank_fallback
+    params[:blank_avatar_fallback] || @blank_fallback
   end
 end

@@ -1,5 +1,10 @@
 <% js_block do %>
 <script>
+require([
+  'jquery' /* $ */,
+  'jquery.instructure_misc_plugins' /* /\.indicate/ */
+], function($) {
+
 $(document).ready(function() {
   $(".sections_list_hover").mouseover(function() {
     $("#section_list .section:first").indicate();
@@ -42,6 +47,7 @@ $(document).ready(function() {
     }
   });
 });
+});
 </script>
 <% end %>
 
@@ -66,7 +72,7 @@ $(document).ready(function() {
             :showme2 => show_me('pages_list_hover')) %>
         </div>
       </li>
-      <li class="option content_step">
+      <li class="option content_step portfolio_step">
         <a href="#" class="header"><%= t('headers.sections', "Portfolio Sections") %></a>
         <div class="details" style="display: none;">
           <div style="font-size: 0.8em;">
@@ -90,7 +96,7 @@ $(document).ready(function() {
           </div>
         </div>
       </li>
-      <li class="option content_step">
+      <li class="option content_step section_step">
         <a href="#" class="header"><%= t('headers.pages', "Section Pages") %></a>
         <div class="details" style="display: none;">
           <div style="font-size: 0.8em;">

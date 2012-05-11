@@ -65,7 +65,7 @@ class QuizzesController < ApplicationController
         format.csv {
           cancel_cache_buster
           send_data(
-            @quiz.statistics_csv(:include_all_versions => params[:all_versions] == '1', :anonymous => !@quiz.graded? && @quiz.anonymous_submissions),
+            @quiz.statistics_csv(:include_all_versions => params[:all_versions] == '1', :anonymous => @quiz.anonymous_submissions),
             :type => "text/csv",
             :filename => t(:statistics_filename, "%{title} %{type} Report", :title => @quiz.title, :type => @quiz.readable_type) + ".csv",
             :disposition => "attachment"
@@ -256,8 +256,7 @@ class QuizzesController < ApplicationController
       if params[:quiz_submission_id]
         @submission = @quiz.quiz_submissions.find(params[:quiz_submission_id])
       else
-        user_id = @current_user.id
-        user_id = params[:user_id] if params[:user_id] && @quiz.grants_right?(@current_user, session, :grade)
+        user_id = params[:user_id].presence || @current_user.id
         @submission = @quiz.quiz_submissions.find_by_user_id(user_id, :order => 'created_at') rescue nil
       end
       @submission = nil if @submission && @submission.settings_only?
@@ -282,7 +281,8 @@ class QuizzesController < ApplicationController
         return
       end
       if authorized_action(@submission, @current_user, :read)
-        add_crumb((!@submission.user || @submission.user == @current_user ? t(:default_history_crumb, "History") : @submission.user.name))
+        dont_show_user_name = @submission.quiz.anonymous_submissions || (!@submission.user || @submission.user == @current_user)
+        add_crumb((dont_show_user_name ? t(:default_history_crumb, "History") : @submission.user.name))
         @headers = !params[:headless]
         @current_submission = @submission
         @version_instances = @submission.submitted_versions.sort_by{|v| v.version_number }
@@ -462,6 +462,15 @@ class QuizzesController < ApplicationController
     return true
   end
 
+  # use this for all redirects while taking a quiz -- it'll add params to tell
+  # the lockdown browser that it's ok to follow the redirect
+  def quiz_redirect_params(opts = {})
+    return opts if !@quiz.require_lockdown_browser? || @quiz.grants_right?(@current_user, session, :grade)
+    plugin = Canvas::LockdownBrowser.plugin.base
+    plugin.redirect_params(self, opts)
+  end
+  helper_method :quiz_redirect_params
+
   def start_quiz!
     can_retry = @submission && (@quiz.unlimited_attempts? || @submission.attempts_left > 0 || @quiz.grants_right?(@current_user, session, :update))
     preview = params[:preview] && @quiz.grants_right?(@current_user, session, :update)
@@ -472,10 +481,16 @@ class QuizzesController < ApplicationController
       @submission = @quiz.generate_submission(user_code, !!preview)
     end
     if quiz_submission_active?
-      redirect_to named_context_url(@context, 'context_quiz_take_url', @quiz.id)
+      if request.get?
+        # currently, the only way to start_quiz! with a get request is to use the LDB
+        take_quiz
+      else
+        # redirect to avoid refresh issues
+        redirect_to polymorphic_url([@context, @quiz, 'take'], quiz_redirect_params(:preview => params[:preview]))
+      end
     else
       flash[:error] = t('errors.no_more_attempts', "You have no quiz attempts left") unless @just_graded
-      redirect_to named_context_url(@context, :context_quiz_url, @quiz)
+      redirect_to named_context_url(@context, :context_quiz_url, @quiz, quiz_redirect_params)
     end
   end
 

@@ -39,6 +39,8 @@ module ApplicationHelper
   end
 
   def keyboard_navigation(keys)
+    # TODO: move this to JS, currently you have to know what shortcuts the JS has defined
+    # making it very likely this list will not reflect the key bindings
     content = "<ul class='navigation_list' tabindex='-1'>\n"
     keys.each do |hash|
       content += "  <li>\n"
@@ -126,7 +128,7 @@ module ApplicationHelper
         html << I18n.t('messages.visit_modules_page', "*Visit the course modules page for information on how to unlock this content.*",
           :wrapper => "<a href='#{context_url(context, :context_context_modules_url)}'>\\1</a>")
         html << "<a href='#{context_url(context, :context_context_module_prerequisites_needing_finishing_url, obj.id, hash[:asset_string])}' style='display: none;' id='module_prerequisites_lookup_link'>&nbsp;</a>".html_safe
-        jammit_js :prerequisites_lookup
+        js_bundle :prerequisites_lookup
       end
       return html
     else
@@ -151,13 +153,13 @@ module ApplicationHelper
     if session["reported_#{user_id}"]
       image_tag "no_pic.gif"
     else
-      image_tag(avatar_image_url(user_id || 0), :style => "height: #{height}px;", :alt => '')
+      image_tag(avatar_image_url(User.avatar_key(user_id || 0)), :style => "height: #{height}px; max-width: #{height}px;", :alt => '')
     end
   end
 
   def avatar(user_id, context_code, height=50)
     if service_enabled?(:avatars)
-      link_to(avatar_image(user_id, height), "#{context_prefix(context_code)}/users/#{user_id}", :style => 'z-index: 2; position: relative;')
+      link_to(avatar_image(user_id, height), "#{context_prefix(context_code)}/users/#{user_id}", :style => 'z-index: 2; position: relative;', :class => 'avatar')
     end
   end
 
@@ -277,7 +279,6 @@ module ApplicationHelper
   def js_blocks; @js_blocks ||= []; end
   def render_js_blocks
     output = js_blocks.inject('') do |str, e|
-      add_i18n_scoping!(e[:i18n_scope].to_s, e[:contents]) if e[:i18n_scope]
       # print file and line number for debugging in development mode.
       value = ""
       value << "<!-- BEGIN SCRIPT BLOCK FROM: " + e[:file_and_line] + " --> \n" if Rails.env == "development"
@@ -288,55 +289,64 @@ module ApplicationHelper
     raw(output)
   end
 
+  def hidden_dialog(id, &block)
+    content = capture(&block)
+    if !Rails.env.production? && hidden_dialogs[id] && hidden_dialogs[id] != content
+      raise "Attempted to capture a hidden dialog with #{id} and different content!"
+    end
+    hidden_dialogs[id] = capture(&block)
+  end
+  def hidden_dialogs; @hidden_dialogs ||= {}; end
+  def render_hidden_dialogs
+    output = hidden_dialogs.inject('') do |str, item|
+      str << "<div id='#{item[0]}' style='display: none;''>" << item[1] << "</div>"
+    end
+    raw(output)
+  end
+
   class << self
     attr_accessor :cached_translation_blocks
   end
 
-  def add_i18n_scoping!(scope, contents)
-    @included_i18n_scopes ||= []
-    translations = unless @included_i18n_scopes.include?(scope)
-      @included_i18n_scopes << scope
-      js_translations_for(scope)
-    end
-    contents.gsub!(/(<script[^>]*>)([^<].*?)(<\/script>)/m, "\\1\n#{translations}I18n.scoped(#{scope.inspect}, function(I18n){\n\\2\n});\n\\3")
-  end
-
-  def js_translations_for(scope)
-    scope = [I18n.locale] + scope.split(/\./).map(&:to_sym)
-    (ApplicationHelper.cached_translation_blocks ||= {})[scope] ||=
-    if scoped_translations = scope.inject(I18n.backend.send(:translations)) { |hash, key| hash && hash[key] }
-      last_key = scope.last
-      translations = {}
-      scope[0..scope.size-2].inject(translations) { |hash, key|
-        hash[key] ||= {}
-      }[last_key] = scoped_translations
-      <<-TRANSLATIONS
-var I18n = I18n || {};
-(function($) {
-  var translations = #{translations.to_json};
-  if (I18n.translations) {
-    $.extend(true, I18n.translations, translations);
-  } else {
-    I18n.translations = translations;
-  }
-})(jQuery);
-      TRANSLATIONS
+  # See `js_base_url`
+  def use_optimized_js?
+    if ENV['USE_OPTIMIZED_JS'] == 'true'
+      # allows overriding by adding ?debug_assets=1 to the url
+      !params[:debug_assets]
     else
-      ''
+      # allows overriding by adding ?optimized_js=1 to the url
+      params[:optimized_js] || false
     end
   end
 
-  def jammit_js_bundles; @jammit_js_bundles ||= []; end
-  def jammit_js(*args)
-    Array(args).flatten.each do |bundle|
-      jammit_js_bundles << bundle unless jammit_js_bundles.include? bundle
-    end
+  # Determines the location from which to load JavaScript assets
+  #
+  # uses optimized:
+  #  * when ENV['USE_OPTIMIZED_JS'] is true
+  #  * or when ?optimized_js=true is present in the url. Run `rake js:build` to
+  #    build the optimized files
+  #
+  # uses non-optimized:
+  #   * when ENV['USE_OPTIMIZED_JS'] is false
+  #   * or when ?debug_assets=true is present in the url
+  def js_base_url
+    use_optimized_js? ? '/optimized' : '/javascripts'
   end
 
-  def jammit_css_bundles; @jammit_css_bundles ||= []; end
-  def jammit_css(*args)
-    Array(args).flatten.each do |bundle|
-      jammit_css_bundles << bundle unless jammit_css_bundles.include? bundle
+  # Returns a <script> tag for each registered js_bundle
+  def include_js_bundles
+    paths = js_bundles.map do |(bundle,plugin)|
+      base_url = js_base_url
+      base_url = "/plugins/#{plugin}#{base_url}" if plugin
+      "#{base_url}/compiled/bundles/#{bundle}.js"
+    end
+    javascript_include_tag *paths
+  end
+
+  def include_css_bundles
+    unless jammit_css_bundles.empty?
+      bundles = jammit_css_bundles.map{ |(bundle,plugin)| plugin ? "plugins_#{plugin}_#{bundle}" : bundle }
+      include_stylesheets(*bundles)
     end
   end
 
@@ -472,14 +482,6 @@ var I18n = I18n || {};
     end
   end
 
-  def env
-    {
-      :current_user_id => @current_user.try(:id),
-      :current_user_roles => @current_user.try(:roles),
-      :context_asset_string => @context.try(:asset_string)
-    }
-  end
-
   def nbsp
     raw("&nbsp;")
   end
@@ -534,6 +536,12 @@ var I18n = I18n || {};
     concat(t(*args))
   end
 
+  def jt(key, default, js_options='{}')
+    full_key = key =~ /\A#/ ? key : i18n_scope + '.' + key
+    translated_default = I18n.backend.send(:lookup, I18n.locale, full_key) || default # string or hash
+    raw "I18n.scoped(#{i18n_scope.to_json}).t(#{key.to_json}, #{translated_default.to_json}, #{js_options})"
+  end
+
   def join_title(*parts)
     parts.join(t('#title_separator', ': '))
   end
@@ -576,17 +584,13 @@ var I18n = I18n || {};
   def menu_courses_locals
     courses = @current_user.menu_courses
     all_courses_count = @current_user.courses_with_primary_enrollment.size
-    too_many_courses = all_courses_count > courses.length
-    customizable = too_many_courses || @current_user.favorite_courses.first.present?
-
     {
       :collection             => map_courses_for_menu(courses),
       :collection_size        => all_courses_count,
       :more_link_for_over_max => courses_path,
       :title                  => t('#menu.my_courses', "My Courses"),
       :link_text              => raw(t('#layouts.menu.view_all_enrollments', 'View all courses')),
-      :too_many_courses       => too_many_courses,
-      :edit                   => customizable && t("#menu.customize", "Customize")
+      :edit                   => t("#menu.customize", "Customize")
     }
   end
 
@@ -643,4 +647,52 @@ var I18n = I18n || {};
     end
   end
 
+  def include_account_js
+    includes = [Account.site_admin, @domain_root_account].uniq.inject([]) do |js_includes, account|
+      if account && account.settings[:global_includes] && account.settings[:global_javascript].present?
+        js_includes << "'#{account.settings[:global_javascript]}'"
+      end
+      js_includes
+    end
+    if includes.length > 0
+      str = <<-ENDSCRIPT
+        (function() {
+          var inject = function(src) {
+            var s = document.createElement('script');
+            s.src = src;
+            s.type = 'text/javascript';
+            document.body.appendChild(s);
+          };
+          var srcs = [#{includes.join(', ')}];
+          require(['jquery'], function() {
+            for (var i = 0, l = srcs.length; i < l; i++) {
+              inject(srcs[i]);
+            }
+          });
+        })();
+      ENDSCRIPT
+      content_tag(:script, str, {}, false)
+    end
+  end
+
+
+  # this should be the same as friendlyDatetime in handlebars_helpers.coffee
+  def friendly_datetime(datetime, opts={})
+    attributes = { :title => datetime }
+    attributes[:pubdate] = true if opts[:pubdate]
+    content_tag(:time, attributes) do
+      datetime_string(datetime)
+    end
+  end
+
+  require 'digest'
+
+  # create a checksum of an array of objects' cache_key values.
+  # useful if we have a whole collection of objects that we want to turn into a
+  # cache key, so that we don't make an overly-long cache key.
+  # if you can avoid loading the list at all, that's even better, of course.
+  def collection_cache_key(collection)
+    keys = collection.map { |element| element.cache_key }
+    Digest::MD5.hexdigest(keys.join('/'))
+  end
 end

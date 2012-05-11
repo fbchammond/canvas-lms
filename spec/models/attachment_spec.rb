@@ -16,7 +16,7 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper.rb')
 
 describe Attachment do
   
@@ -350,6 +350,62 @@ describe Attachment do
     end
   end
   
+  context "build_media_object" do
+    before :each do
+      @course = course
+      @attachment = @course.attachments.build(:filename => 'foo.mp4')
+      @attachment.content_type = 'video'
+      @attachment.stubs(:downloadable?).returns(true)
+    end
+
+    it "should be called automatically upon creation" do
+      @attachment.expects(:build_media_object).once
+      @attachment.save!
+    end
+
+    it "should create a media object for videos" do
+      MediaObject.expects(:send_later_enqueue_args).once
+      @attachment.save!
+    end
+
+    it "should delay the creation of the media object by attachment_build_media_object_delay_seconds" do
+      now = Time.now
+      Time.stubs(:now).returns(now)
+      Setting.expects(:get).with('attachment_build_media_object_delay_seconds', '10').once.returns('25')
+      @attachment.save!
+
+      MediaObject.count.should == 0
+      Delayed::Job.count.should == 1
+      Delayed::Job.first.run_at.to_i.should == (now + 25.seconds).to_i
+    end
+
+    it "should not create a media object in a skip_media_object_creation block" do
+      Attachment.skip_media_object_creation do
+        MediaObject.expects(:send_later_enqueue_args).times(0)
+        @attachment.save!
+      end
+    end
+
+    it "should not create a media object for images" do
+      @attachment.filename = 'foo.png'
+      @attachment.content_type = 'image/png'
+      @attachment.expects(:build_media_object).once
+      MediaObject.expects(:send_later_enqueue_args).times(0)
+      @attachment.save!
+    end
+
+    it "should create a media object *after* a direct-to-s3 upload" do
+      MediaObject.expects(:send_later_enqueue_args).never
+      @attachment.workflow_state = 'unattached'
+      @attachment.file_state = 'deleted'
+      @attachment.save!
+      MediaObject.expects(:send_later_enqueue_args).once
+      @attachment.workflow_state = nil
+      @attachment.file_state = 'available'
+      @attachment.save!
+    end
+  end
+
   context "destroy" do
     it "should not actually destroy" do
       a = attachment_model(:uploaded_data => default_uploaded_data)
@@ -561,7 +617,7 @@ describe Attachment do
     end
   end
 
-  context "cacheable_s3_url" do
+  context "cacheable s3 urls" do
     before(:each) do
       course_model
     end
@@ -570,21 +626,23 @@ describe Attachment do
       attachment = attachment_with_context(@course, :display_name => 'foo')
       attachment.expects(:authenticated_s3_url).at_least(0) # allow other calls due to, e.g., save
       attachment.expects(:authenticated_s3_url).with(has_entry('response-content-disposition' => %(attachment; filename="foo"; filename*=UTF-8''foo)))
-      attachment.cacheable_s3_url
+      attachment.expects(:authenticated_s3_url).with(has_entry('response-content-disposition' => %(inline; filename="foo"; filename*=UTF-8''foo)))
+      attachment.cacheable_s3_inline_url
+      attachment.cacheable_s3_download_url
     end
 
     it "should use the display_name, not filename, in the response-content-disposition" do
       attachment = attachment_with_context(@course, :filename => 'bar', :display_name => 'foo')
       attachment.expects(:authenticated_s3_url).at_least(0) # allow other calls due to, e.g., save
       attachment.expects(:authenticated_s3_url).with(has_entry('response-content-disposition' => %(attachment; filename="foo"; filename*=UTF-8''foo)))
-      attachment.cacheable_s3_url
+      attachment.cacheable_s3_inline_url
     end
 
     it "should http quote the filename in the response-content-disposition if necessary" do
       attachment = attachment_with_context(@course, :display_name => 'fo"o')
       attachment.expects(:authenticated_s3_url).at_least(0) # allow other calls due to, e.g., save
       attachment.expects(:authenticated_s3_url).with(has_entry('response-content-disposition' => %(attachment; filename="fo\\"o"; filename*=UTF-8''fo%22o)))
-      attachment.cacheable_s3_url
+      attachment.cacheable_s3_inline_url
     end
 
     it "should sanitize filename with iconv" do
@@ -592,7 +650,90 @@ describe Attachment do
       sanitized_filename = Iconv.conv("ASCII//TRANSLIT//IGNORE", "UTF-8", a.display_name)
       a.expects(:authenticated_s3_url).at_least(0)
       a.expects(:authenticated_s3_url).with(has_entry('response-content-disposition' => %(attachment; filename="#{sanitized_filename}"; filename*=UTF-8''%E7%B3%9F%E7%B3%95.pdf)))
-      a.cacheable_s3_url
+      a.cacheable_s3_inline_url
+    end
+
+    it "should escape all non-alphanumeric characters in the utf-8 filename" do
+      attachment = attachment_with_context(@course, :display_name => '"This file[0] \'{has}\' \# awesome `^<> chars 100%,|<-pipe"')
+      attachment.expects(:authenticated_s3_url).at_least(0) # allow other calls due to, e.g., save
+      attachment.expects(:authenticated_s3_url).with(has_entry('response-content-disposition' => %(attachment; filename="\\\"This file[0] '{has}' \\# awesome `^<> chars 100%,|<-pipe\\\""; filename*=UTF-8''%22This%20file%5B0%5D%20%27%7Bhas%7D%27%20%5C%23%20awesome%20%60%5E%3C%3E%20chars%20100%25%2C%7C%3C%2Dpipe%22)))
+      attachment.cacheable_s3_inline_url
+    end
+  end
+
+  context "root_account_id" do
+    before do
+      account_model
+      course_model(:account => @account)
+      @a = attachment_with_context(@course)
+    end
+
+    it "should return account id for normal namespaces" do
+      @a.namespace = "account_#{@account.id}"
+      @a.root_account_id.should == @account.id
+    end
+
+    it "should return account id for localstorage namespaces" do
+      @a.namespace = "_localstorage_/#{@account.file_namespace}"
+      @a.root_account_id.should == @account.id
+    end
+  end
+
+  context "encoding detection" do
+    it "should include the charset when appropriate" do
+      a = Attachment.new
+      a.content_type = 'text/html'
+      a.content_type_with_encoding.should == 'text/html'
+      a.encoding = ''
+      a.content_type_with_encoding.should == 'text/html'
+      a.encoding = 'UTF-8'
+      a.content_type_with_encoding.should == 'text/html; charset=UTF-8'
+      a.encoding = 'mycustomencoding'
+      a.content_type_with_encoding.should == 'text/html; charset=mycustomencoding'
+    end
+
+    it "should schedule encoding detection when appropriate" do
+      prior_count = Delayed::Job.count(:all, :conditions => {:tag => 'Attachment#infer_encoding'})
+      attachment_model(:uploaded_data => stub_file_data('file.txt', nil, 'image/png'), :content_type => 'image/png')
+      Delayed::Job.count(:all, :conditions => {:tag => 'Attachment#infer_encoding'}).should == prior_count
+      attachment_model(:uploaded_data => stub_file_data('file.txt', nil, 'text/html'), :content_type => 'text/html')
+      Delayed::Job.count(:all, :conditions => {:tag => 'Attachment#infer_encoding'}).should == prior_count + 1
+      prior_count += 1
+      attachment_model(:uploaded_data => stub_file_data('file.txt', nil, 'text/html'), :content_type => 'text/html', :encoding => 'UTF-8')
+      Delayed::Job.count(:all, :conditions => {:tag => 'Attachment#infer_encoding'}).should == prior_count
+    end
+
+    it "should properly infer encoding" do
+      attachment_model(:uploaded_data => stub_png_data('blank.gif', "GIF89a\001\000\001\000\200\377\000\377\377\377\000\000\000,\000\000\000\000\001\000\001\000\000\002\002D\001\000;"))
+      @attachment.encoding.should be_nil
+      @attachment.infer_encoding
+      # can't figure out GIF encoding
+      @attachment.encoding.should == ''
+
+      attachment_model(:uploaded_data => stub_png_data('blank.txt', "Hello World!"))
+      @attachment.encoding.should be_nil
+      @attachment.infer_encoding
+      @attachment.encoding.should == 'UTF-8'
+
+      attachment_model(:uploaded_data => stub_png_data('blank.txt', "\xc2\xa9 2011"))
+      @attachment.encoding.should be_nil
+      @attachment.infer_encoding
+      @attachment.encoding.should == 'UTF-8'
+    end
+  end
+
+  context "sharding" do
+    it_should_behave_like "sharding"
+
+    it "should infer scribd mime type regardless of shard" do
+      scribd_mime_type_model(:extension => 'pdf')
+      attachment_model(:content_type => 'pdf')
+      @attachment.should be_scribdable
+      Attachment.clear_cached_mime_ids
+      @shard1.activate do
+        attachment_model(:content_type => 'pdf')
+        @attachment.should be_scribdable
+      end
     end
   end
 end

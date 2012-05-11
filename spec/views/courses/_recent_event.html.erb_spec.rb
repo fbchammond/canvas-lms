@@ -28,7 +28,16 @@ describe "/courses/_recent_event" do
     response.should_not be_nil
     response.body.should =~ %r{<b>my assignment</b>}
   end
-  
+
+  it "should render without a user" do
+    course
+    assignment = @course.assignments.create!(:title => 'my assignment')
+    view_context
+    render :partial => "courses/recent_event", :object => assignment, :locals => { :is_hidden => false }
+    response.should_not be_nil
+    response.body.should =~ %r{<b>my assignment</b>}
+  end
+
   context "assignment muting and tooltips" do
     before(:each) do
       course_with_student
@@ -44,8 +53,7 @@ describe "/courses/_recent_event" do
       @quiz_submission.grade_submission
 
       @submission = @quiz_submission.submission
-      @submission.score = 1234567890987654400 # long magic number that should be distinct in the partial for the test
-      @submission.save
+      Submission.any_instance.stubs(:score).returns(1234567890987654400)
     end
 
     it "should show the score for a non-muted assignment" do

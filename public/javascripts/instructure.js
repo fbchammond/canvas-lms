@@ -16,11 +16,52 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-I18n.scoped('instructure', function(I18n) {
+define([
+  'ENV',
+  'INST' /* INST */,
+  'i18n!instructure',
+  'jquery' /* $ */,
+  'str/htmlEscape',
+  'wikiSidebar',
+  'instructure_helper',
+  'instructure-jquery.ui.draggable-patch' /* /\.draggable/ */,
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.doc_previews' /* filePreviewsEnabled, loadDocPreview */,
+  'jquery.dropdownList' /* dropdownList */,
+  'jquery.google-analytics' /* trackEvent */,
+  'jquery.instructure_date_and_time' /* parseFromISO, dateString */,
+  'jquery.instructure_forms' /* formSubmit, fillFormData, formErrors */,
+  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jquery.instructure_misc_helpers' /* uniqueId, replaceTags, /\$\.uniq/, /\$\.store/, youTubeID */,
+  'jquery.instructure_misc_plugins' /* ifExists, .dim, confirmDelete, showIf, fillWindowWithMe */,
+  'jquery.keycodes' /* keycodes */,
+  'jquery.loadingImg' /* loadingImage */,
+  'jquery.rails_flash_notifications' /* flashMessage */,
+  'jquery.templateData' /* fillTemplateData, getTemplateData */,
+  'compiled/jquery/fixDialogButtons',
+  'media_comments' /* mediaComment, mediaCommentThumbnail */,
+  'tinymce.editor_box' /* editorBox */,
+  'vendor/date' /* Date.parse */,
+  'vendor/jquery.ba-tinypubsub' /* /\.publish\(/ */,
+  'vendor/jquery.store' /* /\$\.store/ */,
+  'vendor/jquery.ba-throttle-debounce' /* debounce */,
+  'jqueryui/accordion' /* /\.accordion\(/ */,
+  'jqueryui/resizable' /* /\.resizable/ */,
+  'jqueryui/sortable' /* /\.sortable/ */,
+  'jqueryui/tabs' /* /\.tabs/ */,
+  'vendor/scribd.view' /* scribd */
+], function(ENV, INST, I18n, $, htmlEscape, wikiSidebar) {
 
-  // sends timing info of XHRs to google analytics so we can track ajax speed.
-  // (ONLY for ajax requests that took longer than a second)
+  // see: https://github.com/rails/jquery-ujs/blob/master/src/rails.js#L80
+  var CSRFProtection =  function(xhr) {
+    if (ENV.AUTHENTICITY_TOKEN) xhr.setRequestHeader('X-CSRF-Token', ENV.AUTHENTICITY_TOKEN);
+  }
+
   $.ajaxPrefilter(function( options, originalOptions, jqXHR ) {
+    if ( !options.crossDomain ) CSRFProtection(jqXHR);
+
+    // sends timing info of XHRs to google analytics so we can track ajax speed.
+    // (ONLY for ajax requests that took longer than a second)
     var urlWithoutPageViewParam = options.url;
     var start = new Date().getTime();
     jqXHR.done(function(data, textStatus, jqXHR){
@@ -32,7 +73,7 @@ I18n.scoped('instructure', function(I18n) {
     });
   });
 
-  jQuery(function($) {
+  $(function() {
 
     // handle all of the click events that were triggered before the dom was ready (and thus weren't handled by jquery listeners)
     if (window._earlyClick) {
@@ -259,7 +300,7 @@ I18n.scoped('instructure', function(I18n) {
       if( !$dialog.length ) {
         $dialog = $("<div/>");
         $dialog.attr('id', 'equella_preview_dialog').hide();
-        $dialog.html("<h2/><iframe style='background: url(/images/ajax-loader-medium-444.gif) no-repeat left top; width: 800px; height: 350px; border: 0;' src='about:blank' borderstyle='0'/><div style='text-align: right;'><a href='#' class='original_link external external_link' target='_blank'>" + $.h(I18n.t('links.view_equella_content_in_new_window', "view the content in a new window")) + "</a>");
+        $dialog.html("<h2/><iframe style='background: url(/images/ajax-loader-medium-444.gif) no-repeat left top; width: 800px; height: 350px; border: 0;' src='about:blank' borderstyle='0'/><div style='text-align: right;'><a href='#' class='original_link external external_link' target='_blank'>" + htmlEscape(I18n.t('links.view_equella_content_in_new_window', "view the content in a new window")) + "</a>");
         $dialog.find("h2").text($(this).attr('title') || $(this).text() || I18n.t('titles.equella_content_preview', "Equella Content Preview"));
         var $iframe = $dialog.find("iframe");
         setTimeout(function() {
@@ -307,6 +348,7 @@ I18n.scoped('instructure', function(I18n) {
             autoOpen: false,
             modal: true
           }, $(link).data('dialogOpts')));
+          $dialog.fixDialogButtons();
         }
 
         $dialog.dialog('open');
@@ -345,14 +387,14 @@ I18n.scoped('instructure', function(I18n) {
             .addClass('external')
             .html('<span>' + $(this).html() + '</span>')
             .attr('target', '_blank')
-            .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + $.h(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
+            .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
         }).end()
         .find("a.instructure_file_link").each(function() {
           var $link = $(this),
               $span = $("<span class='instructure_file_link_holder link_holder'/>");
           $link.removeClass('instructure_file_link').before($span).appendTo($span);
           if($link.attr('target') != '_blank') {
-            $span.append("<a href='" + $link.attr('href') + "' target='_blank' title='" + $.h(I18n.t('titles.view_in_new_window', "View in a new window")) + "' style='padding-left: 5px;'><img src='/images/popout.png'/></a>");
+            $span.append("<a href='" + $link.attr('href') + "' target='_blank' title='" + htmlEscape(I18n.t('titles.view_in_new_window', "View in a new window")) + "' style='padding-left: 5px;'><img src='/images/popout.png'/></a>");
           }
         });
       if ($.filePreviewsEnabled()) {
@@ -360,7 +402,7 @@ I18n.scoped('instructure', function(I18n) {
           var $link = $(this);
           if ( $.trim($link.text()) ) {
             var $span = $("<span class='instructure_scribd_file_holder link_holder'/>"),
-                $scribd_link = $("<a class='scribd_file_preview_link' href='" + $link.attr('href') + "' title='" + $.h(I18n.t('titles.preview_document', "Preview the document")) + "' style='padding-left: 5px;'><img src='/images/preview.png'/></a>");
+                $scribd_link = $("<a class='scribd_file_preview_link' href='" + $link.attr('href') + "' title='" + htmlEscape(I18n.t('titles.preview_document', "Preview the document")) + "' style='padding-left: 5px;'><img src='/images/preview.png'/></a>");
             $link.removeClass('instructure_scribd_file').before($span).appendTo($span);
             $span.append($scribd_link);
             if($link.hasClass('auto_open')) {
@@ -385,7 +427,7 @@ I18n.scoped('instructure', function(I18n) {
             var $after = $('<a href="'+ href +'" class="youtubed"><img src="/images/play_overlay.png" class="media_comment_thumbnail" style="background-image: url(//img.youtube.com/vi/' + id + '/2.jpg)"/></a>')
               .click(function(event) {
                 event.preventDefault();
-                var $video = $("<span class='youtube_holder' style='display: block;'><object width='425' height='344'><param name='wmode' value='opaque'></param><param name='movie' value='//www.youtube.com/v/" + id + "&autoplay=1&hl=en_US&fs=1&'></param><param name='allowFullScreen' value='true'></param><param name='allowscriptaccess' value='always'></param><embed src='//www.youtube.com/v/" + id + "&autoplay=1&hl=en_US&fs=1&' type='application/x-shockwave-flash' allowscriptaccess='always' allowfullscreen='true' width='425' height='344' wmode='opaque'></embed></object><br/><a href='#' style='font-size: 0.8em;' class='hide_youtube_embed_link'>" + $.h(I18n.t('links.minimize_youtube_video', "Minimize Video")) + "</a></span>");
+                var $video = $("<span class='youtube_holder' style='display: block;'><object width='425' height='344'><param name='wmode' value='opaque'></param><param name='movie' value='//www.youtube.com/v/" + id + "&autoplay=1&hl=en_US&fs=1&'></param><param name='allowFullScreen' value='true'></param><param name='allowscriptaccess' value='always'></param><embed src='//www.youtube.com/v/" + id + "&autoplay=1&hl=en_US&fs=1&' type='application/x-shockwave-flash' allowscriptaccess='always' allowfullscreen='true' width='425' height='344' wmode='opaque'></embed></object><br/><a href='#' style='font-size: 0.8em;' class='hide_youtube_embed_link'>" + htmlEscape(I18n.t('links.minimize_youtube_video', "Minimize Video")) + "</a></span>");
                 $video.find(".hide_youtube_embed_link").click(function(event) {
                   event.preventDefault();
                   $video.remove();
@@ -424,7 +466,7 @@ I18n.scoped('instructure', function(I18n) {
                 public_url: attachment.authenticated_s3_url
               })
               .append(
-                $('<a href="#" style="font-size: 0.8em;" class="hide_file_preview_link">' + $.h(I18n.t('links.minimize_file_preview', 'Minimize File Preview')) + '</a>')
+                $('<a href="#" style="font-size: 0.8em;" class="hide_file_preview_link">' + htmlEscape(I18n.t('links.minimize_file_preview', 'Minimize File Preview')) + '</a>')
                 .click(function(event) {
                   event.preventDefault();
                   $link.show();
@@ -444,6 +486,15 @@ I18n.scoped('instructure', function(I18n) {
         alert(I18n.t('alerts.file_previews_disabled', 'File previews have been disabled for this Canvas site'));
       });
     }
+
+    // publishing the 'userContent/change' will run enhanceUserContent at most once every 50ms
+    var enhanceUserContentTimeout;
+    $.subscribe('userContent/change', function(){
+      clearTimeout(enhanceUserContentTimeout);
+      enhanceUserContentTimeout = setTimeout(enhanceUserContent, 50);
+    });
+
+
     $(document).bind('user_content_change', enhanceUserContent);
     setInterval(enhanceUserContent, 15000);
     setTimeout(enhanceUserContent, 1000);
@@ -461,6 +512,11 @@ I18n.scoped('instructure', function(I18n) {
       event.preventDefault();
       $(this).parents(".subcontent").find(".communication_sub_message.toggled_communication_sub_message").removeClass('toggled_communication_sub_message');
       $(this).parents(".communication_sub_message").remove();
+    });
+    $(".show_comments_link").click(function(event) {
+      event.preventDefault();
+      $(this).closest("ul").find("li").show();
+      $(this).closest("li").remove();
     });
     $(".communication_message .message_short .read_more_link").click(function(event) {
       event.preventDefault();
@@ -938,7 +994,7 @@ I18n.scoped('instructure', function(I18n) {
     $(".to-do-list, #topic_list").delegate('.disable_item_link', 'click', function(event) {
       event.preventDefault();
       var $item = $(this).parents("li, div.topic_message");
-      var url = $(this).attr('href');
+      var url = $(this).data('api-href');
       function remove(delete_url) {
         $item.confirmDelete({
           url: delete_url,
@@ -952,8 +1008,8 @@ I18n.scoped('instructure', function(I18n) {
       }
       if($(this).hasClass('grading')) {
         options = {}
-        options['<span class="ui-icon ui-icon-trash">&nbsp;</span> ' + $.h(I18n.t('ignore_forever', 'Ignore Forever'))] = function() { remove(url + "?permanent=1"); };
-        options['<span class="ui-icon ui-icon-star">&nbsp;</span> ' + $.h(I18n.t('ignore_until_new_submission', 'Ignore Until New Submission'))] = function() { remove(url); };
+        options['<span class="ui-icon ui-icon-trash">&nbsp;</span> ' + htmlEscape(I18n.t('ignore_forever', 'Ignore Forever'))] = function() { remove(url + "?permanent=1"); };
+        options['<span class="ui-icon ui-icon-star">&nbsp;</span> ' + htmlEscape(I18n.t('ignore_until_new_submission', 'Ignore Until New Submission'))] = function() { remove(url); };
         $(this).dropdownList({ options: options });
       } else {
         remove(url + "?permanent=1");
@@ -982,7 +1038,7 @@ I18n.scoped('instructure', function(I18n) {
           .children("span.ui-icon-extlink").remove().end()
           .html('<span>' + $(this).html() + '</span>')
           .attr('target', '_blank')
-          .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + $.h(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
+          .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
       });
     }, 2000);
 

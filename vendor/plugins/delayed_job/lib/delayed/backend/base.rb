@@ -7,6 +7,7 @@ module Delayed
     end
 
     module Base
+      ON_HOLD_LOCKED_BY = 'on hold'
       ON_HOLD_COUNT = 50
 
       def self.included(base)
@@ -14,6 +15,8 @@ module Delayed
       end
 
       module ClassMethods
+        attr_accessor :batches
+
         # Add a job to the queue
         # The first argument should be an object that respond_to?(:perform)
         # The rest should be named arguments, these keys are expected:
@@ -30,12 +33,16 @@ module Delayed
           options[:payload_object] = object
           options[:queue] ||= Delayed::Worker.queue
           options[:max_attempts] ||= Delayed::Worker.max_attempts
+          options[:current_shard] = Shard.current
           if options[:singleton]
             options[:strand] = options.delete :singleton
             self.transaction do
               self.clear_strand!(options[:strand])
               self.create(options)
             end
+          elsif batches && options.slice(:strand, :run_at).empty?
+            batch_enqueue_args = options.slice(:priority, :queue)
+            batches[batch_enqueue_args] << options
           else
             self.create(options)
           end
@@ -80,6 +87,7 @@ module Delayed
       end
 
       def payload_object=(object)
+        @payload_object = object
         self['handler'] = object.to_yaml
         self['tag'] = if object.respond_to?(:tag)
           object.tag
@@ -95,6 +103,10 @@ module Delayed
         Delayed::Job.in_delayed_job = true
         payload_object.perform
         Delayed::Job.in_delayed_job = false
+      end
+
+      def batch?
+        payload_object.is_a?(Delayed::Batch::PerformableBatch)
       end
 
       # Unlock this job (note: not saved to DB)
@@ -121,7 +133,7 @@ module Delayed
       end
 
       def hold!
-        self.locked_by = 'on hold'
+        self.locked_by = ON_HOLD_LOCKED_BY
         self.locked_at = self.class.db_time_now
         self.attempts = ON_HOLD_COUNT
         self.save!

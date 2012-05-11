@@ -5,7 +5,15 @@
 <% end %>
 <% js_block do %>
 <script>
-var limitToOneRubric = true;
+require([
+  'INST' /* INST */,
+  'jquery' /* $ */,
+  'find_outcome',
+  'jquery.instructure_forms' /* getFormData, formErrors */
+], function(INST, $) {
+
+window.limitToOneRubric = true;
+
 $(document).ready(function() {
   $(".upload_submissions_link").click(function(event) {
     event.preventDefault();
@@ -36,6 +44,7 @@ $(document).ready(function() {
       $(".assignment_peer_reviews_link").slideUp();
     }
   });
+});
 });
 </script>
 <% end %>
@@ -72,7 +81,7 @@ $(document).ready(function() {
   <%= render :partial => "submit_assignment" %>
 <% end %>
 
-<% jammit_js :edit_rubric if can_do(@assignment, @current_user, :update) %>
+<% js_bundle :edit_rubric if can_do(@assignment, @current_user, :update) %>
 
 <% unless @assignment.new_record? %>
   <div id="rubrics" style="margin-bottom: 10px;">
@@ -90,7 +99,7 @@ $(document).ready(function() {
     <%= render :partial => "shared/rubric_criterion_dialog" %>
   </div>
   <%= render :partial => "shared/find_outcome" %>
-  <%= render :partial => "shared/rubric", :object => nil, :locals => {:association => @assignment, :editable => can_do(@assignment, @current_user, :update), :has_assessments => false, :edit_view => true, :read_only => !can_do(@assignment, @current_user, :update)} %>
+  <%= render :partial => "shared/rubric", :object => nil, :locals => {:association => @assignment, :editable => can_do(@assignment, @current_user, :update), :has_assessments => false, :edit_view => true} %>
   <% if can_do(@assignment, @current_user, :update) %>
     <div style="text-align: center; font-size: 1.2em; margin-top: 10px; display: none;">
       <a href="<%= context_url(@context, :context_rubrics_url) %>" class="add_rubric_link rubric" style="<%= hidden if @assignment.rubric_association %>"><%= t 'links.assign_rubric', 'Assign Rubric' %></a>

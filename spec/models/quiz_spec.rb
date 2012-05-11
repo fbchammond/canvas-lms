@@ -54,7 +54,7 @@ describe Quiz do
     params = { :quiz => { :title => 'Test Quiz', :due_at => Time.zone.today } }
     quiz = @course.quizzes.create!(params[:quiz])
     quiz.due_at.should be_an_instance_of ActiveSupport::TimeWithZone
-    quiz.due_at.zone.should eql 'AKST'
+    quiz.due_at.zone.should eql Time.zone.now.dst? ? 'AKDT' : 'AKST'
     quiz.due_at.hour.should eql 23
     quiz.due_at.min.should eql 59
   end
@@ -131,6 +131,35 @@ describe Quiz do
     a.submission_types.should eql("online_quiz")
     a.points_possible.should eql(10.0)
     Assignment.count.should eql(a_count + 1)
+  end
+
+  it "should not send a message if notify_of_update is blank" do
+    Notification.create!(:name => 'Assignment Changed')
+    @course.offer
+    a = @course.assignments.create!(:title => "some assignment", :points_possible => 5)
+    a.points_possible.should eql(5.0)
+    a.submission_types.should_not eql("online_quiz")
+    a.update_attribute(:created_at, Time.now - (40 * 60))
+    q = @course.quizzes.build(:assignment_id => a.id, :title => "some quiz", :points_possible => 10)
+    q.workflow_state = 'available'
+    q.assignment.expects(:save_without_broadcasting!).at_least_once
+    q.save
+    q.assignment.messages_sent.should be_empty
+  end
+
+  it "should send a message if notify_of_update is set" do
+    Notification.create!(:name => 'Assignment Changed')
+    @course.offer
+    a = @course.assignments.create!(:title => "some assignment", :points_possible => 5)
+    a.points_possible.should eql(5.0)
+    a.submission_types.should_not eql("online_quiz")
+    a.update_attribute(:created_at, Time.now - (40 * 60))
+    q = @course.quizzes.build(:assignment_id => a.id, :title => "some quiz", :points_possible => 10)
+    q.workflow_state = 'available'
+    q.notify_of_update = 1
+    q.assignment.expects(:save_without_broadcasting!).never
+    q.save
+    q.assignment.messages_sent.should include('Assignment Changed')
   end
 
   it "should delete the assignment if the quiz is no longer graded" do
@@ -474,6 +503,43 @@ describe Quiz do
       stats[:submission_score_high].should == 20
       stats[:submission_score_low].should == 15
       stats[:submission_score_stdev].should be_close(Math::sqrt(4 + 2.0/9), 0.0000000001)
+    end
+
+    context 'csv' do
+      it 'should include previous versions even if the current version is incomplete' do
+        q = @course.quizzes.create!
+        q.quiz_questions.create!(:question_data => { :name => "test 1" })
+        q.generate_quiz_data
+        @user1 = User.create! :name => "some_user 1"
+        student_in_course :course => @course, :user => @user1
+        sub = q.generate_submission(@user1)
+        sub.workflow_state = 'complete'
+        sub.submission_data = [{ :points => 15, :text => "", :correct => "undefined", :question_id => -1 }]
+        sub.with_versioning(true, &:save!)
+        sub = q.generate_submission(@user1)
+        sub.save!
+
+        stats = FasterCSV.parse(q.statistics_csv(:include_all_versions => true))
+        stats.first.length.should == 3
+      end
+
+      it 'should not include previous versions even if not asked' do
+        q = @course.quizzes.create!
+        q.quiz_questions.create!(:question_data => { :name => "test 1" })
+        q.generate_quiz_data
+        @user1 = User.create! :name => "some_user 1"
+        student_in_course :course => @course, :user => @user1
+        sub = q.generate_submission(@user1)
+        sub.workflow_state = 'complete'
+        sub.submission_data = [{ :points => 15, :text => "", :correct => "undefined", :question_id => -1 }]
+        sub.with_versioning(true, &:save!)
+        sub = q.generate_submission(@user1)
+        sub.save!
+
+        stats = FasterCSV.parse(q.statistics_csv)
+        stats.first.length.should == 2
+      end
+
     end
   end
 

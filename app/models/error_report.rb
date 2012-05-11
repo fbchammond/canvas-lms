@@ -137,6 +137,10 @@ class ErrorReport < ActiveRecord::Base
     stuff
   end
 
+  def self.categories
+    distinct('category')
+  end
+
   on_send_to_external do |error_report|
     config = Canvas::Plugin.find('error_reporting').try(:settings) || {}
 

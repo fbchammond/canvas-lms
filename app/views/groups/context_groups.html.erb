@@ -3,7 +3,9 @@
 <% content_for :right_side do %>
   <div class="rs-margin-lr rs-margin-top">
     <% if @context.allow_student_organized_groups %>
-      <a href="#" class="button button-sidebar-wide add add_group_link"><%= image_tag "add.png" %> <%= t 'actions.add', 'Start a New Group' %></a>
+      <% if can_do(@context, @current_user, :participate_in_groups) %>
+        <a href="#" class="button button-sidebar-wide add add_group_link"><%= image_tag "add.png" %> <%= t 'actions.add', 'Start a New Group' %></a>
+      <% end %>
     <% else %>
       <%= t :groups_disabled, 'Student-organized groups have been disabled for this course, so you\'ll have to be content with the groups the teacher makes for you.' %>
     <% end %>
@@ -11,7 +13,7 @@
   </div>
 <% end %>
 
-<% jammit_js :groups %>
+<% js_bundle :groups %>
 <h2><%= @context.is_a?(Account) ? t('account_groups', 'Account Groups') : t('course_groups', 'Course Groups') %></h2>
 <p>
 <%= t 'group_explanation', <<-TEXT
@@ -55,9 +57,12 @@ TEXT
   <tr>
     <td><%= before_label :restrictions_for_joining_groups, 'Joining' %></td>
     <td>
-      <select name="group[join_level]">
+      <select id="group_join_level" name="group[join_level]">
         <option value="parent_context_auto_join"><%= t 'options.open_to_course_members', 'Course members are free to join' %></option>
-        <option value="parent_context_request"><%= t 'options.course_member_can_request_access', 'Course members can request to join' %></option>
+        <%# Right now the 'parent_context_request' option isn't any different
+        than 'parent_context_auto_join' because we're auto-accepting requested
+        memberships. So, we're removing it until we implement an accept request
+        feature. %>
         <option value="invitation_only"><%= t 'options.invite_only', 'Membership by invitation only' %></option>
       </select>
     </td>

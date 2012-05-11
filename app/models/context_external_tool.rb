@@ -17,6 +17,7 @@ class ContextExternalTool < ActiveRecord::Base
   attr_accessor :config_type, :config_url, :config_xml
   
   before_save :infer_defaults
+  after_save :touch_context
   validate :check_for_xml_error
 
   workflow do
@@ -287,7 +288,7 @@ class ContextExternalTool < ActiveRecord::Base
   # as configured by an admin.  If there is still no match
   # then check for a match on the current context (configured by
   # the teacher).
-  def self.find_external_tool(url, context)
+  def self.find_external_tool(url, context, preferred_tool_id=nil)
     url = ContextExternalTool.standardize_url(url)
     account_contexts = []
     other_contexts = []
@@ -307,15 +308,15 @@ class ContextExternalTool < ActiveRecord::Base
     end
     return nil if account_contexts.empty? && other_contexts.empty?
     account_contexts.each do |context|
-      res = context.context_external_tools.active.sort_by(&:precedence).detect{|tool| tool.domain && tool.matches_url?(url) }
+      res = context.context_external_tools.active.sort_by{|t| [t.precedence, t.id == preferred_tool_id ? 0 : 1] }.detect{|tool| tool.domain && tool.matches_url?(url) }
       return res if res
     end
     account_contexts.each do |context|
-      res = context.context_external_tools.active.sort_by(&:precedence).detect{|tool| tool.matches_url?(url) }
+      res = context.context_external_tools.active.sort_by{|t| [t.precedence, t.id == preferred_tool_id ? 0 : 1] }.detect{|tool| tool.matches_url?(url) }
       return res if res
     end
     other_contexts.reverse.each do |context|
-      res = context.context_external_tools.active.sort_by(&:precedence).detect{|tool| tool.matches_url?(url) }
+      res = context.context_external_tools.active.sort_by{|t| [t.precedence, t.id == preferred_tool_id ? 0 : 1] }.detect{|tool| tool.matches_url?(url) }
       return res if res
     end
     nil
@@ -353,11 +354,12 @@ class ContextExternalTool < ActiveRecord::Base
   
   def self.process_migration(data, migration)
     tools = data['external_tools'] ? data['external_tools']: []
-    to_import = migration.to_import 'external_tools'
     tools.each do |tool|
-      if tool['migration_id'] && (!to_import || to_import[tool['migration_id']])
+      if migration.import_object?("external_tools", tool['migration_id'])
         item = import_from_migration(tool, migration.context)
-        migration.add_warning(t('external_tool_attention_needed', 'The security parameters for the external tool "%{tool_name}" need to be set in Course Settings.', :tool_name => item.name))
+        if item.consumer_key == 'fake' || item.shared_secret == 'fake'
+          migration.add_warning(t('external_tool_attention_needed', 'The security parameters for the external tool "%{tool_name}" need to be set in Course Settings.', :tool_name => item.name))
+        end
       end
     end
   end
@@ -409,8 +411,8 @@ class ContextExternalTool < ActiveRecord::Base
     item.url = hash[:url] unless hash[:url].blank?
     item.domain = hash[:domain] unless hash[:domain].blank?
     item.privacy_level = hash[:privacy_level] || 'name_only'
-    item.consumer_key ||= 'fake'
-    item.shared_secret ||= 'fake'
+    item.consumer_key ||= hash[:consumer_key] || 'fake'
+    item.shared_secret ||= hash[:shared_secret] || 'fake'
     item.settings = hash[:settings].with_indifferent_access if hash[:settings].is_a?(Hash)
     if hash[:custom_fields].is_a? Hash
       item.settings[:custom_fields] ||= {}

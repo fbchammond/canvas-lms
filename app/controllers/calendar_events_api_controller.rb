@@ -30,13 +30,13 @@ class CalendarEventsApiController < ApplicationController
         send(*date_scope_and_args(:due_between))
     else
       CalendarEvent.active.
-        for_user_and_context_codes(@current_user, @context_codes).
+        for_user_and_context_codes(@current_user, @context_codes, @section_codes).
         send(*date_scope_and_args)
     end
 
     events = Api.paginate(scope.order('id'), self, api_v1_calendar_events_path(search_params))
     CalendarEvent.send(:preload_associations, events, :child_events) if @type == :event
-    render :json => events.map{ |event| event_json(event, @current_user, session, :include => ["child_events"]) }
+    render :json => events.map{ |event| event_json(event, @current_user, session) }
   end
 
   def create
@@ -55,7 +55,7 @@ class CalendarEventsApiController < ApplicationController
   def show
     get_event(true)
     if authorized_action(@event, @current_user, :read)
-      render :json => event_json(@event, @current_user, session, :include => ["child_events"])
+      render :json => event_json(@event, @current_user, session)
     end
   end
 
@@ -70,10 +70,17 @@ class CalendarEventsApiController < ApplicationController
           participant = nil if participant && params[:participant_id] && params[:participant_id].to_i != participant.id
         end
         raise CalendarEvent::ReservationError, "invalid participant" unless participant
-        reservation = @event.reserve_for(participant, @current_user)
+        reservation = @event.reserve_for(participant, @current_user, :cancel_existing => params[:cancel_existing])
         render :json => event_json(reservation, @current_user, session)
       rescue CalendarEvent::ReservationError => err
-        render :json => [['reservation', err.message]], :status => :bad_request
+        reservations = participant ? @event.appointment_group.reservations_for(participant) : []
+        render :json => [{
+            :attribute => 'reservation',
+            :type => 'calendar_event',
+            :message => err.message,
+            :reservations => reservations.map{ |r| event_json(r, @current_user, session) }
+          }],
+          :status => :bad_request
       end
     end
   end
@@ -87,6 +94,7 @@ class CalendarEventsApiController < ApplicationController
         @event.validate_context! if @event.context.is_a?(AppointmentGroup)
         @event.updating_user = @current_user
       end
+      params[:calendar_event].delete(:context_code)
       if @event.update_attributes(params[:calendar_event])
         render :json => event_json(@event, @current_user, session)
       else
@@ -98,6 +106,8 @@ class CalendarEventsApiController < ApplicationController
   def destroy
     get_event
     if authorized_action(@event, @current_user, :delete)
+      @event.updating_user = @current_user
+      @event.cancel_reason = params[:cancel_reason]
       if @event.destroy
         render :json => event_json(@event, @current_user, session)
       else
@@ -142,11 +152,20 @@ class CalendarEventsApiController < ApplicationController
     @type = params[:type] == 'assignment' ? :assignment : :event
 
     @context = @current_user
+    codes = (params[:context_codes] || [])[0, 10]
+    # refactor opportunity: get_all_pertinent_contexts expects the list of
+    # unenrolled contexts to be in the include_contexts parameter, rather than
+    # a function parameter
+    params[:include_contexts] = codes.join(",")
+
     get_all_pertinent_contexts(true)
 
-    codes = (params[:context_codes] || [])[0, 10]
     selected_contexts = @contexts.select{ |c| codes.include?(c.asset_string) }
     @context_codes = selected_contexts.map(&:asset_string)
+    @section_codes = selected_contexts.inject([]){ |ary, context|
+      next ary unless context.is_a?(Course)
+      ary + context.sections_visible_to(@current_user).map(&:asset_string)
+    }
 
     if @type == :event && @start_date
       # pull in reservable appointment group events, if requested

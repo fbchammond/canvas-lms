@@ -439,6 +439,7 @@ describe "security" do
       student_in_course
       @student = @user
       user_with_pseudonym :user => @student, :username => 'student@example.com', :password => 'password'
+      @student_pseudonym = @pseudonym
 
       account_admin_user :account => Account.site_admin
       @admin = @user
@@ -471,6 +472,7 @@ describe "security" do
       assert_response 200
       session[:become_user_id].should == @student.id.to_s
       assigns['current_user'].id.should == @student.id
+      assigns['current_pseudonym'].should == @student_pseudonym
       assigns['real_current_user'].id.should == @admin.id
     end
 
@@ -649,9 +651,6 @@ describe "security" do
         get "/accounts/#{Account.default.id}/statistics"
         response.status.should == "401 Unauthorized"
 
-        get "/accounts/#{Account.default.id}/statistics/page_views"
-        response.status.should == "401 Unauthorized"
-
         get "/accounts/#{Account.default.id}/settings"
         response.should be_success
         response.body.should_not match /Statistics/
@@ -659,9 +658,6 @@ describe "security" do
         add_permission :view_statistics
 
         get "/accounts/#{Account.default.id}/statistics"
-        response.should be_success
-
-        get "/accounts/#{Account.default.id}/statistics/page_views"
         response.should be_success
 
         get "/accounts/#{Account.default.id}/settings"
@@ -910,6 +906,7 @@ describe "security" do
 
         add_permission :read_course_content
         add_permission :read_roster
+        add_permission :read_forum
 
         get "/courses/#{@course.id}"
         response.should be_success
@@ -957,7 +954,7 @@ describe "security" do
         html.css('.section .files').should_not be_empty
         response.body.should_not match /Copy this Course/
         response.body.should_not match /Import Content into this Course/
-        response.body.should match /Export this Course/
+        response.body.should match /Export Course Content/
         response.body.should_not match /Delete this Course/
         response.body.should_not match /End this Course/
         html.css('#course_account_id').should be_empty
@@ -975,7 +972,7 @@ describe "security" do
         response.should be_success
         response.body.should match /Copy this Course/
         response.body.should_not match /Import Content into this Course/
-        response.body.should match /Export this Course/
+        response.body.should match /Export Course Content/
         response.body.should match /Delete this Course/
         html = Nokogiri::HTML(response.body)
         html.css('#course_account_id').should_not be_empty
