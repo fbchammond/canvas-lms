@@ -106,6 +106,7 @@ Dir[File.join(File.dirname(__FILE__),'vendor/plugins/*/Gemfile')].each do |g|
 end
 
 group :assets do
+  gem 'parallel',     '0.5.16'
   gem 'coffee-script', '2.2.0'
   gem 'coffee-script-source', '1.1.2'
   gem 'yard', '0.7.2'
