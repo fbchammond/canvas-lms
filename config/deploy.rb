@@ -33,6 +33,7 @@ after "deploy:update_code" do
   run "chown canvas:canvas #{release_path}/tmp"
   
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compile_assets"
+  run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compress_assets"
 end
 
 after "deploy:symlink" do
