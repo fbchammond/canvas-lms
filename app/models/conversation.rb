@@ -194,6 +194,7 @@ class Conversation < ActiveRecord::Base
       end
       message.asset = options[:asset]
       message.attachment_ids = options[:attachment_ids] if options[:attachment_ids].present?
+      message.media_comment = options[:media_comment] if options[:media_comment].present?
       if options[:forwarded_message_ids].present?
         messages = ConversationMessage.find_all_by_id(options[:forwarded_message_ids].map(&:to_i))
         conversation_ids = messages.select(&:forwardable?).map(&:conversation_id).uniq
@@ -205,8 +206,6 @@ class Conversation < ActiveRecord::Base
       # so we can take advantage of other preloaded associations
       ConversationMessage.send :add_preloaded_record_to_collection, [message], :conversation, self
       message.save!
-
-      yield message if block_given?
 
       add_message_to_participants(message, options.merge(:tags => new_tags, :new_message => true))
       if options[:update_participants]
@@ -359,31 +358,6 @@ class Conversation < ActiveRecord::Base
     find_all_by_id(ids).each(&:migrate_context_tags!)
   end
 
-  def sanitize_context_tags!
-    return if tags.empty?
-    allowed_tags = current_context_strings(1)
-    tags_to_remove = tags - allowed_tags
-    return if tags_to_remove.empty?
-    transaction do
-      lock!
-      update_attribute :tags, tags & allowed_tags
-      conversation_participants(:include => :user).tagged(*tags_to_remove).each do |cp|
-        next unless cp.user
-        cp.update_attribute :tags, cp.tags & tags
-        next unless private?
-        cp.conversation_message_participants.tagged(*tags_to_remove).each do |cmp|
-          new_tags = cmp.tags & tags
-          new_tags = cp.tags if new_tags.empty?
-          cmp.update_attribute :tags, new_tags
-        end
-      end
-    end
-  end
-
-  def self.batch_sanitize_context_tags!(ids)
-    find_all_by_id(ids).each(&:sanitize_context_tags!)
-  end
-
   # if the participant list has changed, e.g. we merged user accounts
   def regenerate_private_hash!(user_ids = nil)
     return unless private?
@@ -451,8 +425,6 @@ class Conversation < ActiveRecord::Base
     end
   end
 
-  protected
-
   # contexts currently shared by > 50% of participants
   # note that these may not all be relevant for a specific participant, so
   # they should be and-ed with User#conversation_context_codes
@@ -473,6 +445,8 @@ class Conversation < ActiveRecord::Base
     }.sort_by(&:last).map(&:first).reverse
   end
   memoize :current_context_strings
+
+  protected
 
   def maybe_update_timestamp(col, val, additional_conditions=[])
     condition = self.class.merge_conditions(["(#{col} IS NULL OR #{col} < ?)", val], additional_conditions)

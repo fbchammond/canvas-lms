@@ -259,17 +259,18 @@ describe User do
   it "should support incrementally adding to account associations" do
     user = User.create!
     user.user_account_associations.should == []
+    account1, account2, account3 = Account.create!, Account.create!, Account.create!
 
     sort_account_associations = lambda { |a, b| a.keys.first <=> b.keys.first }
 
-    User.update_account_associations([user], :incremental => true, :precalculated_associations => {1 => 0})
-    user.user_account_associations.reload.map { |aa| {aa.account_id => aa.depth} }.should == [{1 => 0}]
+    User.update_account_associations([user], :incremental => true, :precalculated_associations => {account1.id => 0})
+    user.user_account_associations.reload.map { |aa| {aa.account_id => aa.depth} }.should == [{account1.id => 0}]
 
-    User.update_account_associations([user], :incremental => true, :precalculated_associations => {2 => 1})
-    user.user_account_associations.reload.map { |aa| {aa.account_id => aa.depth} }.sort(&sort_account_associations).should == [{1 => 0}, {2 => 1}].sort(&sort_account_associations)
+    User.update_account_associations([user], :incremental => true, :precalculated_associations => {account2.id => 1})
+    user.user_account_associations.reload.map { |aa| {aa.account_id => aa.depth} }.sort(&sort_account_associations).should == [{account1.id => 0}, {account2.id => 1}].sort(&sort_account_associations)
 
-    User.update_account_associations([user], :incremental => true, :precalculated_associations => {3 => 1, 1 => 2, 2 => 0})
-    user.user_account_associations.reload.map { |aa| {aa.account_id => aa.depth} }.sort(&sort_account_associations).should == [{1 => 0}, {2 => 0}, {3 => 1}].sort(&sort_account_associations)
+    User.update_account_associations([user], :incremental => true, :precalculated_associations => {account3.id => 1, account1.id => 2, account2.id => 0})
+    user.user_account_associations.reload.map { |aa| {aa.account_id => aa.depth} }.sort(&sort_account_associations).should == [{account1.id => 0}, {account2.id => 0}, {account3.id => 1}].sort(&sort_account_associations)
   end
 
   it "should not have account associations for creation_pending or deleted" do
@@ -356,6 +357,21 @@ describe User do
 
     @course5 = course(:course_name => "invited")
     @course5.enroll_user(@user, 'TeacherEnrollment')
+
+    @course6 = course(:course_name => "active but date restricted", :active_course => true)
+    e = @course6.enroll_user(@user, 'StudentEnrollment')
+    e.accept!
+    e.start_at = 1.day.from_now
+    e.end_at = 2.days.from_now
+    e.save!
+
+    @course7 = course(:course_name => "soft concluded", :active_course => true)
+    e = @course7.enroll_user(@user, 'StudentEnrollment')
+    e.accept!
+    e.start_at = 2.days.ago
+    e.end_at = 1.day.ago
+    e.save!
+
 
     # only four, in the right order (type, then name), and with the top type per course
     @user.courses_with_primary_enrollment.map{|c| [c.id, c.primary_enrollment]}.should eql [
@@ -1044,9 +1060,16 @@ describe User do
       @user.avatar_image_url.should be_nil
     end
 
+    it "should allow external url's to be assigned" do
+      user_model
+      @user.avatar_image = { 'type' => 'external', 'url' => 'http://www.example.com/image.jpg' }
+      @user.save!
+      @user.reload.avatar_image_url.should == 'http://www.example.com/image.jpg'
+    end
+
     it "should return a useful avatar_fallback_url" do
       User.avatar_fallback_url.should ==
-        "https://#{HostUrl.default_host}/images/no_pic.gif"
+        "https://#{HostUrl.default_host}/images/messages/avatar-50.png"
       User.avatar_fallback_url("/somepath").should ==
         "https://#{HostUrl.default_host}/somepath"
       User.avatar_fallback_url("//somedomain/path").should ==
@@ -1054,7 +1077,7 @@ describe User do
       User.avatar_fallback_url("http://somedomain/path").should ==
         "http://somedomain/path"
       User.avatar_fallback_url(nil, OpenObject.new(:host => "foo", :scheme => "http")).should ==
-        "http://foo/images/no_pic.gif"
+        "http://foo/images/messages/avatar-50.png"
       User.avatar_fallback_url("/somepath", OpenObject.new(:host => "bar", :scheme => "https")).should ==
         "https://bar/somepath"
       User.avatar_fallback_url("//somedomain/path", OpenObject.new(:host => "bar", :scheme => "https")).should ==
@@ -1300,9 +1323,9 @@ describe User do
     it "should return active pseudonyms only" do
       course :active_all => true, :account => Account.default
       u = User.create!
-      u.pseudonyms.new(:account => Account.default, :unique_id => "user2@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf").tap{|x| x.workflow_state = 'deleted'; x.sis_user_id = "user2"; x.save!}
+      u.pseudonyms.create!(:account => Account.default, :unique_id => "user2@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf") {|x| x.workflow_state = 'deleted'; x.sis_user_id = "user2" }
       u.sis_pseudonym_for(@course).should be_nil
-      @p = u.pseudonyms.new(:account => Account.default, :unique_id => "user1@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf").tap{|x| x.workflow_state = 'active'; x.sis_user_id = "user1"; x.save!}
+      @p = u.pseudonyms.create!(:account => Account.default, :unique_id => "user1@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf") {|x| x.workflow_state = 'active'; x.sis_user_id = "user1" }
       u.sis_pseudonym_for(@course).should == @p
     end
 
@@ -1310,18 +1333,18 @@ describe User do
       course :active_all => true, :account => Account.default
       other_account = account_model
       u = User.create!
-      u.pseudonyms.new(:account => other_account, :unique_id => "user1@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf").tap{|x| x.workflow_state = 'active'; x.sis_user_id = "user1"; x.save!}
+      u.pseudonyms.create!(:account => other_account, :unique_id => "user1@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf") {|x| x.workflow_state = 'active'; x.sis_user_id = "user1" }
       u.sis_pseudonym_for(@course).should be_nil
-      @p = u.pseudonyms.new(:account => Account.default, :unique_id => "user2@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf").tap{|x| x.workflow_state = 'active'; x.sis_user_id = "user2"; x.save!}
+      @p = u.pseudonyms.create!(:account => Account.default, :unique_id => "user2@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf") {|x| x.workflow_state = 'active'; x.sis_user_id = "user2" }
       u.sis_pseudonym_for(@course).should == @p
     end
 
     it "should return pseudonyms with a sis id only" do
       course :active_all => true, :account => Account.default
       u = User.create!
-      u.pseudonyms.new(:account => Account.default, :unique_id => "user1@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf").tap{|x| x.workflow_state = 'active'; x.save!}
+      u.pseudonyms.create!(:account => Account.default, :unique_id => "user1@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf") {|x| x.workflow_state = 'active' }
       u.sis_pseudonym_for(@course).should be_nil
-      @p = u.pseudonyms.new(:account => Account.default, :unique_id => "user2@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf").tap{|x| x.workflow_state = 'active'; x.sis_user_id = "user2"; x.save!}
+      @p = u.pseudonyms.create!(:account => Account.default, :unique_id => "user2@example.com", :password => "asdfasdf", :password_confirmation => "asdfasdf") {|x| x.workflow_state = 'active'; x.sis_user_id = "user2" }
       u.sis_pseudonym_for(@course).should == @p
     end
 
@@ -1438,7 +1461,7 @@ describe User do
     describe "calendar_events_for_calendar" do
       it "should include own scheduled appointments" do
         course_with_student(:active_all => true)
-        ag = @course.appointment_groups.create(:title => 'test appointment', :new_appointments => [[Time.now, Time.now + 1.hour], [Time.now + 1.hour, Time.now + 2.hour]])
+        ag = AppointmentGroup.create!(:title => 'test appointment', :contexts => [@course], :new_appointments => [[Time.now, Time.now + 1.hour], [Time.now + 1.hour, Time.now + 2.hour]])
         ag.appointments.first.reserve_for(@user, @user)
         events = @user.calendar_events_for_calendar
         events.size.should eql 1
@@ -1448,7 +1471,7 @@ describe User do
       it "should include manageable appointments" do
         course(:active_all => true)
         @user = @course.instructors.first
-        ag = @course.appointment_groups.create(:title => 'test appointment', :new_appointments => [[Time.now, Time.now + 1.hour]])
+        ag = AppointmentGroup.create!(:title => 'test appointment', :contexts => [@course], :new_appointments => [[Time.now, Time.now + 1.hour]])
         events = @user.calendar_events_for_calendar
         events.size.should eql 1
         events.first.title.should eql 'test appointment'
@@ -1459,13 +1482,58 @@ describe User do
       it "should include manageable appointment groups" do
         course(:active_all => true)
         @user = @course.instructors.first
-        ag = @course.appointment_groups.create(:title => 'test appointment', :new_appointments => [[Time.now, Time.now + 1.hour]])
+        ag = AppointmentGroup.create!(:title => 'test appointment', :contexts => [@course], :new_appointments => [[Time.now, Time.now + 1.hour]])
         events = @user.upcoming_events
         events.size.should eql 1
         events.first.title.should eql 'test appointment'
       end
     end
   end
+
+  describe "assignments_needing_submitting" do
+    # NOTE: More thorough testing of the Assignment#not_locked named scope is in assignment_spec.rb
+    context "locked assignments" do
+      before :each do
+        course_with_student_logged_in(:active_all => true)
+        assignment_quiz([], :course => @course, :user => @user)
+        # Setup default values for tests (leave unsaved for easy changes)
+        @quiz.unlock_at = nil
+        @quiz.lock_at = nil
+        @quiz.due_at = 2.days.from_now
+      end
+      it "should include assignments with no locks" do
+        @quiz.save!
+        list = @student.assignments_needing_submitting(:contexts => [@course])
+        list.size.should eql 1
+        list.first.title.should eql 'Test Assignment'
+      end
+      it "should include assignments with unlock_at in the past" do
+        @quiz.unlock_at = 1.hour.ago
+        @quiz.save!
+        list = @student.assignments_needing_submitting(:contexts => [@course])
+        list.size.should eql 1
+        list.first.title.should eql 'Test Assignment'
+      end
+      it "should include assignments with lock_at in the future" do
+        @quiz.lock_at = 1.hour.from_now
+        @quiz.save!
+        list = @student.assignments_needing_submitting(:contexts => [@course])
+        list.size.should eql 1
+        list.first.title.should eql 'Test Assignment'
+      end
+      it "should not include assignments where unlock_at is in future" do
+        @quiz.unlock_at = 1.hour.from_now
+        @quiz.save!
+        @student.assignments_needing_submitting(:contexts => [@course]).count.should == 0
+      end
+      it "should not include assignments where lock_at is in past" do
+        @quiz.lock_at = 1.hour.ago
+        @quiz.save!
+        @student.assignments_needing_submitting(:contexts => [@course]).count.should == 0
+      end
+    end
+  end
+
   describe "avatar_key" do
     it "should return a valid avatar key for a valid user id" do
       User.avatar_key(1).should == "1-#{Canvas::Security.hmac_sha1('1')[0,10]}"

@@ -206,7 +206,11 @@ module Api
 
     # if we're a controller, use the host of the request, otherwise let HostUrl
     # figure out what host is appropriate
-    host = HostUrl.context_host(context, @account_domain) unless self.is_a?(ApplicationController)
+    if self.is_a?(ApplicationController)
+      host = request.host_with_port
+    else
+      host = HostUrl.context_host(context, @account_domain.try(:host))
+    end
 
     rewriter = UserContent::HtmlRewriter.new(context, user)
     rewriter.set_handler('files') do |match|
@@ -232,8 +236,6 @@ module Api
         thumbnail = media_object_thumbnail_url(media_id, :width => 550, :height => 448, :type => 3, :host => host)
         node['poster'] = thumbnail
         node['data-media_comment_type'] = 'video'
-        node['width'] = '550'
-        node['height'] = '448'
       end
 
       node['preload'] = 'none'

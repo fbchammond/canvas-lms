@@ -147,7 +147,6 @@ class Course < ActiveRecord::Base
   has_many :web_conferences, :as => :context, :order => 'created_at DESC', :dependent => :destroy
   has_many :rubrics, :as => :context
   has_many :rubric_associations, :as => :context, :include => :rubric, :dependent => :destroy
-  has_many :tags, :class_name => 'ContentTag', :as => 'context', :order => 'LOWER(title)', :conditions => {:tag_type => 'default'}, :dependent => :destroy
   has_many :collaborations, :as => :context, :order => 'title, created_at', :dependent => :destroy
   has_one :scribd_account, :as => :scribdable
   has_many :short_message_associations, :as => :context, :include => :short_message, :dependent => :destroy
@@ -159,11 +158,12 @@ class Course < ActiveRecord::Base
   has_many :media_objects, :as => :context
   has_many :page_views, :as => :context
   has_many :role_overrides, :as => :context
-  has_many :content_migrations
+  has_many :content_migrations, :foreign_key => :context_id
   has_many :content_exports
   has_many :course_imports
   has_many :alerts, :as => :context, :include => :criteria
-  has_many :appointment_groups, :as => :context
+  has_many :appointment_group_contexts, :as => :context
+  has_many :appointment_groups, :through => :appointment_group_contexts
   has_many :appointment_participants, :class_name => 'CalendarEvent', :foreign_key => :effective_context_code, :primary_key => :asset_string, :conditions => "workflow_state = 'locked' AND parent_calendar_event_id IS NOT NULL"
   attr_accessor :import_source
   has_many :zip_file_imports, :as => :context
@@ -181,7 +181,7 @@ class Course < ActiveRecord::Base
   sanitize_field :syllabus_body, Instructure::SanitizeField::SANITIZE
 
   include StickySisFields
-  are_sis_sticky :name, :course_code, :start_at, :conclude_at, :restrict_enrollments_to_course_dates, :enrollment_term_id
+  are_sis_sticky :name, :course_code, :start_at, :conclude_at, :restrict_enrollments_to_course_dates, :enrollment_term_id, :workflow_state
 
   has_a_broadcast_policy
 
@@ -885,21 +885,21 @@ class Course < ActiveRecord::Base
     can :read and can :participate_as_student and can :read_grades
 
     # Prior users
-    given { |user| !self.deleted? && user && self.prior_enrollments.map(&:user_id).include?(user.id) }
+    given { |user| (self.available? || self.completed?) && user && self.prior_enrollments.map(&:user_id).include?(user.id) }
     can :read
 
     # Teacher of a concluded course
-    given { |user| !self.deleted? && user && (self.prior_enrollments.select{|e| e.admin? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && e.admin? }) }
+    given { |user| !self.deleted? && user && (self.prior_enrollments.select{|e| e.admin? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && e.admin? && e.completed? }) }
     can :read and can :read_as_admin and can :read_roster and can :read_prior_roster and can :read_forum and can :use_student_view
 
-    given { |user| !self.deleted? && user && (self.prior_enrollments.select{|e| e.instructor? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && e.instructor? }) }
+    given { |user| !self.deleted? && user && (self.prior_enrollments.select{|e| e.instructor? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && e.instructor? && e.completed? }) }
     can :read_user_notes and can :view_all_grades
 
     given { |user| !self.deleted? && !self.sis_source_id && user && (self.prior_enrollments.select{|e| e.admin? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && e.admin? && e.state_based_on_date == :completed })}
     can :delete
 
     # Student of a concluded course
-    given { |user| !self.deleted? && user && (self.prior_enrollments.select{|e| e.student? || e.assigned_observer? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && (e.student? || e.assigned_observer?) && e.state_based_on_date == :completed }) }
+    given { |user| (self.available? || self.completed?) && user && (self.prior_enrollments.select{|e| e.student? || e.assigned_observer? }.map(&:user_id).include?(user.id) || user.cached_not_ended_enrollments.any? { |e| e.course_id == self.id && (e.student? || e.assigned_observer?) && e.state_based_on_date == :completed }) }
     can :read and can :read_grades and can :read_forum
 
     # Viewing as different role type
@@ -1181,7 +1181,7 @@ class Course < ActiveRecord::Base
   def generate_grade_publishing_csv_output(enrollments, publishing_user, publishing_pseudonym)
     enrollment_ids = []
     res = FasterCSV.generate do |csv|
-      row = ["publisher_id", "publisher_sis_id", "section_id", "section_sis_id", "student_id", "student_sis_id", "enrollment_id", "enrollment_status", "score"]
+      row = ["publisher_id", "publisher_sis_id", "course_id", "course_sis_id", "section_id", "section_sis_id", "student_id", "student_sis_id", "enrollment_id", "enrollment_status", "score"]
       row << "grade" if self.grading_standard_enabled?
       csv << row
       enrollments.each do |enrollment|
@@ -1190,9 +1190,11 @@ class Course < ActiveRecord::Base
         pseudonym_sis_ids = enrollment.user.pseudonyms.active.find_all_by_account_id(self.root_account_id).map{|p| p.sis_user_id}
         pseudonym_sis_ids = [nil] if pseudonym_sis_ids.empty?
         pseudonym_sis_ids.each do |pseudonym_sis_id|
-          row = [publishing_user.try(:id), publishing_pseudonym.try(:sis_user_id), enrollment.course_section.id,
-              enrollment.course_section.sis_source_id, enrollment.user.id, pseudonym_sis_id, enrollment.id,
-              enrollment.workflow_state, enrollment.computed_final_score]
+          row = [publishing_user.try(:id), publishing_pseudonym.try(:sis_user_id),
+                 enrollment.course.id, enrollment.course.sis_source_id,
+                 enrollment.course_section.id, enrollment.course_section.sis_source_id,
+                 enrollment.user.id, pseudonym_sis_id, enrollment.id,
+                 enrollment.workflow_state, enrollment.computed_final_score]
           row << enrollment.computed_final_grade if self.grading_standard_enabled?
           csv << row
         end
@@ -1712,7 +1714,7 @@ class Course < ActiveRecord::Base
     CalendarEvent.process_migration(data, migration);migration.fast_update_progress(90)
     WikiPage.process_migration_course_outline(data, migration);migration.fast_update_progress(95)
 
-    if !migration.copy_options || migration.copy_options[:everything] || migration.copy_options[:all_course_settings]
+    if !migration.copy_options || migration.is_set?(migration.copy_options[:everything]) || migration.is_set?(migration.copy_options[:all_course_settings])
       import_settings_from_migration(data); migration.fast_update_progress(96)
     end
 
@@ -1840,7 +1842,7 @@ class Course < ActiveRecord::Base
     attachments.each_with_index do |file, i|
       cm.fast_update_progress((i.to_f/total) * 18.0) if cm && (i % 10 == 0)
       if !ce || ce.export_object?(file)
-        new_file = file.clone_for(self)
+        new_file = file.clone_for(self, nil, :overwrite => true)
         self.attachment_path_id_lookup[new_file.full_display_path.gsub(/\A#{root_folder_name}/, '')] = new_file.migration_id
         new_folder_id = merge_mapped_id(file.folder)
 
@@ -2210,7 +2212,8 @@ class Course < ActiveRecord::Base
       end
     end
 
-    new_time = ActiveSupport::TimeWithZone.new(Time.utc(new_date.year, new_date.month, new_date.day, (time.hour rescue 0), (time.min rescue 0)), Time.zone) - Time.zone.utc_offset
+    new_time = Time.utc(new_date.year, new_date.month, new_date.day, (time.hour rescue 0), (time.min rescue 0)).in_time_zone
+    new_time -= new_time.utc_offset
     log_merge_result("Events for #{old_date.to_s} moved to #{new_date.to_s}")
     new_time
   end

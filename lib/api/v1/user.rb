@@ -48,6 +48,7 @@ module Api::V1::User
         json[:enrollments] = enrollments.map { |e| enrollment_json(e, current_user, session, includes) }
       end
       json[:email] = user.email if includes.include?('email')
+      json[:locale] = user.locale if includes.include?('locale')
     end
   end
 
@@ -55,7 +56,7 @@ module Api::V1::User
   # if a site admin is making the request or they can manage_students
   def user_json_is_admin?(context = @context, current_user = @current_user)
     @user_json_is_admin ||= {}
-    @user_json_is_admin[[context.id, current_user.id]] ||= (
+    @user_json_is_admin[[context.class.name, context.id, current_user.id]] ||= (
       if context.is_a?(UserProfile)
         permissions_context = permissions_account = @domain_root_account
       else

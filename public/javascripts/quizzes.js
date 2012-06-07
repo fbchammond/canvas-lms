@@ -26,7 +26,7 @@ define([
   'jquery.ajaxJSON' /* ajaxJSON */,
   'jquery.instructure_date_and_time' /* time_field, datetime_field */,
   'jquery.instructure_forms' /* formSubmit, fillFormData, getFormData, formErrors, errorBox */,
-  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jqueryui/dialog',
   'jquery.instructure_misc_helpers' /* replaceTags, scrollSidebar, /\$\.underscore/, truncateText */,
   'jquery.instructure_misc_plugins' /* .dim, confirmDelete, showIf */,
   'jquery.keycodes' /* keycodes */,
@@ -57,7 +57,7 @@ define([
       return this;
     },
 
-    // Determines whether or to show the "show question details" link.
+    // Determines whether or not to show the "show question details" link.
     checkShowDetails: function() {
       var hasQuestions = this.$questions.find('div.display_question:not(.essay_question, .text_only_question)').length;
       this.$showDetailsWrap[hasQuestions ? 'show' : 'hide'](200);

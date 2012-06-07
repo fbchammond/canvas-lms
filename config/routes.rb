@@ -8,10 +8,10 @@ ActionController::Routing::Routes.draw do |map|
   map.inbox_item 'inbox/:id', :controller => 'context', :action => 'inbox_item'
 
   map.discussion_replies 'conversations/discussion_replies', :controller => 'context', :action => 'discussion_replies'
-  map.conversations_unread 'conversations/unread', :controller => 'conversations', :action => 'index', :scope => 'unread'
-  map.conversations_starred 'conversations/starred', :controller => 'conversations', :action => 'index', :scope => 'starred'
-  map.conversations_sent 'conversations/sent', :controller => 'conversations', :action => 'index', :scope => 'sent'
-  map.conversations_archived 'conversations/archived', :controller => 'conversations', :action => 'index', :scope => 'archived'
+  map.conversations_unread 'conversations/unread', :controller => 'conversations', :action => 'index', :redirect_scope => 'unread'
+  map.conversations_starred 'conversations/starred', :controller => 'conversations', :action => 'index', :redirect_scope => 'starred'
+  map.conversations_sent 'conversations/sent', :controller => 'conversations', :action => 'index', :redirect_scope => 'sent'
+  map.conversations_archived 'conversations/archived', :controller => 'conversations', :action => 'index', :redirect_scope => 'archived'
   map.conversations_find_recipients 'conversations/find_recipients', :controller => 'conversations', :action => 'find_recipients'
   map.conversations_mark_all_as_read 'conversations/mark_all_as_read', :controller => 'conversations', :action => 'mark_all_as_read', :conditions => {:method => :post}
   map.conversations_watched_intro 'conversations/watched_intro', :controller => 'conversations', :action => 'watched_intro', :conditions => {:method => :post}
@@ -217,6 +217,7 @@ ActionController::Routing::Routes.draw do |map|
     add_discussions(course)
     course.resources :assignments, :collection => {:syllabus => :get, :submissions => :get}, :member => {:update_submission => :any} do |assignment|
       assignment.resources :submissions do |submission|
+        submission.resubmit_to_turnitin 'turnitin/resubmit', :controller => 'submissions', :action => 'resubmit_to_turnitin', :conditions => {:method => :post}
         submission.turnitin_report 'turnitin/:asset_string', :controller => 'submissions', :action => 'turnitin_report'
       end
       assignment.rubric "rubric", :controller => 'assignments', :action => 'rubric'
@@ -469,7 +470,7 @@ ActionController::Routing::Routes.draw do |map|
     add_question_banks(account)
     account.resources :user_lists, :only => :create
   end
-  map.avatar_image 'images/users/:user_id', :controller => 'users', :action => 'avatar_image_url', :conditions => {:method => :get}
+  map.avatar_image 'images/users/:user_id', :controller => 'users', :action => 'avatar_image', :conditions => {:method => :get}
   map.thumbnail_image 'images/thumbnails/:id/:uuid', :controller => 'files', :action => 'image_thumbnail'
   map.show_thumbnail_image 'images/thumbnails/show/:id/:uuid', :controller => 'files', :action => 'show_thumbnail'
   map.report_avatar_image 'images/users/:user_id/report', :controller => 'users', :action => 'report_avatar_image', :conditions => {:method => :post}
@@ -477,7 +478,7 @@ ActionController::Routing::Routes.draw do |map|
 
   map.menu_courses 'menu_courses', :controller => 'users', :action => 'menu_courses'
   map.all_menu_courses 'all_menu_courses', :controller => 'users', :action => 'all_menu_courses'
-  map.resources :favorites, :only => [:create, :destroy], :collection => 'reset'
+  map.resources :favorites, :only => [:create, :destroy]
 
   map.grades "grades", :controller => "users", :action => "grades"
 
@@ -663,8 +664,11 @@ ActionController::Routing::Routes.draw do |map|
       enrollments.get  'courses/:course_id/enrollments', :action => :index, :path_name => 'course_enrollments'
       enrollments.get  'sections/:section_id/enrollments', :action => :index, :path_name => 'section_enrollments'
       enrollments.get  'users/:user_id/enrollments', :action => :index, :path_name => 'user_enrollments'
+
       enrollments.post 'courses/:course_id/enrollments', :action => :create
       enrollments.post 'sections/:section_id/enrollments', :action => :create
+
+      enrollments.delete 'courses/:course_id/enrollments/:id', :action => :destroy
     end
 
     api.with_options(:controller => :assignments_api) do |assignments|
@@ -751,6 +755,7 @@ ActionController::Routing::Routes.draw do |map|
       pseudonyms.get 'users/:user_id/logins', :action => :index, :path_name => 'user_pseudonyms'
       pseudonyms.post 'accounts/:account_id/logins', :action => :create
       pseudonyms.put 'accounts/:account_id/logins/:id', :action => :update
+      pseudonyms.delete 'users/:user_id/logins/:id', :action => :destroy
     end
 
     api.with_options(:controller => :accounts) do |accounts|
@@ -761,6 +766,7 @@ ActionController::Routing::Routes.draw do |map|
 
     api.with_options(:controller => :role_overrides) do |roles|
       roles.post 'accounts/:account_id/roles', :action => :add_role
+      roles.put 'accounts/:account_id/roles/:role', :action => :update
     end
 
     api.with_options(:controller => :admins) do |admins|
@@ -773,6 +779,7 @@ ActionController::Routing::Routes.draw do |map|
 
     api.get 'users/:user_id/page_views', :controller => :page_views, :action => :index, :path_name => 'user_page_views'
     api.get 'users/:user_id/profile', :controller => :profile, :action => :show
+    api.get 'users/:user_id/avatars', :controller => :profile, :action => :profile_pics
 
     api.with_options(:controller => :conversations) do |conversations|
       conversations.get 'conversations', :action => :index
@@ -785,6 +792,12 @@ ActionController::Routing::Routes.draw do |map|
       conversations.post 'conversations/:id/add_message', :action => :add_message
       conversations.post 'conversations/:id/add_recipients', :action => :add_recipients
       conversations.post 'conversations/:id/remove_messages', :action => :remove_messages
+    end
+
+    api.with_options(:controller => :communication_channels) do |channels|
+      channels.get 'users/:user_id/communication_channels', :action => :index, :path_name => 'communication_channels'
+      channels.post 'users/:user_id/communication_channels', :action => :create
+      channels.delete 'users/:user_id/communication_channels/:id', :action => :destroy
     end
 
     api.with_options(:controller => :services_api) do |services|
@@ -816,6 +829,16 @@ ActionController::Routing::Routes.draw do |map|
       groups.post 'groups/:group_id/files', :action => :create_file
     end
 
+    api.with_options(:controller => :collections) do |collections|
+      collections.resources :collections, :path_prefix => "users/:user_id", :name_prefix => "user_"
+
+      collections.with_options(:controller => :collection_items) do |items|
+        items.resources :items, :path_prefix => "collections/:collection_id", :name_prefix => "collection_", :controller => :collection_items
+        items.put "collections/:collection_id/items/:item_id/upvote", :action => :upvote
+        items.delete "collections/:collection_id/items/:item_id/upvote", :action => :remove_upvote
+      end
+    end
+
     api.post 'files/:id/create_success', :controller => :files, :action => :api_create_success, :path_name => 'files_create_success'
     api.get 'files/:id/create_success', :controller => :files, :action => :api_create_success, :path_name => 'files_create_success'
   end
@@ -827,7 +850,10 @@ ActionController::Routing::Routes.draw do |map|
   map.api_v1_files_create 'files_api', :controller => 'files', :action => 'api_create', :conditions => { :method => :post }
 
   map.oauth2_auth 'login/oauth2/auth', :controller => 'pseudonym_sessions', :action => 'oauth2_auth', :conditions => { :method => :get }
-  map.oauth2_token 'login/oauth2/token',:controller => 'pseudonym_sessions', :action => 'oauth2_token', :conditions => { :method => :post }
+  map.oauth2_token 'login/oauth2/token', :controller => 'pseudonym_sessions', :action => 'oauth2_token', :conditions => { :method => :post }
+  map.oauth2_auth_confirm 'login/oauth2/confirm', :controller => 'pseudonym_sessions', :action => 'oauth2_confirm', :conditions => { :method => :get }
+  map.oauth2_auth_accept 'login/oauth2/accept', :controller => 'pseudonym_sessions', :action => 'oauth2_accept', :conditions => { :method => :post }
+  map.oauth2_auth_deny 'login/oauth2/deny', :controller => 'pseudonym_sessions', :action => 'oauth2_deny', :conditions => { :method => :get }
 
   ApiRouteSet.route(map, "/api/lti/v1") do |lti|
     lti.post "tools/:tool_id/grade_passback", :controller => :lti_api, :action => :grade_passback, :path_name => "lti_grade_passback_api"

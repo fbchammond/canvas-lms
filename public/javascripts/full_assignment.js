@@ -23,7 +23,7 @@ define([
   'str/htmlEscape',
   'jquery.instructure_date_and_time' /* parseFromISO, dateString, timeString, date_field, time_field, datetime_field, /\.timepicker/ */,
   'jquery.instructure_forms' /* formSubmit, fillFormData, getFormData, formErrors */,
-  'jquery.instructure_jquery_patches' /* /\.dialog/ */,
+  'jqueryui/dialog',
   'jquery.instructure_misc_helpers' /* replaceTags, scrollSidebar */,
   'jquery.instructure_misc_plugins' /* ifExists, showIf */,
   'jquery.keycodes' /* keycodes */,
@@ -39,18 +39,19 @@ define([
   // hideFullAssignmentForm;
   // addGroupCategory;
 
+  hideFullAssignmentForm = function(redirect) {
+    var $assignment = $("#full_assignment");
+    var $form = $("#edit_assignment_form");
+    $form.hide();
+    if(wikiSidebar) {
+      wikiSidebar.hide();
+      $("#sidebar_content").show();
+    }
+    $assignment.find(".description").show();
+    $assignment.find(".edit_full_assignment_link").show();
+  };
+
   $(function(){
-    hideFullAssignmentForm = function(redirect) {
-      var $assignment = $("#full_assignment");
-      var $form = $("#edit_assignment_form");
-      $form.hide();
-      if(wikiSidebar) {
-        wikiSidebar.hide();
-        $("#sidebar_content").show();
-      }
-      $assignment.find(".description").show();
-      $assignment.find(".edit_full_assignment_link").show();
-    };
 
     function doFocus(id) {
       if(!$("#" + id).editorBox('focus')) {
@@ -78,17 +79,22 @@ define([
         $form.find("select[name='points_type']").change();
         $form.fillFormData(data, {object_name: 'assignment'});
         $assignment.find(".description, .edit_full_assignment_link").hide();
-        $form.show().find("textarea:first").editorBox();
-        if (wikiSidebar) {
-          wikiSidebar.attachToEditor($form.find("textarea:first"));
-          wikiSidebar.show();
-          $("#sidebar_content").hide();
+        $form.show();
+        if (!ENV.HIDE_DESCRIPTION){
+          $form.find("textarea:first").editorBox();
+          if (wikiSidebar) {
+            wikiSidebar.attachToEditor($form.find("textarea:first"));
+            wikiSidebar.show();
+            $("#sidebar_content").hide();
+          }
         }
         $form.find(".more_options_link").show();
         $form.find(".more_assignment_values").hide();
-        setTimeout(function(){
-          doFocus($form.find("textarea:first").attr('id'));
-        }, 500);
+        if (!ENV.HIDE_DESCRIPTION){
+          setTimeout(function(){
+            doFocus($form.find("textarea:first").attr('id'));
+          }, 500);
+        }
         if (!$form.parents(".ui-dialog").length ) {
           $("html,body").scrollTo($form);
         }
@@ -96,6 +102,18 @@ define([
           $form.find(".assignment_type").change();
         }, 500);
       }
+    }
+
+    // if an assignment is both a discussion assignment and a group assignment then peer reviews
+    // should not be allowed, so disable the checkbox and have it hide the extra peer review settings.
+    function togglePeerReviewAvailability(){
+      var $peerReviewsCheckbox = $edit_assignment_form.find("#assignment_peer_reviews"),
+          disablePeerReview = ($edit_assignment_form.find(".assignment_type").val() === 'discussion_topic') &&
+                              ($edit_assignment_form.find("#assignment_group_assignment").prop('checked'));
+      if (disablePeerReview) {
+        $peerReviewsCheckbox.prop('checked', false).change();
+      }
+      $peerReviewsCheckbox.prop('disabled', disablePeerReview);
     }
 
     if(wikiSidebar) {
@@ -128,6 +146,7 @@ define([
         // show the selector immediately
         $("#edit_external_tool_url").click();
       }
+      togglePeerReviewAvailability();
     }).triggerHandler('change');
     $edit_assignment_form.find(".points_possible").change(function(event) {
       var points = parseFloat($(this).val());
@@ -363,6 +382,7 @@ define([
       if(!$(this).attr('checked')) {
         $("#assignment_group_category").val("");
       }
+      togglePeerReviewAvailability();
     }).change();
     $("#assignment_turnitin_enabled").change(function() {
       $("#assignment_turnitin_settings").showIf($(this).attr('checked'));

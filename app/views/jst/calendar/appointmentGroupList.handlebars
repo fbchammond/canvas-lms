@@ -15,26 +15,26 @@
           </div>
         {{/if}}
         {{#if requiring_action}}
-          <div class="alert-message block-message warning">
-            <p>
+          <div class="alert alert-warning">
+            <div>
               You can <a class="view_calendar_link" href="#">sign up</a> for this.
-            </p>
+            </div>
           </div>
         {{else}}
           {{#if signed_up_times}}
-            <div class="alert-message block-message success">
-              <p>You're signed up for</p>
+            <div class="alert alert-success">
+              <div>You're signed up for</div>
               {{#each signed_up_times}}
-                <p><strong><a href="#" class="show_event_link" data-event-id="{{id}}">{{{formatted_time}}}</a></strong></p>
+                <div><strong><a href="#" class="show_event_link" data-event-id="{{id}}">{{{formatted_time}}}</a></strong></div>
               {{/each}}
             </div>
           {{/if}}
         {{/if}}
 
         <h3><a class="view_calendar_link" href="#">{{title}}</a></h3>
-        {{#if context}}
-          <div class='ag-context'><a href="{{context.url}}">{{context.name}}</a></div>
-        {{/if}}
+        <div class='ag-context'>
+          {{#toSentence contexts}}<a href="{{url}}">{{name}}</a>{{/toSentence}}
+        </div>
         {{#if location_name}}
           <div class="ag-location">
             <strong>{{#t "location"}}Location:{{/t}}</strong>

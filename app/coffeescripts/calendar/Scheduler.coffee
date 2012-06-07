@@ -1,5 +1,6 @@
 define [
   'jquery',
+  'underscore'
   'i18n!calendar'
   'jst/calendar/appointmentGroupList'
   'jst/calendar/schedulerRightSideAdminSection'
@@ -7,11 +8,11 @@ define [
   'compiled/calendar/MessageParticipantsDialog'
   'jst/calendar/deleteItem'
   'jquery.instructure_date_and_time'
-  'jquery.instructure_jquery_patches'
+  'jqueryui/dialog'
   'jquery.instructure_misc_plugins'
   'vendor/jquery.ba-tinypubsub'
   'vendor/jquery.spin'
-], ($, I18n, appointmentGroupListTemplate, schedulerRightSideAdminSectionTemplate, EditAppointmentGroupDialog, MessageParticipantsDialog, deleteItemTemplate) ->
+], ($, _, I18n, appointmentGroupListTemplate, schedulerRightSideAdminSectionTemplate, EditAppointmentGroupDialog, MessageParticipantsDialog, deleteItemTemplate) ->
 
   class Scheduler
     constructor: (selector, @calendar) ->
@@ -33,6 +34,9 @@ define [
         @rightSideAdminSection = $(schedulerRightSideAdminSectionTemplate())
         @rightSideAdminSection.find(".create_link").click @createClick
 
+        @appointmentGroupContexts = _.filter @contexts, (c) ->
+          c.can_create_appointment_groups
+
       $.subscribe "CommonEvent/eventSaved", @eventSaved
       $.subscribe "CommonEvent/eventDeleted", @eventDeleted
 
@@ -40,10 +44,11 @@ define [
       jsEvent.preventDefault()
 
       group = {
-        contexts: @calendar.contexts
+        context_codes: []
+        sub_context_codes: []
       }
 
-      @createDialog = new EditAppointmentGroupDialog(group, @dialogCloseCB)
+      @createDialog = new EditAppointmentGroupDialog(group, @appointmentGroupContexts, @dialogCloseCB)
       @createDialog.show()
 
     dialogCloseCB: (saved) =>
@@ -80,7 +85,7 @@ define [
         # not the last _visible_ element
         @rightSideAdminSection?.detach()
 
-    show: () =>
+    show: =>
       $("#undated-events, #calendar-feed").hide()
       @active = true
       @div.show()
@@ -88,7 +93,7 @@ define [
       @toggleListMode(true)
       $.publish "Calendar/saveVisibleContextListAndClear"
 
-    hide: () =>
+    hide: =>
       $("#undated-events, #calendar-feed").show()
       @active = false
       @div.hide()
@@ -96,13 +101,13 @@ define [
       @calendar.displayAppointmentEvents = null
       $.publish "Calendar/restoreVisibleContextList"
 
-    canManageAGroup: () =>
+    canManageAGroup: =>
       for contextInfo in @contexts
         if contextInfo.can_create_appointment_groups
           return true
       false
 
-    loadData: () =>
+    loadData: =>
       if not @loadingDeferred || (@loadingDeferred && not @loadingDeferred.isResolved())
         @loadingDeferred = new $.Deferred()
 
@@ -115,7 +120,7 @@ define [
         @redraw()
         @loadingDeferred.resolve()
 
-    redraw: () =>
+    redraw: =>
       @loadingDiv.hide()
 
       if @groups
@@ -137,9 +142,8 @@ define [
             for appointmentEvent in group.appointmentEvents
               group.signed_up += appointmentEvent.childEvents.length if appointmentEvent.childEvents
 
-          # look up the context name for the group
-          for contextInfo in @contexts when contextInfo.asset_string == group.context_code
-            group.context = contextInfo
+          # look up the context names for the group
+          group.contexts = _.filter(@contexts, (c) -> c.asset_string in group.context_codes)
 
           group.published = group.workflow_state == "active"
 
@@ -206,12 +210,13 @@ define [
 
         @calendar.displayAppointmentEvents = @viewingGroup
         $.publish "Calendar/refetchEvents"
+        @redraw()
 
     doneClick: (jsEvent) =>
       jsEvent.preventDefault()
       @toggleListMode(true)
 
-    showList: () =>
+    showList: =>
       @div.removeClass('showing-single')
       @listDiv.find('.appointment-group-item').removeClass('active')
 
@@ -223,8 +228,7 @@ define [
       group = @groups?[$(jsEvent.target).closest(".appointment-group-item").data('appointment-group-id')]
       return unless group
 
-      group.contexts = @calendar.contexts
-      @createDialog = new EditAppointmentGroupDialog(group, @dialogCloseCB)
+      @createDialog = new EditAppointmentGroupDialog(group, @appointmentGroupContexts, @dialogCloseCB)
       @createDialog.show()
 
     deleteLinkClick: (jsEvent) =>
@@ -237,14 +241,14 @@ define [
         message: $ deleteItemTemplate(message: I18n.t('confirm_appointment_group_deletion', "Are you sure you want to delete this appointment group?"), details: I18n.t('appointment_group_deletion_details', "Deleting it will also delete any appointments that have been signed up for by students."))
         dialog: {title: I18n.t('confirm_deletion', "Confirm Deletion")}
         prepareData: ($dialog) => {cancel_reason: $dialog.find('#cancel_reason').val() }
-        confirmed: () =>
+        confirmed: =>
           $(jsEvent.target).closest(".appointment-group-item").addClass("event_pending")
-        success: () =>
+        success: =>
           @calendar.dataSource.clearCache()
           @loadData()
 
     messageLinkClick: (jsEvent) =>
       jsEvent.preventDefault()
       group = @groups?[$(jsEvent.target).closest(".appointment-group-item").data('appointment-group-id')]
-      @messageDialog = new MessageParticipantsDialog(group, @calendar.dataSource)
+      @messageDialog = new MessageParticipantsDialog(group: group, dataSource: @calendar.dataSource)
       @messageDialog.show()

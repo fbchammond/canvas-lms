@@ -58,10 +58,11 @@ class SubmissionsController < ApplicationController
     @submission.grants_rights?(@current_user, session)
     @rubric_association = @assignment.rubric_association
     @rubric_association.assessing_user_id = @submission.user_id if @rubric_association
-    @visible_rubric_assessments = @submission.rubric_assessments.select{|a| a.grants_rights?(@current_user, session, :read)[:read]}.sort_by{|a| [a.assessment_type == 'grading' ? '0' : '1', a.assessor_name] }
-
-    unless @submission.grants_right?(@current_user, :read_grade)
+    # can't just check the permission, because peer reviewiers can never read the grade
+    if @assignment.muted? && !@submission.grants_right?(@current_user, :read_grade)
       @visible_rubric_assessments = []
+    else
+      @visible_rubric_assessments = @submission.rubric_assessments.select{|a| a.grants_rights?(@current_user, session, :read)[:read]}.sort_by{|a| [a.assessment_type == 'grading' ? '0' : '1', a.assessor_name] }
     end
 
     @assessment_request = @submission.assessment_requests.find_by_assessor_id(@current_user.id) rescue nil
@@ -130,7 +131,7 @@ class SubmissionsController < ApplicationController
     "media_recording" => ["media_comment_id", "media_comment_type"],
   }
 
-  # @API
+  # @API Submit an assignment
   #
   # Make a submission for an assignment. You must be enrolled as a student in
   # the course/section to do this.
@@ -331,6 +332,21 @@ class SubmissionsController < ApplicationController
       else
         flash[:notice] = t('errors.no_report', "Couldn't find a report for that submission item")
         redirect_to named_context_url(@context, :context_assignment_submission_url, @assignment.id, @submission.user_id)
+      end
+    end
+  end
+
+  def resubmit_to_turnitin
+    if authorized_action(@context, @current_user, [:manage_grades, :view_all_grades])
+      @assignment = @context.assignments.active.find(params[:assignment_id])
+      @submission = @assignment.submissions.find_by_user_id(params[:submission_id])
+      @submission.resubmit_to_turnitin
+      respond_to do |format|
+        format.html { 
+          flash[:notice] = t('resubmitted_to_turnitin', "Successfully resubmitted to turnitin.")
+          redirect_to named_context_url(@context, :context_assignment_submission_url, @assignment.id, @submission.user_id)
+        }
+        format.json { render :nothing => true, :status => :no_content }
       end
     end
   end

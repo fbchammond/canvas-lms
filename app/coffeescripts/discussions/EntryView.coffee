@@ -1,7 +1,8 @@
 define [
   'require'
   'i18n!discussions.entry'
-  'compiled/backbone-ext/Backbone'
+  'Backbone'
+  'underscore'
   'compiled/discussions/EntryCollection'
   'jst/discussions/_entry_content'
   'jst/discussions/_deleted_entry'
@@ -16,10 +17,7 @@ define [
   # entry_with_replies partials
   'jst/_avatar'
   'jst/discussions/_reply_form'
-], (require, I18n, Backbone, EntryCollection, entryContentPartial, deletedEntriesTemplate, entryWithRepliesTemplate, Reply, EntryEditor, MarkAsReadWatcher, htmlEscape, {publish}) ->
-
-  # save memory
-  noop = ->
+], (require, I18n, Backbone, _, EntryCollection, entryContentPartial, deletedEntriesTemplate, entryWithRepliesTemplate, Reply, EntryEditor, MarkAsReadWatcher, htmlEscape, {publish}, KyleMenu) ->
 
   ##
   # View for a single entry
@@ -92,30 +90,17 @@ define [
       super
 
     openMenu: (event, $el) ->
-      @createMenu($el) unless @$menu
-      # open it up on first click
-      @$menu.popup 'open'
-      # stop propagation (EntriesView::handleEntryEvent)
-      false
+      @createMenu($el) unless @menu
 
     createMenu: ($el) ->
-      $el.kyleMenu
+      options =
         appendMenuTo: "body"
         buttonOpts:
           icons:
             primary: null
             secondary: null
-
-      @$menu = $el.data 'kyleMenu'
-
-      # EntriesView::handleEntryEvent won't capture clicks on this
-      # since its appended to the body, so we have to replicate the
-      # event handling here
-      @$menu.delegate '[data-event]', 'click', (event) =>
-        event.preventDefault()
-        $el = $(event.currentTarget)
-        action = $el.data('event')
-        @[action](event, $el)
+      @menu = new KyleMenu $el, options
+      @menu.open()
 
     # circular dep, defined at end of file
     createReplies: ->
@@ -130,23 +115,19 @@ define [
     edit: ->
       @editor ?= new EntryEditor this
       @editor.edit()
-      false
 
     toggleCollapsed: (event, $el) ->
       @model.set 'collapsedView', !@model.get('collapsedView')
 
     addReply: (event, $el) ->
-      event.preventDefault()
       @reply ?= new Reply this
       @model.set 'notification', ''
       @reply.edit()
 
     addReplyAttachment: (event, $el) ->
-      event.preventDefault()
       @reply.addAttachment($el)
 
     removeReplyAttachment: (event, $el) ->
-      event.preventDefault()
       @reply.removeAttachment($el)
 
     goToReply: (event, $el) ->

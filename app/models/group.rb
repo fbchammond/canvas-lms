@@ -54,7 +54,6 @@ class Group < ActiveRecord::Base
   has_many :active_default_wiki_wiki_pages, :class_name => 'WikiPage', :through => :wiki, :source => :wiki_pages, :conditions => ['wiki_pages.workflow_state = ?', 'active']
   has_many :wiki_namespaces, :as => :context, :dependent => :destroy
   has_many :web_conferences, :as => :context, :dependent => :destroy
-  has_many :tags, :class_name => 'ContentTag', :as => 'context', :order => 'LOWER(title)', :dependent => :destroy
   has_many :collaborations, :as => :context, :order => 'title, created_at', :dependent => :destroy
   has_one :scribd_account, :as => :scribdable
   has_many :short_message_associations, :as => :context, :include => :short_message, :dependent => :destroy
@@ -299,13 +298,18 @@ class Group < ActiveRecord::Base
   set_policy do
     given { |user| user && self.participating_group_memberships.find_by_user_id(user.id) }
     can :read and can :read_roster and can :manage and can :manage_content and can :manage_students and can :manage_admin_users and
-      can :manage_files and can :moderate_forum and
+      can :manage_files and
       can :post_to_forum and
       can :send_messages and can :create_conferences and
       can :create_collaborations and can :read_roster and
       can :manage_calendar and
       can :update and can :delete and can :create and
       can :manage_wiki
+
+    # if I am a member of this group and I can moderate_forum in the group's context
+    # (makes it so group members cant edit each other's discussion entries)
+    given { |user, session| user && self.participating_group_memberships.find_by_user_id(user.id) && (!self.context || self.context.grants_right?(user, session, :moderate_forum)) }
+      can :moderate_forum
 
     given { |user| user && self.invited_users.include?(user) }
     can :read

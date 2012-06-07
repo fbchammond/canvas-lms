@@ -27,7 +27,7 @@ class DiscussionEntry < ActiveRecord::Base
   has_many :discussion_subentries, :class_name => 'DiscussionEntry', :foreign_key => "parent_id", :order => :created_at
   has_many :unordered_discussion_subentries, :class_name => 'DiscussionEntry', :foreign_key => "parent_id"
   has_many :flattened_discussion_subentries, :class_name => 'DiscussionEntry', :foreign_key => "root_entry_id"
-  has_many :discussion_entry_participants, :dependent => :destroy
+  has_many :discussion_entry_participants
   belongs_to :discussion_topic, :touch => true
   # null if a root entry
   belongs_to :parent_entry, :class_name => 'DiscussionEntry', :foreign_key => :parent_id
@@ -309,25 +309,6 @@ class DiscussionEntry < ActiveRecord::Base
     end
     dup.message = context.migrate_content_links(self.message, self.context) if options[:migrate]
     dup
-  end
-
-  def self.import_from_migration(hash, context, item, parent, topic)
-    hash = hash.with_indifferent_access
-    hash[:migration_id] ||= hash[:post_id]
-    topic ||= parent.is_a?(DiscussionTopic) ? parent : parent.discussion_topic
-    created = Time.at(hash[:date] / 1000).to_s(:db) rescue Time.now.to_s(:db)
-    hash[:body] = ImportedHtmlConverter.convert_text(hash[:body], context)
-    hash[:body] += "<br/><br/>-#{hash[:author]}" if hash[:author]
-    hash[:body] = self.connection.quote hash[:body]
-    Sanitize.clean(hash[:body], Instructure::SanitizeField::SANITIZE)
-    query = "INSERT INTO discussion_entries (message, discussion_topic_id, parent_id, created_at, updated_at, migration_id)"
-    query += " VALUES (#{hash[:body]},#{topic.id},#{parent.id},'#{created}','#{Time.now.to_s(:db)}','#{hash[:migration_id]}')"
-    self.connection.execute(query)
-
-    hash[:replies].each do |reply|
-      DiscussionEntry.import_from_migration(reply, context, nil, parent, topic)
-    end
-    nil
   end
 
   def context

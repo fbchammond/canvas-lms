@@ -20,7 +20,7 @@ class CalendarEventsApiController < ApplicationController
   include Api::V1::CalendarEvent
 
   before_filter :require_user
-  before_filter :get_context, :only => :create
+  before_filter :get_calendar_context, :only => :create
   before_filter :get_options, :only => :index
 
   def index
@@ -64,7 +64,7 @@ class CalendarEventsApiController < ApplicationController
     if authorized_action(@event, @current_user, :reserve)
       begin
         if params[:participant_id] && @event.appointment_group.grants_right?(@current_user, session, :manage)
-          participant = @event.appointment_group.possible_participants.find_by_id(params[:participant_id].to_i)
+          participant = @event.appointment_group.possible_participants.detect { |p| p.id == params[:participant_id].to_i }
         else
           participant = @event.appointment_group.participant_for(@current_user)
           participant = nil if participant && params[:participant_id] && params[:participant_id].to_i != participant.id
@@ -118,7 +118,7 @@ class CalendarEventsApiController < ApplicationController
 
   protected
 
-  def get_context
+  def get_calendar_context
     @context = Context.find_by_asset_string(params[:calendar_event].delete(:context_code)) if params[:calendar_event] && params[:calendar_event][:context_code]
     raise ActiveRecord::RecordNotFound unless @context
   end

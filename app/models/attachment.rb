@@ -148,8 +148,9 @@ class Attachment < ActiveRecord::Base
       self.save!
     end
     existing = context.attachments.active.find_by_id(self.id)
-    existing ||= context.attachments.active.find_by_cloned_item_id(self.cloned_item_id || 0)
+    existing ||= self.cloned_item_id ? context.attachments.active.find_by_cloned_item_id(self.cloned_item_id) : nil
     return existing if existing && !options[:overwrite] && !options[:force_copy]
+    existing ||= self.cloned_item_id ? context.attachments.find_by_cloned_item_id(self.cloned_item_id) : nil
     dup ||= Attachment.new
     dup = existing if existing && options[:overwrite]
     self.attributes.delete_if{|k,v| [:id, :uuid, :folder_id, :user_id, :filename].include?(k.to_sym) }.each do |key, val|
@@ -414,6 +415,10 @@ class Attachment < ActiveRecord::Base
     end
   end
 
+  def namespace
+    read_attribute(:namespace) || (new_record? ? write_attribute(:namespace, infer_namespace) : nil)
+  end
+
   def infer_namespace
     # If you are thinking about changing the format of this, take note: some
     # code relies on the namespace as a hacky way to efficiently get the
@@ -582,7 +587,11 @@ class Attachment < ActiveRecord::Base
   def self.s3_config
     # Return existing value, even if nil, as long as it's defined
     return @s3_config if defined?(@s3_config)
-    @s3_config ||= YAML.load_file(RAILS_ROOT + "/config/amazon_s3.yml")[RAILS_ENV] rescue nil
+    @s3_config ||= YAML.load_file(RAILS_ROOT + "/config/amazon_s3.yml")[RAILS_ENV].symbolize_keys rescue nil
+  end
+
+  def s3_config
+    @s3_config ||= (self.class.s3_config || {}).merge(PluginSetting.settings_for_plugin('s3').symbolize_keys || {})
   end
   
   def self.file_store_config
@@ -653,6 +662,9 @@ class Attachment < ActiveRecord::Base
         :thumbnails => { :thumb => '200x50' }, 
         :thumbnail_class => 'Thumbnail'
     )
+    def bucket_name
+      s3_config[:bucket_name]
+    end
   end
 
   def content_type_with_encoding

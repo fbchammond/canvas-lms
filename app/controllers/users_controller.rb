@@ -153,7 +153,7 @@ class UsersController < ApplicationController
     end
   end
 
-  # @API
+  # @API List users
   # Retrieve the list of users associated with this account.
   #
   # @example_response
@@ -206,12 +206,12 @@ class UsersController < ApplicationController
     return render_unauthorized_action(@user) unless @user.can_masquerade?(@real_current_user || @current_user, @domain_root_account)
     if request.post?
       if @user == @real_current_user
-        session[:become_user_id] = nil
+        session.delete(:become_user_id)
       else
         session[:become_user_id] = params[:user_id]
       end
       return_url = session[:masquerade_return_to]
-      session[:masquerade_return_to] = nil
+      session.delete(:masquerade_return_to)
       return return_to(return_url, request.referer || dashboard_url)
     end
   end
@@ -235,13 +235,14 @@ class UsersController < ApplicationController
 
   include Api::V1::StreamItem
 
-  # @API
+  # @API List the activity stream
   # Returns the current user's global activity stream.
   #
   # The response is currently hard-coded to the last 2 weeks or 21 total items.
   #
   # There are many types of objects that can be returned in the activity
   # stream. All object types have the same basic set of shared attributes:
+  #   !!!javascript
   #   {
   #     'created_at': '2011-07-13T09:12:00Z',
   #     'updated_at': '2011-07-25T08:52:41Z',
@@ -252,40 +253,46 @@ class UsersController < ApplicationController
   #     'context_type': 'course', // course|group
   #     'course_id': 1,
   #     'group_id': null,
+  #     'html_url': "http://..." // URL to the Canvas web UI for this stream item
   #   }
   #
   # In addition, each item type has its own set of attributes available.
   #
   # DiscussionTopic:
   #
+  #   !!!javascript
   #   {
   #     'type': 'DiscussionTopic',
   #     'discussion_topic_id': 1234,
   #     'total_root_discussion_entries': 5,
-  #     'require_initial_post' => true,
-  #     'user_has_posted' => true,
+  #     'require_initial_post': true,
+  #     'user_has_posted': true,
   #     'root_discussion_entries': {
   #       ...
   #     }
   #   }
+  #
   # For DiscussionTopic, the message is truncated at 4kb.
   #
   # Announcement:
   #
+  #   !!!javascript
   #   {
   #     'type': 'Announcement',
   #     'announcement_id': 1234,
   #     'total_root_discussion_entries': 5,
-  #     'require_initial_post' => true,
-  #     'user_has_posted' => null,
+  #     'require_initial_post': true,
+  #     'user_has_posted': null,
   #     'root_discussion_entries': {
   #       ...
   #     }
   #   }
+  #
   # For Announcement, the message is truncated at 4kb.
   #
   # Conversation:
   #
+  #   !!!javascript
   #   {
   #     'type': 'Conversation',
   #     'conversation_id': 1234,
@@ -295,6 +302,7 @@ class UsersController < ApplicationController
   #
   # Message:
   #
+  #   !!!javascript
   #   {
   #     'type': 'Message',
   #     'message_id': 1234,
@@ -303,6 +311,7 @@ class UsersController < ApplicationController
   #
   # Submission:
   #
+  #   !!!javascript
   #   {
   #     'type': 'Submission',
   #     'grade': '12',
@@ -316,6 +325,7 @@ class UsersController < ApplicationController
   #
   # Conference:
   #
+  #   !!!javascript
   #   {
   #     'type': 'Conference',
   #     'web_conference_id': 1234
@@ -323,6 +333,7 @@ class UsersController < ApplicationController
   #
   # Collaboration:
   #
+  #   !!!javascript
   #   {
   #     'type': 'Collaboration',
   #     'collaboration_id': 1234
@@ -356,7 +367,7 @@ class UsersController < ApplicationController
   end
 
   include Api::V1::TodoItem
-  # @API
+  # @API List the TODO items
   # Returns the current user's list of todo items, as seen on the user dashboard.
   #
   # There is a limit to the number of items returned.
@@ -414,7 +425,7 @@ class UsersController < ApplicationController
     render :json => { :hidden => true }
   end
 
-  # @API
+  # @API Upload a file
   #
   # Upload a file to the user's personal files section.
   #
@@ -528,13 +539,16 @@ class UsersController < ApplicationController
   end
 
   include Api::V1::User
-  # @API
+  include Api::V1::Avatar
+
+  # @API Create a user
   # Create and return a new user and pseudonym for an account.
   #
   # @argument user[name] [Optional] The full name of the user. This name will be used by teacher for grading.
   # @argument user[short_name] [Optional] User's name as it will be displayed in discussions, messages, and comments.
   # @argument user[sortable_name] [Optional] User's name as used to sort alphabetically in lists.
-  # @argument user[time_zone] [Optional] The time zone for the user. Allowed time zones are listed [here](http://rubydoc.info/docs/rails/2.3.8/ActiveSupport/TimeZone).
+  # @argument user[time_zone] [Optional] The time zone for the user. Allowed time zones are listed in {http://rubydoc.info/docs/rails/2.3.8/ActiveSupport/TimeZone The Ruby on Rails documentation}.
+  # @argument user[locale] [Optional] The user's preferred language as a two-letter ISO 639-1 code. Current supported languages are English ("en") and Spanish ("es").
   # @argument pseudonym[unique_id] User's login ID.
   # @argument pseudonym[password] [Optional] User's password.
   # @argument pseudonym[sis_user_id] [Optional] [Integer] SIS ID for the user's account. To set this parameter, the caller must be able to manage SIS permissions.
@@ -596,7 +610,13 @@ class UsersController < ApplicationController
         flash[:user_id] = @user.id
         flash[:pseudonym_id] = @pseudonym.id
         format.html { redirect_to registered_url }
-        format.json { api_request? ? render(:json => user_json(@user, @current_user, session)) : render(:json => data) }
+        format.json {
+          if api_request?
+            render(:json => user_json(@user, @current_user, session, %w{locale}))
+          else
+            render(:json => data)
+          end
+        }
       end
     else
       respond_to do |format|
@@ -619,37 +639,102 @@ class UsersController < ApplicationController
     end
   end
 
-  # @API
+  # @API Edit a user
   # Modify an existing user. To modify a user's login, see the documentation for logins.
+  #
   # @argument user[name] [Optional] The full name of the user. This name will be used by teacher for grading.
   # @argument user[short_name] [Optional] User's name as it will be displayed in discussions, messages, and comments.
   # @argument user[sortable_name] [Optional] User's name as used to sort alphabetically in lists.
   # @argument user[time_zone] [Optional] The time zone for the user. Allowed time zones are listed in {http://rubydoc.info/docs/rails/2.3.8/ActiveSupport/TimeZone The Ruby on Rails documentation}.
+  # @argument user[locale] [Optional] The user's preferred language as a two-letter ISO 639-1 code. Current supported languages are English ("en") and Spanish ("es").
+  # @argument user[avatar][token] [Optional] A unique representation of the avatar record to assign as the user's current avatar. This token can be obtained from the user avatars endpoint. This supersedes the user[avatar][url] argument, and if both are included the url will be ignored. Note: this is an internal representation and is subject to change without notice. It should be consumed with this api endpoint and used in the user update endpoint, and should not be constructed by the client.
+  # @argument user[avatar][url] [Optional] To set the user's avatar to point to an external url, do not include a token and instead pass the url here. Warning: For maximum compatibility, please use 50 px square images.
+  #
+  # @example_request
+  #
+  #   curl 'http://<canvas>/api/v1/users/133.json' \ 
+  #        -X PUT \ 
+  #        -F 'user[name]=Sheldon Cooper' \ 
+  #        -F 'user[short_name]=Shelly' \ 
+  #        -F 'user[time_zone]=Pacific Time (US & Canada)' \ 
+  #        -F 'user[avatar][token]=<opaque_token>' \ 
+  #        -H "Authorization: Bearer <token>"
+  #
+  # @example_response
+  #
+  #   {
+  #     "id":133,
+  #     "login_id":"sheldor@example.com",
+  #     "name":"Sheldon Cooper",
+  #     "short_name":"Shelly",
+  #     "sortable_name":"Cooper, Sheldon",
+  #     "avatar_url":"http://<canvas>/images/users/133-..."
+  #   }
   def update
     @user = api_request? ?
       api_find(User, params[:id]) :
       params[:id] ? User.find(params[:id]) : @current_user
-    rename = params[:rename] || api_request?
-    if (!rename ? authorized_action(@user, @current_user, :manage) : authorized_action(@user, @current_user, :rename))
-      if rename
-        params[:default_pseudonym_id] = nil
-        managed_attributes = [:name, :short_name, :sortable_name]
-        managed_attributes << :time_zone if @user.grants_right?(@current_user, nil, :manage_user_details)
-        params[:user] = params[:user].slice(*managed_attributes)
+
+    if params[:default_pseudonym_id] && authorized_action(@user, @current_user, :manage)
+      @default_pseudonym = @user.pseudonyms.find(params[:default_pseudonym_id])
+      @default_pseudonym.move_to_top
+    end
+
+    managed_attributes = []
+    managed_attributes.concat [:name, :short_name, :sortable_name] if @user.grants_right?(@current_user, nil, :rename)
+    if @user.grants_right?(@current_user, nil, :manage_user_details)
+      managed_attributes.concat([:time_zone, :locale])
+    end
+
+    if @user.grants_right?(@current_user, nil, :update_avatar)
+      avatar = params[:user].delete(:avatar)
+
+      # delete any avatar_image passed, because we only allow updating avatars
+      # based on [:avatar][:token].
+      params[:user].delete(:avatar_image)
+
+      managed_attributes << :avatar_image
+      if token = avatar.try(:[], :token)
+        if av_json = avatar_for_token(@user, token)
+          params[:user][:avatar_image] = { :type => av_json['type'],
+            :url => av_json['url'] }
+        end
+      elsif url = avatar.try(:[], :url)
+        params[:user][:avatar_image] = { :type => 'external', :url => url }
       end
-      if params[:default_pseudonym_id] && @user == @current_user
-        @default_pseudonym = @user.pseudonyms.find(params[:default_pseudonym_id])
-        @default_pseudonym.move_to_top
+    end
+
+    user_params = params[:user].slice(*managed_attributes)
+
+    if user_params == params[:user]
+      # admins can update avatar images even if they are locked
+      admin_avatar_update = user_params[:avatar_image] &&
+        @user.grants_right?(@current_user, nil, :update_avatar) &&
+        @user.grants_right?(@current_user, nil, :manage_user_details)
+
+      if admin_avatar_update
+        old_avatar_state = @user.avatar_state
+        @user.avatar_state = 'submitted'
       end
+
       respond_to do |format|
-        if @user.update_attributes(params[:user])
+        if @user.update_attributes(user_params)
+          if admin_avatar_update
+            @user.avatar_state = (old_avatar_state == :locked ? old_avatar_state : 'approved')
+            @user.save
+          end
           flash[:notice] = t('user_updated', 'User was successfully updated.')
           format.html { redirect_to user_url(@user) }
-          format.json { render :json => user_json(@user, @current_user, session, [], @current_user.pseudonym.account) }
+          format.json {
+            render :json => user_json(@user, @current_user, session, %w{locale avatar_url},
+              @current_user.pseudonym.account) }
         else
           format.html { render :action => "edit" }
+          format.json { render :json => @user.errors, :status => :bad_request }
         end
       end
+    else
+      render_unauthorized_action(@user)
     end
   end
 
@@ -706,7 +791,7 @@ class UsersController < ApplicationController
     if @user_about_to_go_away && @user_that_will_still_be_around && @user_about_to_go_away.id.to_s == params[:user_id]
       @user_about_to_go_away.move_to_user(@user_that_will_still_be_around)
       @user_that_will_still_be_around.touch
-      session[:merge_user_uuid] = nil
+      session.delete(:merge_user_uuid)
       flash[:notice] = t('user_merge_success', "User merge succeeded! %{first_user} and %{second_user} are now one and the same.", :first_user => @user_that_will_still_be_around.name, :second_user => @user_about_to_go_away.name)
     else
       flash[:error] = t('user_merge_fail', "User merge failed. Please make sure you have proper permission and try again.")
@@ -734,7 +819,7 @@ class UsersController < ApplicationController
       if @other_user && @other_user.grants_right?(@current_user, session, :manage_logins)
         session[:merge_user_id] = @user.id
         session[:merge_user_uuid] = @user.uuid
-        session[:pending_user_id] = nil
+        session.delete(:pending_user_id)
       else
         @other_user = nil
       end
@@ -931,13 +1016,14 @@ class UsersController < ApplicationController
     end
   end
 
-  def avatar_image_url
+  def avatar_image
     cancel_cache_buster
     return redirect_to(params[:fallback] || '/images/no_pic.gif') unless service_enabled?(:avatars)
     # TODO: remove support for specifying user ids by id, require using
     # the encrypted version. We can't do it right away because there are
     # a bunch of places that will have cached fragments using the old
     # style.
+    return redirect_to(params[:fallback] || '/images/no_pic.gif') unless service_enabled?(:avatars)
     user_id = params[:user_id].to_i
     if params[:user_id].present? && params[:user_id].match(/-/)
       user_id = User.user_id_from_avatar_key(params[:user_id])
@@ -952,7 +1038,7 @@ class UsersController < ApplicationController
       end
     end
     fallback = User.avatar_fallback_url(params[:fallback], request)
-    redirect_to url.blank? ?
+    redirect_to (url.blank? || url == "%{fallback}") ?
       fallback :
       url.sub(CGI.escape("%{fallback}"), CGI.escape(fallback))
   end

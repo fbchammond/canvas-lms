@@ -1,3 +1,4 @@
+# coding: utf-8
 #
 # Copyright (C) 2011 Instructure, Inc.
 #
@@ -677,6 +678,25 @@ describe Attachment do
       @a.namespace = "_localstorage_/#{@account.file_namespace}"
       @a.root_account_id.should == @account.id
     end
+
+    it "should immediately infer the namespace if not yet set" do
+      Attachment.domain_namespace = nil
+      @a = Attachment.new(:context => @course)
+      @a.should be_new_record
+      @a.read_attribute(:namespace).should be_nil
+      @a.namespace.should_not be_nil
+      @a.read_attribute(:namespace).should_not be_nil
+      @a.root_account_id.should == @account.id
+    end
+
+    it "should not infer the namespace if it's not a new record" do
+      Attachment.domain_namespace = nil
+      attachment_model(:context => submission_model)
+      @attachment.should_not be_new_record
+      @attachment.read_attribute(:namespace).should be_nil
+      @attachment.namespace.should be_nil
+      @attachment.read_attribute(:namespace).should be_nil
+    end
   end
 
   context "encoding detection" do
@@ -731,9 +751,30 @@ describe Attachment do
       @attachment.should be_scribdable
       Attachment.clear_cached_mime_ids
       @shard1.activate do
+        # need to create a context on this shard
+        @context = course_model(:account => Account.create!)
         attachment_model(:content_type => 'pdf')
         @attachment.should be_scribdable
       end
+    end
+  end
+
+  context "s3" do
+    it "should support setting bucket via PluginSetting" do
+      Setting.set("file_storage_test_override", "s3")
+      Attachment.stubs(:s3_config).returns({:bucket_name => 'yml_bucket'})
+      ps = PluginSetting.create!(:name => 's3', :settings => { :bucket_name => 'pluginsetting_bucket' })
+      # if the test environment isn't configured for s3, the plugin never got created,
+      # and the settings will never be considered valid
+      ps.any_instantiation.stubs(:valid_settings?).returns(true)
+      Attachment.domain_namespace = nil
+      attachment_model
+      @attachment.s3_config[:bucket_name].should == 'pluginsetting_bucket'
+      # if local storage is configured, this will return "no-bucket"
+      @attachment.stubs(:bucket_name).returns('pluginsetting_bucket')
+
+      # thumbnails should use the same bucket as the attachment they are parented to
+      Thumbnail.new(:attachment => @attachment).bucket_name.should == 'pluginsetting_bucket'
     end
   end
 end

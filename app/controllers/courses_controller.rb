@@ -27,7 +27,7 @@ class CoursesController < ApplicationController
 
   include Api::V1::Course
 
-  # @API
+  # @API List your courses
   # Returns the list of active courses for the current user.
   #
   # @argument enrollment_type [optional, "teacher"|"student"|"ta"|"observer"|"designer"]
@@ -95,14 +95,14 @@ class CoursesController < ApplicationController
     end
   end
 
-  # @API
+  # @API Create a new course
   # Create a new course
   #
   # @argument account_id [Integer] The unique ID of the account to create to course under.
   # @argument course[name] [String] [optional] The name of the course. If omitted, the course will be named "Unnamed Course."
   # @argument course[course_code] [String] [optional] The course code for the course.
   # @argument course[start_at] [Datetime] [optional] Course start date in ISO8601 format, e.g. 2011-01-01T01:00Z
-  # @argument course[conclude_at] [Datetime] [optional] Course end date in ISO8601 format. e.g. 2011-01-01T01:00Z
+  # @argument course[end_at] [Datetime] [optional] Course end date in ISO8601 format. e.g. 2011-01-01T01:00Z
   # @argument course[license] [String] [optional] The name of the licensing. Should be one of the following abbreviations (a descriptive name is included in parenthesis for reference): 'private' (Private Copyrighted); 'cc_by_nc_nd' (CC Attribution Non-Commercial No Derivatives); 'cc_by_nc_sa' (CC Attribution Non-Commercial Share Alike); 'cc_by_nc' (CC Attribution Non-Commercial); 'cc_by_nd' (CC Attribution No Derivatives); 'cc_by_sa' (CC Attribution Share Alike); 'cc_by' (CC Attribution); 'public_domain' (Public Domain).
   # @argument course[is_public] [Boolean] [optional] Set to true if course if public.
   # @argument course[public_description] [String] [optional] A publicly visible description of the course.
@@ -128,6 +128,17 @@ class CoursesController < ApplicationController
       end
 
       sis_course_id = params[:course].delete(:sis_course_id)
+
+      # accept end_at as an alias for conclude_at. continue to accept
+      # conclude_at for legacy support, and return conclude_at only if
+      # the user uses that name.
+      course_end = if params[:course][:end_at].present?
+                     params[:course][:conclude_at] = params[:course].delete(:end_at)
+                     :end_at
+                   else
+                     :conclude_at
+                   end
+
       @course = (@sub_account || @account).courses.build(params[:course])
       @course.sis_source_id = sis_course_id if api_request? && @account.grants_right?(@current_user, :manage_sis)
       @course.offer if api_request? and params[:offer].present?
@@ -138,7 +149,7 @@ class CoursesController < ApplicationController
             @course,
             @current_user,
             session,
-            [:start_at, :conclude_at, :license, :publish_grades_immediately,
+            [:start_at, course_end, :license, :publish_grades_immediately,
              :is_public, :allow_student_assignment_edits, :allow_wiki_comments,
              :allow_student_forum_attachments, :open_enrollment, :self_enrollment,
              :root_account_id, :account_id, :public_description,
@@ -153,7 +164,7 @@ class CoursesController < ApplicationController
     end
   end
 
-  # @API
+  # @API Upload a file
   #
   # Upload a file to the course.
   #
@@ -207,7 +218,7 @@ class CoursesController < ApplicationController
 
   include Api::V1::User
 
-  # @API
+  # @API List course sections
   # Returns the list of sections for this course.
   #
   # @argument include[] [optional, "students"] Associations to include with the group.
@@ -261,7 +272,8 @@ class CoursesController < ApplicationController
     end
   end
 
-  # @API
+  # @API List students
+  #
   # Returns the list of students enrolled in this course.
   #
   # @response_field id The unique identifier for the student.
@@ -283,9 +295,9 @@ class CoursesController < ApplicationController
     end
   end
 
-  # @API
+  # @API List users
   # Returns the list of users in this course. And optionally the user's enrollments
-  #   in the course.
+  # in the course.
   #
   # @argument enrollment_type [optional, "teacher"|"student"|"ta"|"observer"|"designer"]
   #   When set, only return users where the user is enrolled as this type.
@@ -333,7 +345,7 @@ class CoursesController < ApplicationController
   end
 
   include Api::V1::StreamItem
-  # @API
+  # @API Course activity stream
   # Returns the current user's course-specific activity stream.
   #
   # For full documentation, see the API documentation for the user activity
@@ -346,7 +358,7 @@ class CoursesController < ApplicationController
   end
 
   include Api::V1::TodoItem
-  # @API
+  # @API Course TODO items
   # Returns the current user's course-specific todo items.
   #
   # For full documentation, see the API documentation for the user todo items, in the user api.
@@ -359,7 +371,7 @@ class CoursesController < ApplicationController
     end
   end
 
-  # @API
+  # @API Conclude a course
   # Delete or conclude an existing course
   #
   # @argument event [String] ["delete"|"conclude"] The action to take on the course. available options are 'delete' and 'conclude.'
@@ -481,7 +493,7 @@ class CoursesController < ApplicationController
         @pending_enrollment.reject!
         flash[:notice] = t('notices.invitation_cancelled', "Invitation canceled.")
       end
-      session[:enrollment_uuid] = nil
+      session.delete(:enrollment_uuid)
       if @current_user
         redirect_to dashboard_url
       else
@@ -501,9 +513,10 @@ class CoursesController < ApplicationController
           @pending_enrollment = nil
           return false
         end
-      elsif !@current_user && @pending_enrollment.user.registered?
+      elsif !@current_user && @pending_enrollment.user.registered? || !@pending_enrollment.user.email_channel
         session[:return_to] = course_url(@context.id)
         flash[:notice] = t('notices.login_to_accept', "You'll need to log in before you can accept the enrollment.")
+        return redirect_to login_url(:re_login => 1) if @current_user
         redirect_to login_url
       else
         # defer to CommunicationChannelsController#confirm for the logic of merging users
@@ -571,9 +584,9 @@ class CoursesController < ApplicationController
         e.accept!
         flash[:notice] = t('notices.invitation_accepted', "Invitation accepted!  Welcome to %{course}!", :course => @context.name)
       end
-      session[:accepted_enrollment_uuid] = nil
-      session[:enrollment_uuid_course_id] = nil
-      session[:enrollment_uuid] = nil if session[:enrollment_uuid] == session[:accepted_enrollment_uuid]
+      session.delete(:accepted_enrollment_uuid)
+      session.delete(:enrollment_uuid_course_id)
+      session.delete(:enrollment_uuid) if session[:enrollment_uuid] == session[:accepted_enrollment_uuid]
     end
     false
   end
@@ -663,7 +676,7 @@ class CoursesController < ApplicationController
     store_location if @context.created?
     if session[:saved_course_uuid] == @context.uuid
       @context_just_saved = true
-      session[:saved_course_uuid] = nil
+      session.delete(:saved_course_uuid)
     end
     return unless session[:claimed_course_uuids] && session[:claimed_enrollment_uuids]
     if session[:claimed_course_uuids].include?(@context.uuid)
@@ -680,7 +693,7 @@ class CoursesController < ApplicationController
   end
   protected :check_unknown_user
 
-  # @API
+  # @API Get a single course
   # Return information on a single course.
   #
   # Accepts the same include[] parameters as the list action, and returns a
@@ -721,10 +734,7 @@ class CoursesController < ApplicationController
       return redirect_to course_settings_path(@context.id)
     end
 
-    enrollment = @context_enrollment || @pending_enrollment
-    start_date = enrollment.enrollment_dates.map(&:first).compact.min if enrollment && enrollment.state_based_on_date == :inactive
-    @unauthorized_message = t('unauthorized.unpublished', "This course has not been published by the instructor yet.") if enrollment && @context.claimed?
-    @unauthorized_message = t('unauthorized.not_started_yet', "The course you are trying to access has not started yet.  It will start %{date}.", :date => TextHelper.date_string(start_date)) if start_date && start_date > Time.now
+    @context_enrollment ||= @pending_enrollment
     if is_authorized_action?(@context, @current_user, :read)
       if @current_user && @context.grants_right?(@current_user, session, :manage_grades)
         @assignments_needing_publishing = @context.assignments.active.need_publishing || []
@@ -763,7 +773,7 @@ class CoursesController < ApplicationController
         @current_conferences = @context.web_conferences.select{|c| c.active? && c.users.include?(@current_user) }
       end
 
-      if @current_user and (@show_recent_feedback = (@current_user.student_enrollments.active.count > 0))
+      if @current_user and (@show_recent_feedback = @context.user_is_student?(@current_user))
         @recent_feedback = (@current_user && @current_user.recent_feedback(:contexts => @contexts)) || []
       end
     else
@@ -778,7 +788,7 @@ class CoursesController < ApplicationController
     @enrollments = @context.enrollments.scoped({:conditions => ['workflow_state = ?', 'active']}).for_user(@current_user)
     @enrollment = @enrollments.sort_by{|e| [e.state_sortable, e.rank_sortable] }.first
     if params[:role] == 'revert'
-      session["role_course_#{@context.id}"] = nil
+      session.delete("role_course_#{@context.id}")
       flash[:notice] = t('notices.role_restored', "Your default role and permissions have been restored")
     elsif (@enrollment && @enrollment.can_switch_to?(params[:role])) || @context.grants_right?(@current_user, session, :manage_admin_users)
       @temp_enrollment = Enrollment.typed_enrollment(params[:role]).new rescue nil
@@ -805,9 +815,7 @@ class CoursesController < ApplicationController
   def conclude_user
     get_context
     @enrollment = @context.enrollments.find(params[:id])
-    can_remove = @enrollment.is_a?(StudentEnrollment) && @context.grants_right?(@current_user, session, :manage_students)
-    can_remove ||= @context.grants_right?(@current_user, session, :manage_admin_users)
-    if can_remove
+    if @enrollment.can_be_concluded_by(@current_user, @context, session)
       respond_to do |format|
         if @enrollment.conclude
           format.json { render :json => @enrollment.to_json }
@@ -858,11 +866,7 @@ class CoursesController < ApplicationController
   def unenroll_user
     get_context
     @enrollment = @context.enrollments.find(params[:id])
-    can_remove = [StudentEnrollment, ObserverEnrollment].include?(@enrollment.class) && @context.grants_right?(@current_user, session, :manage_students)
-    can_remove ||= @context.grants_right?(@current_user, session, :manage_admin_users)
-    # Teachers can't unenroll themselves unless they could re-add themselves by using account permissions
-    can_remove &&= @enrollment.user_id != @current_user.id || @context.account.grants_right?(@current_user, session, :manage_admin_users)
-    if can_remove
+    if @enrollment.can_be_deleted_by(@current_user, @context, session)
       respond_to do |format|
         if (!@enrollment.defined_by_sis? || @context.grants_right?(@current_user, session, :manage_account_settings)) && @enrollment.destroy
           format.json { render :json => @enrollment.to_json }
@@ -980,9 +984,6 @@ class CoursesController < ApplicationController
       args[:abstract_course] = @context.abstract_course
       args[:account] = account
       @course = @context.account.courses.new
-      @context.attributes.slice(*Course.clonable_attributes.map(&:to_s)).keys.each do |attr|
-        @course.send("#{attr}=", @context.send(attr))
-      end
       @course.attributes = args
       @course.workflow_state = 'claimed'
       @course.save
@@ -1110,15 +1111,15 @@ class CoursesController < ApplicationController
       @fake_student = @context.student_view_student
       session[:become_user_id] = @fake_student.id
       return_url = course_path(@context)
-      session[:masquerade_return_to] = nil
+      session.delete(:masquerade_return_to)
       return return_to(return_url, request.referer || dashboard_url)
     end
   end
 
   def leave_student_view
-    session[:become_user_id] = nil
+    session.delete(:become_user_id)
     return_url = session[:masquerade_return_to]
-    session[:masquerade_return_to] = nil
+    session.delete(:masquerade_return_to)
     return return_to(return_url, request.referer || dashboard_url)
   end
 end

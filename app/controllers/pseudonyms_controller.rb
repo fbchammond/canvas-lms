@@ -1,4 +1,4 @@
-#
+
 # Copyright (C) 2011-2012 Instructure, Inc.
 #
 # This file is part of Canvas.
@@ -26,7 +26,7 @@ class PseudonymsController < ApplicationController
 
   include Api::V1::Pseudonym
 
-  # @API
+  # @API List user logins
   # Given a user ID, return that user's logins for the given account.
   #
   # @argument user[id] The ID of the user to search on.
@@ -144,7 +144,7 @@ class PseudonymsController < ApplicationController
     @pseudonym = @current_user.pseudonyms.build(:account_id => @domain_root_account.id)
   end
 
-  # @API
+  # @API Create a user login
   # Create a new login for an existing user in the given account.
   #
   # @argument user[id] The ID of the user to create the login for.
@@ -211,7 +211,7 @@ class PseudonymsController < ApplicationController
   end
   protected :get_user
 
-  # @API
+  # @API Edit a user login
   # Update an existing login for a user in the given account.
   #
   # @argument login[unique_id] The new unique ID for the login.
@@ -263,6 +263,22 @@ class PseudonymsController < ApplicationController
     end
   end
 
+  # @API Delete a user login
+  # Delete an existing login.
+  #
+  # @example_request
+  #   curl https://<canvas>/api/v1/users/:user_id/logins/:login_id \ 
+  #     -H "Authorization: Bearer <ACCESS-TOKEN>" \ 
+  #     -X DELETE
+  #
+  # @example_response
+  #   {
+  #     "unique_id": "bieber@example.com",
+  #     "sis_user_id": null,
+  #     "account_id": 1,
+  #     "id": 12345,
+  #     "user_id": 2
+  #   }
   def destroy
     return unless get_user
     return unless @user == @current_user || authorized_action(@user, @current_user, :manage_logins)
@@ -273,7 +289,9 @@ class PseudonymsController < ApplicationController
     elsif @pseudonym.sis_user_id && !@pseudonym.account.grants_right?(@current_user, session, :manage_sis)
       return render_unauthorized_action(@pseudonym)
     elsif @pseudonym.destroy(@user.grants_right?(@current_user, session, :manage_logins))
-      render :json => @pseudonym.to_json
+      api_request? ?
+        render(:json => pseudonym_json(@pseudonym, @current_user, session)) :
+        render(:json => @pseudonym.to_json)
     else
       render :json => @pseudonym.errors.to_json, :status => :bad_request
     end

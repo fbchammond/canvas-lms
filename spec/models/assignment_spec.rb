@@ -97,53 +97,75 @@ describe Assignment do
     @submission.graded_at.should_not eql original_graded_at
   end
 
-  it "should update needs_grading_count when submissions transition state" do
-    setup_assignment_with_homework
-    @assignment.needs_grading_count.should eql(1)
-    @assignment.grade_student(@user, :grade => "0")
-    @assignment.reload
-    @assignment.needs_grading_count.should eql(0)
-  end
+  context "needs_grading_count" do
+    it "should update when submissions transition state" do
+      setup_assignment_with_homework
+      @assignment.needs_grading_count.should eql(1)
+      @assignment.grade_student(@user, :grade => "0")
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(0)
+    end
+  
+    it "should not update when non-student submissions transition state" do
+      assignment_model
+      s = Assignment.find_or_create_submission(@assignment.id, @teacher.id)
+      s.submission_type = 'online_quiz'
+      s.workflow_state = 'submitted'
+      s.save!
+      @assignment.needs_grading_count.should eql(0)
+      s.workflow_state = 'graded'
+      s.save!
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(0)
+    end
+  
+    it "should update when enrollment changes" do
+      setup_assignment_with_homework
+      @assignment.needs_grading_count.should eql(1)
+      @course.enrollments.find_by_user_id(@user.id).destroy
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(0)
+      e = @course.enroll_student(@user)
+      e.invite
+      e.accept
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(1)
+  
+      # multiple enrollments should not cause double-counting (either by creating as or updating into "active")
+      section2 = @course.course_sections.create!(:name => 's2')
+      e2 = @course.enroll_student(@user, 
+                                  :enrollment_state => 'invited',
+                                  :section => section2,
+                                  :allow_multiple_enrollments => true)
+      e2.accept
+      section3 = @course.course_sections.create!(:name => 's2')
+      e3 = @course.enroll_student(@user, 
+                                  :enrollment_state => 'active', 
+                                  :section => section3,
+                                  :allow_multiple_enrollments => true)
+      @user.enrollments.count(:conditions => "workflow_state = 'active'").should eql(3)
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(1)
+  
+      # and as long as one enrollment is still active, the count should not change
+      e2.destroy
+      e3.complete
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(1)
+  
+      # ok, now gone for good
+      e.destroy
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(0)
+      @user.enrollments.count(:conditions => "workflow_state = 'active'").should eql(0)
 
-  it "should update needs_grading_count when enrollment changes" do
-    setup_assignment_with_homework
-    @assignment.needs_grading_count.should eql(1)
-    @course.enrollments.find_by_user_id(@user.id).destroy
-    @assignment.reload
-    @assignment.needs_grading_count.should eql(0)
-    e = @course.enroll_student(@user)
-    e.invite
-    e.accept
-    @assignment.reload
-    @assignment.needs_grading_count.should eql(1)
-
-    # multiple enrollments should not cause double-counting (either by creating as or updating into "active")
-    section2 = @course.course_sections.create!(:name => 's2')
-    e2 = @course.enroll_student(@user, 
-                                :enrollment_state => 'invited',
-                                :section => section2,
-                                :allow_multiple_enrollments => true)
-    e2.accept
-    section3 = @course.course_sections.create!(:name => 's2')
-    e3 = @course.enroll_student(@user, 
-                                :enrollment_state => 'active', 
-                                :section => section3,
-                                :allow_multiple_enrollments => true)
-    @user.enrollments.count(:conditions => "workflow_state = 'active'").should eql(3)
-    @assignment.reload
-    @assignment.needs_grading_count.should eql(1)
-
-    # and as long as one enrollment is still active, the count should not change
-    e2.destroy
-    e3.complete
-    @assignment.reload
-    @assignment.needs_grading_count.should eql(1)
-
-    # ok, now gone for good
-    e.destroy
-    @assignment.reload
-    @assignment.needs_grading_count.should eql(0)
-    @user.enrollments.count(:conditions => "workflow_state = 'active'").should eql(0)
+      # enroll the user as a teacher, it should have no effect
+      e4 = @course.enroll_teacher(@user)
+      e4.accept
+      @assignment.reload
+      @assignment.needs_grading_count.should eql(0)
+      @user.enrollments.count(:conditions => "workflow_state = 'active'").should eql(1)
+    end
   end
 
   it "should preserve pass/fail with zero points possible" do
@@ -1514,14 +1536,14 @@ describe Assignment do
 
     it "should persist :created across changes" do
       assignment = assignment_model
-      assignment.turnitin_settings = assignment.default_turnitin_settings
+      assignment.turnitin_settings = Turnitin::Client.default_assignment_turnitin_settings
       assignment.save
       assignment.turnitin_settings[:created] = true
       assignment.save
       assignment.reload
       assignment.turnitin_settings[:created].should be_true
 
-      assignment.turnitin_settings = assignment.default_turnitin_settings.merge(:s_paper_check => '0')
+      assignment.turnitin_settings = Turnitin::Client.default_assignment_turnitin_settings.merge(:s_paper_check => '0')
       assignment.save
       assignment.reload
       assignment.turnitin_settings[:created].should be_true
@@ -1529,14 +1551,14 @@ describe Assignment do
 
     it "should clear out :current" do
       assignment = assignment_model
-      assignment.turnitin_settings = assignment.default_turnitin_settings
+      assignment.turnitin_settings = Turnitin::Client.default_assignment_turnitin_settings
       assignment.save
       assignment.turnitin_settings[:current] = true
       assignment.save
       assignment.reload
       assignment.turnitin_settings[:current].should be_true
 
-      assignment.turnitin_settings = assignment.default_turnitin_settings.merge(:s_paper_check => '0')
+      assignment.turnitin_settings = Turnitin::Client.default_assignment_turnitin_settings.merge(:s_paper_check => '0')
       assignment.save
       assignment.reload
       assignment.turnitin_settings[:current].should be_nil
@@ -1568,6 +1590,178 @@ describe Assignment do
         :display_name => attachment.display_name
       })
       @assignment.instance_variable_get(:@ignored_files).should == [ignore_file]
+    end
+  end
+
+  context "attribute freezing" do
+    before do
+      course
+      @asmnt = @course.assignments.create!(:title => 'lock locky')
+      @att_map = {"lock_at" => "yes",
+                  "assignment_group" => "no",
+                  "title" => "no",
+                  "assignment_group_id" => "no",
+                  "submission_types" => "yes",
+                  "points_possible" => "yes",
+                  "description" => "yes",
+                  "grading_type" => "yes"}
+    end
+
+    def stub_plugin
+      PluginSetting.stubs(:settings_for_plugin).returns(@att_map)
+    end
+
+    it "should not be frozen if not copied" do
+      stub_plugin
+      @asmnt.freeze_on_copy = true
+      @asmnt.frozen?.should == false
+      @att_map.each_key{|att| @asmnt.att_frozen?(att).should == false}
+    end
+
+    it "should not be frozen if copied but not frozen set" do
+      stub_plugin
+      @asmnt.copied = true
+      @asmnt.frozen?.should == false
+      @att_map.each_key{|att| @asmnt.att_frozen?(att).should == false}
+    end
+
+    it "should not be frozen if plugin not enabled" do
+      @asmnt.copied = true
+      @asmnt.freeze_on_copy = true
+      @asmnt.frozen?.should == false
+      @att_map.each_key{|att| @asmnt.att_frozen?(att).should == false}
+    end
+
+    context "assignments are frozen" do
+      append_before (:each) do
+        stub_plugin
+        @asmnt.copied = true
+        @asmnt.freeze_on_copy = true
+        @admin = account_admin_user(opts={})
+        teacher_in_course(:course => @course)
+      end
+
+      it "should be frozen" do
+        @asmnt.frozen?.should == true
+      end
+
+      it "should flag specific attributes as frozen for no user" do
+        @att_map.each_pair do |att, setting|
+          @asmnt.att_frozen?(att).should == (setting == "yes")
+        end
+      end
+
+      it "should flag specific attributes as frozen for teacher" do
+        @att_map.each_pair do |att, setting|
+          @asmnt.att_frozen?(att, @teacher).should == (setting == "yes")
+        end
+      end
+
+      it "should not flag attributes as frozen for admin" do
+        @att_map.each_pair do |att, setting|
+          @asmnt.att_frozen?(att, @admin).should == false
+        end
+      end
+
+      it "should be frozen for nil user" do
+        @asmnt.frozen_for_user?(nil).should == true
+      end
+
+      it "should be frozen for teacher" do
+        @asmnt.frozen_for_user?(@teacher).should == true
+      end
+
+      it "should not be frozen for admin" do
+        @asmnt.frozen_for_user?(@admin).should == false
+      end
+
+      it "should not validate if saving without user" do
+        @asmnt.description = "new description"
+        @asmnt.save
+        @asmnt.valid?.should == false
+        @asmnt.errors["description"].should == "You don't have permission to edit the locked attribute description"
+      end
+
+      it "should allow teacher to edit unlocked attributes" do
+        @asmnt.title = "new title"
+        @asmnt.updating_user = @teacher
+        @asmnt.save!
+
+        @asmnt.reload
+        @asmnt.title.should == "new title"
+      end
+
+      it "should not allow teacher to edit locked attributes" do
+        @asmnt.description = "new description"
+        @asmnt.updating_user = @teacher
+        @asmnt.save
+
+        @asmnt.valid?.should == false
+        @asmnt.errors["description"].should == "You don't have permission to edit the locked attribute description"
+
+        @asmnt.reload
+        @asmnt.description.should_not == "new title"
+      end
+
+      it "should allow admin to edit unlocked attributes" do
+        @asmnt.description = "new description"
+        @asmnt.updating_user = @admin
+        @asmnt.save!
+
+        @asmnt.reload
+        @asmnt.description.should == "new description"
+      end
+
+    end
+
+  end
+
+  context "not_locked named_scope" do
+    before :each do
+      course_with_student_logged_in(:active_all => true)
+      assignment_quiz([], :course => @course, :user => @user)
+      # Setup default values for tests (leave unsaved for easy changes)
+      @quiz.unlock_at = nil
+      @quiz.lock_at = nil
+      @quiz.due_at = 2.days.from_now
+    end
+    it "should include assignments with no locks" do
+      @quiz.save!
+      list = Assignment.not_locked.all
+      list.size.should eql 1
+      list.first.title.should eql 'Test Assignment'
+    end
+    it "should include assignments with unlock_at in the past" do
+      @quiz.unlock_at = 1.day.ago
+      @quiz.save!
+      list = Assignment.not_locked.all
+      list.size.should eql 1
+      list.first.title.should eql 'Test Assignment'
+    end
+    it "should include assignments where lock_at is future" do
+      @quiz.lock_at = 1.day.from_now
+      @quiz.save!
+      list = Assignment.not_locked.all
+      list.size.should eql 1
+      list.first.title.should eql 'Test Assignment'
+    end
+    it "should include assignments where unlock_at is in the past and lock_at is future" do
+      @quiz.unlock_at = 1.day.ago
+      @quiz.lock_at = 1.day.from_now
+      @quiz.save!
+      list = Assignment.not_locked.all
+      list.size.should eql 1
+      list.first.title.should eql 'Test Assignment'
+    end
+    it "should not include assignments where unlock_at is in future" do
+      @quiz.unlock_at = 1.hour.from_now
+      @quiz.save!
+      Assignment.not_locked.count.should == 0
+    end
+    it "should not include assignments where lock_at is in past" do
+      @quiz.lock_at = 1.hours.ago
+      @quiz.save!
+      Assignment.not_locked.count.should == 0
     end
   end
 end

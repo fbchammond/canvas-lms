@@ -159,6 +159,34 @@ describe Course do
       @course.grants_right?(@student, nil, :read_grades).should be_true
       @course.grants_right?(@student, nil, :read_forum).should be_true
     end
+
+    it "should not grant read to completed students of an unpublished course" do
+      course_with_student(:active_user => 1)
+      @course.should be_created
+      @enrollment.update_attribute(:workflow_state, 'completed')
+      @enrollment.should be_completed
+      @course.grants_right?(:read, @student).should be_false
+    end
+
+    it "should not grant read to soft-completed students of an unpublished course" do
+      course_with_student(:active_user => 1)
+      @course.restrict_enrollments_to_course_dates = true
+      @course.start_at = 4.days.ago
+      @course.conclude_at = 2.days.ago
+      @course.save!
+      @course.should be_created
+      @enrollment.update_attribute(:workflow_state, 'active')
+      @enrollment.state_based_on_date.should == :completed
+      @course.grants_right?(:read, @student).should be_false
+    end
+
+    it "should not grant read to soft-inactive teachers" do
+      course_with_teacher(:active_user => 1)
+      @course.enrollment_term.update_attributes(:start_at => 2.days.from_now, :end_at => 4.days.from_now)
+      @enrollment.update_attribute(:workflow_state, 'active')
+      @enrollment.state_based_on_date.should == :inactive
+      @course.grants_right?(:read, @teacher).should be_false
+    end
   end
 
   it "should clear content when resetting" do
@@ -177,7 +205,7 @@ describe Course do
     @new_course = @course.reset_content
 
     @course.reload
-    @course.stuck_sis_fields.should == [].to_set
+    @course.stuck_sis_fields.should == [:workflow_state].to_set
     @course.course_sections.should be_empty
     @course.students.should be_empty
     @course.sis_source_id.should be_nil
@@ -211,7 +239,7 @@ describe Course do
     @new_course = @course.reset_content
 
     @course.reload
-    @course.stuck_sis_fields.should == [:name].to_set
+    @course.stuck_sis_fields.should == [:workflow_state, :name].to_set
     @course.sis_source_id.should be_nil
 
     @new_course.reload
@@ -298,7 +326,7 @@ describe Course do
       event2.updating_user = @teacher
       event2.save!
       event3 = event2.child_events.first
-      appointment_group = @course.appointment_groups.create
+      appointment_group = AppointmentGroup.create! :title => "ag", :contexts => [@course]
       appointment_group.publish!
       assignment = @course.assignments.create!
 
@@ -623,99 +651,6 @@ describe Course, "gradebook_to_csv" do
       rows[5][2].should be_nil
       rows[5][3].should be_nil
     end
-end
-
-describe Course, "merge_into" do
-  it "should merge in another course" do
-    @c = Course.create!(:name => "some course")
-    @c.wiki.wiki_pages.length.should == 1
-    @c2 = Course.create!(:name => "another course")
-    g = @c2.assignment_groups.create!(:name => "some group")
-    due = Time.parse("Jan 1 2000 5:00pm")
-    @c2.assignments.create!(:title => "some assignment", :assignment_group => g, :due_at => due)
-    @c2.wiki.wiki_pages.create!(:title => "some page")
-    @c2.quizzes.create!(:title => "some quiz")
-    @c.assignments.length.should eql(0)
-    @c.merge_in(@c2, :everything => true)
-    @c.reload
-    @c.assignment_groups.length.should eql(1)
-    @c.assignment_groups.last.name.should eql(@c2.assignment_groups.last.name)
-    @c.assignment_groups.last.should_not eql(@c2.assignment_groups.last)
-    @c.assignments.length.should eql(1)
-    @c.assignments.last.title.should eql(@c2.assignments.last.title)
-    @c.assignments.last.should_not eql(@c2.assignments.last)
-    @c.assignments.last.due_at.should eql(@c2.assignments.last.due_at)
-    @c.wiki.wiki_pages.length.should eql(2)
-    @c.wiki.wiki_pages.map(&:title).include?(@c2.wiki.wiki_pages.last.title).should be_true
-    @c.wiki.wiki_pages.first.should_not eql(@c2.wiki.wiki_pages.last)
-    @c.wiki.wiki_pages.last.should_not eql(@c2.wiki.wiki_pages.last)
-    @c.quizzes.length.should eql(1)
-    @c.quizzes.last.title.should eql(@c2.quizzes.last.title)
-    @c.quizzes.last.should_not eql(@c2.quizzes.last)
-  end
-  
-  it "should update due dates for date changes" do
-    new_start = Date.parse("Jun 1 2000")
-    new_end = Date.parse("Sep 1 2000")
-    @c = Course.create!(:name => "some course", :start_at => new_start, :conclude_at => new_end)
-    @c2 = Course.create!(:name => "another course", :start_at => Date.parse("Jan 1 2000"), :conclude_at => Date.parse("Mar 1 2000"))
-    g = @c2.assignment_groups.create!(:name => "some group")
-    @c2.assignments.create!(:title => "some assignment", :assignment_group => g, :due_at => Time.parse("Jan 3 2000 5:00pm"))
-    @c.assignments.length.should eql(0)
-    @c2.calendar_events.create!(:title => "some event", :start_at => Time.parse("Jan 11 2000 3:00pm"), :end_at => Time.parse("Jan 11 2000 4:00pm"))
-    @c.calendar_events.length.should eql(0)
-    @c.merge_in(@c2, :everything => true, :shift_dates => true)
-    @c.reload
-    @c.assignments.length.should eql(1)
-    @c.assignments.last.title.should eql(@c2.assignments.last.title)
-    @c.assignments.last.should_not eql(@c2.assignments.last)
-    @c.assignments.last.due_at.should > new_start
-    @c.assignments.last.due_at.should < new_end
-    @c.assignments.last.due_at.hour.should eql(@c2.assignments.last.due_at.hour)
-    @c.calendar_events.length.should eql(1)
-    @c.calendar_events.last.title.should eql(@c2.calendar_events.last.title)
-    @c.calendar_events.last.should_not eql(@c2.calendar_events.last)
-    @c.calendar_events.last.start_at.should > new_start
-    @c.calendar_events.last.start_at.should < new_end
-    @c.calendar_events.last.start_at.hour.should eql(@c2.calendar_events.last.start_at.hour)
-    @c.calendar_events.last.end_at.should > new_start
-    @c.calendar_events.last.end_at.should < new_end
-    @c.calendar_events.last.end_at.hour.should eql(@c2.calendar_events.last.end_at.hour)
-  end
-  
-  it "should match times for changing due dates in a different time zone" do
-    Time.zone = "Mountain Time (US & Canada)"
-    new_start = Date.parse("Jun 1 2000")
-    new_end = Date.parse("Sep 1 2000")
-    @c = Course.create!(:name => "some course", :start_at => new_start, :conclude_at => new_end)
-    @c2 = Course.create!(:name => "another course", :start_at => Date.parse("Jan 1 2000"), :conclude_at => Date.parse("Mar 1 2000"))
-    g = @c2.assignment_groups.create!(:name => "some group")
-    @c2.assignments.create!(:title => "some assignment", :assignment_group => g, :due_at => Time.parse("Jan 3 2000 5:00pm"))
-    @c.assignments.length.should eql(0)
-    @c2.calendar_events.create!(:title => "some event", :start_at => Time.parse("Jan 11 2000 3:00pm"), :end_at => Time.parse("Jan 11 2000 4:00pm"))
-    @c.calendar_events.length.should eql(0)
-    @c.merge_in(@c2, :everything => true, :shift_dates => true)
-    @c.reload
-    @c.assignments.length.should eql(1)
-    @c.assignments.last.title.should eql(@c2.assignments.last.title)
-    @c.assignments.last.should_not eql(@c2.assignments.last)
-    @c.assignments.last.due_at.should > new_start
-    @c.assignments.last.due_at.should < new_end
-    @c.assignments.last.due_at.wday.should eql(@c2.assignments.last.due_at.wday)
-    @c.assignments.last.due_at.utc.hour.should eql(@c2.assignments.last.due_at.utc.hour)
-    @c.calendar_events.length.should eql(1)
-    @c.calendar_events.last.title.should eql(@c2.calendar_events.last.title)
-    @c.calendar_events.last.should_not eql(@c2.calendar_events.last)
-    @c.calendar_events.last.start_at.should > new_start
-    @c.calendar_events.last.start_at.should < new_end
-    @c.calendar_events.last.start_at.wday.should eql(@c2.calendar_events.last.start_at.wday)
-    @c.calendar_events.last.start_at.utc.hour.should eql(@c2.calendar_events.last.start_at.utc.hour)
-    @c.calendar_events.last.end_at.should > new_start
-    @c.calendar_events.last.end_at.should < new_end
-    @c.calendar_events.last.end_at.wday.should eql(@c2.calendar_events.last.end_at.wday)
-    @c.calendar_events.last.end_at.utc.hour.should eql(@c2.calendar_events.last.end_at.utc.hour)
-    Time.zone = nil
-  end
 end
 
 describe Course, "update_account_associations" do
@@ -1601,19 +1536,19 @@ describe Course, 'grade_publishing' do
         @course.recompute_student_scores_without_send_later
         @course.generate_grade_publishing_csv_output(@ase.map(&:reload), @user, @pseudonym).should == [
           [@ase.map(&:id),
-               ("publisher_id,publisher_sis_id,section_id,section_sis_id," +
+               ("publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id," +
                 "student_id,student_sis_id,enrollment_id,enrollment_status," +
                 "score\n" +
-                "#{@user.id},U1,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95\n" +
-                "#{@user.id},U1,#{@ase[1].course_section_id},,#{@ase[1].user.id},,#{@ase[1].id},active,65\n" +
-                "#{@user.id},U1,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[3].course_section_id},,#{@ase[3].user.id},student3,#{@ase[3].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85\n"),
+                "#{@user.id},U1,#{@course.id},,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[1].course_section_id},,#{@ase[1].user.id},,#{@ase[1].id},active,65\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[3].course_section_id},,#{@ase[3].user.id},student3,#{@ase[3].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85\n"),
            "text/csv"]
         ]
       end
@@ -1646,19 +1581,19 @@ describe Course, 'grade_publishing' do
         @course.recompute_student_scores_without_send_later
         @course.generate_grade_publishing_csv_output(@ase.map(&:reload), @user, @pseudonym).should == [
           [@ase.map(&:id),
-               ("publisher_id,publisher_sis_id,section_id,section_sis_id," +
+               ("publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id," +
                 "student_id,student_sis_id,enrollment_id,enrollment_status," +
                 "score\n" +
-                "#{@user.id},,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95\n" +
-                "#{@user.id},,#{@ase[1].course_section_id},,#{@ase[1].user.id},,#{@ase[1].id},active,65\n" +
-                "#{@user.id},,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0\n" +
-                "#{@user.id},,#{@ase[3].course_section_id},,#{@ase[3].user.id},student3,#{@ase[3].id},active,0\n" +
-                "#{@user.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0\n" +
-                "#{@user.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0\n" +
-                "#{@user.id},,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0\n" +
-                "#{@user.id},,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0\n" +
-                "#{@user.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85\n" +
-                "#{@user.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85\n"),
+                "#{@user.id},,#{@course.id},,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[1].course_section_id},,#{@ase[1].user.id},,#{@ase[1].id},active,65\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[3].course_section_id},,#{@ase[3].user.id},student3,#{@ase[3].id},active,0\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85\n" +
+                "#{@user.id},,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85\n"),
            "text/csv"]
         ]
       end
@@ -1693,19 +1628,19 @@ describe Course, 'grade_publishing' do
         @course.recompute_student_scores_without_send_later
         @course.generate_grade_publishing_csv_output(@ase.map(&:reload), @user, @pseudonym).should == [
           [@ase.map(&:id),
-               ("publisher_id,publisher_sis_id,section_id,section_sis_id," +
+               ("publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id," +
                 "student_id,student_sis_id,enrollment_id,enrollment_status," +
                 "score\n" +
-                "#{@user.id},U1,#{@ase[0].course_section_id},section1,#{@ase[0].user.id},,#{@ase[0].id},active,95\n" +
-                "#{@user.id},U1,#{@ase[1].course_section_id},section1,#{@ase[1].user.id},,#{@ase[1].id},active,65\n" +
-                "#{@user.id},U1,#{@ase[2].course_section_id},section1,#{@ase[2].user.id},,#{@ase[2].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[3].course_section_id},section1,#{@ase[3].user.id},student3,#{@ase[3].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[4].course_section_id},section1,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[4].course_section_id},section1,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[5].course_section_id},section1,#{@ase[5].user.id},,#{@ase[5].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[6].course_section_id},section1,#{@ase[6].user.id},,#{@ase[6].id},active,0\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},section1,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},section1,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85\n"),
+                "#{@user.id},U1,#{@course.id},,#{@ase[0].course_section_id},section1,#{@ase[0].user.id},,#{@ase[0].id},active,95\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[1].course_section_id},section1,#{@ase[1].user.id},,#{@ase[1].id},active,65\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[2].course_section_id},section1,#{@ase[2].user.id},,#{@ase[2].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[3].course_section_id},section1,#{@ase[3].user.id},student3,#{@ase[3].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[4].course_section_id},section1,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[4].course_section_id},section1,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[5].course_section_id},section1,#{@ase[5].user.id},,#{@ase[5].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[6].course_section_id},section1,#{@ase[6].user.id},,#{@ase[6].id},active,0\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},section1,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},section1,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85\n"),
            "text/csv"]
         ]
       end
@@ -1740,19 +1675,19 @@ describe Course, 'grade_publishing' do
         @course.recompute_student_scores_without_send_later
         @course.generate_grade_publishing_csv_output(@ase.map(&:reload), @user, @pseudonym).should == [
           [@ase.map(&:id),
-               ("publisher_id,publisher_sis_id,section_id,section_sis_id," +
+               ("publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id," +
                 "student_id,student_sis_id,enrollment_id,enrollment_status," +
                 "score,grade\n" +
-                "#{@user.id},U1,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95,A\n" +
-                "#{@user.id},U1,#{@ase[1].course_section_id},,#{@ase[1].user.id},,#{@ase[1].id},active,65,D\n" +
-                "#{@user.id},U1,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[3].course_section_id},,#{@ase[3].user.id},student3,#{@ase[3].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85,B\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85,B\n"),
+                "#{@user.id},U1,#{@course.id},,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95,A\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[1].course_section_id},,#{@ase[1].user.id},,#{@ase[1].id},active,65,D\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[3].course_section_id},,#{@ase[3].user.id},student3,#{@ase[3].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4a,#{@ase[4].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[4].course_section_id},,#{@ase[4].user.id},student4b,#{@ase[4].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85,B\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85,B\n"),
            "text/csv"]
         ]
       end
@@ -1793,15 +1728,15 @@ describe Course, 'grade_publishing' do
 
         @course.generate_grade_publishing_csv_output(@ase, @user, @pseudonym).should == [
           [@ase.map(&:id) - [@ase[1].id, @ase[3].id, @ase[4].id],
-               ("publisher_id,publisher_sis_id,section_id,section_sis_id," +
+               ("publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id," +
                 "student_id,student_sis_id,enrollment_id,enrollment_status," +
                 "score,grade\n" +
-                "#{@user.id},U1,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95,A\n" +
-                "#{@user.id},U1,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0,F\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85,B\n" +
-                "#{@user.id},U1,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85,B\n"),
+                "#{@user.id},U1,#{@course.id},,#{@ase[0].course_section_id},,#{@ase[0].user.id},,#{@ase[0].id},active,95,A\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[2].course_section_id},,#{@ase[2].user.id},,#{@ase[2].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[5].course_section_id},,#{@ase[5].user.id},,#{@ase[5].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[6].course_section_id},,#{@ase[6].user.id},,#{@ase[6].id},active,0,F\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7a,#{@ase[7].id},active,85,B\n" +
+                "#{@user.id},U1,#{@course.id},,#{@ase[7].course_section_id},,#{@ase[7].user.id},student7b,#{@ase[7].id},active,85,B\n"),
            "text/csv"]
         ]
       end
@@ -1851,6 +1786,23 @@ describe Course, 'grade_publishing' do
   end
 
   context 'integration suite' do
+    def verify_post_matches(post_lines, expected_post_lines)
+      # first lines should match
+      post_lines[0].should == expected_post_lines[0]
+
+      # now extract the headers
+      post_headers = post_lines[1..post_lines.index("")]
+      expected_post_headers = expected_post_lines[1..expected_post_lines.index("")]
+      if RUBY_VERSION >= "1.9."
+        expected_post_headers << "User-Agent: Ruby"
+      end
+      post_headers.sort.should == expected_post_headers.sort
+
+      # now check payload
+      post_lines[post_lines.index(""),-1].should ==
+        expected_post_lines[expected_post_lines.index(""),-1]
+    end
+    
     def quick_sanity_check(user)
       Course.valid_grade_export_types["test_export"] = {
           :name => "test export",
@@ -1876,12 +1828,12 @@ describe Course, 'grade_publishing' do
       @course.grading_standard_id = 0
       @course.publish_final_grades(user)
       server_thread.join
-      post_lines.should == [
+      verify_post_matches(post_lines, [
           "POST /endpoint HTTP/1.1",
           "Accept: */*",
           "Content-Type: application/jtmimetype",
           "",
-          "test-jt-data"]
+          "test-jt-data"])
     end
 
     it 'should pass a quick sanity check' do
@@ -1933,13 +1885,13 @@ describe Course, 'grade_publishing' do
       @course.grading_standard_id = 0
       @course.publish_final_grades(@user)
       server_thread.join
-      post_lines.should == [
+      verify_post_matches(post_lines, [
           "POST /endpoint HTTP/1.1",
           "Accept: */*",
           "Content-Type: text/csv",
           "",
-          "publisher_id,publisher_sis_id,section_id,section_sis_id,student_id," +
-          "student_sis_id,enrollment_id,enrollment_status,score,grade\n"]
+          "publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id,student_id," +
+          "student_sis_id,enrollment_id,enrollment_status,score,grade\n"])
     end
 
     it 'should publish grades' do
@@ -2048,19 +2000,20 @@ describe Course, 'grade_publishing' do
 
       @course.publish_final_grades(teacher.user)
       server_thread.join
-      post_lines.should == [
+      verify_post_matches(post_lines, [
           "POST /endpoint HTTP/1.1",
           "Accept: */*",
           "Content-Type: text/csv",
           "",
-          "publisher_id,publisher_sis_id,section_id,section_sis_id,student_id," +
+          "publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id,student_id," +
           "student_sis_id,enrollment_id,enrollment_status,score\n" +
-          "#{teacher.user.id},T1,#{getsection("S1").id},S1,#{getpseudonym("S1").user.id},S1,#{getenroll("S1", "S1").id},active,70\n" +
-          "#{teacher.user.id},T1,#{getsection("S2").id},S2,#{getpseudonym("S2").user.id},S2,#{getenroll("S2", "S2").id},active,75\n" +
-          "#{teacher.user.id},T1,#{getsection("S2").id},S2,#{getpseudonym("S3").user.id},S3,#{getenroll("S3", "S2").id},active,80\n" +
-          "#{teacher.user.id},T1,#{getsection("S1").id},S1,#{getpseudonym("S4").user.id},S4,#{getenroll("S4", "S1").id},active,0\n" +
-          "#{teacher.user.id},T1,#{getsection("S3").id},S3,#{stud5.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud5.user.id, getsection("S3").id).id},active,85\n" +
-          "#{teacher.user.id},T1,#{sec4.id},S4,#{stud6.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud6.user.id, sec4.id).id},active,90\n"]
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S1").id},S1,#{getpseudonym("S1").user.id},S1,#{getenroll("S1", "S1").id},active,70\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S2").id},S2,#{getpseudonym("S2").user.id},S2,#{getenroll("S2", "S2").id},active,75\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S2").id},S2,#{getpseudonym("S3").user.id},S3,#{getenroll("S3", "S2").id},active,80\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S1").id},S1,#{getpseudonym("S4").user.id},S4,#{getenroll("S4", "S1").id},active,0\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S3").id},S3,#{stud5.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud5.user.id, getsection("S3").id).id},active,85\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{sec4.id},S4,#{stud6.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud6.user.id, sec4.id).id},active,90\n"])
+
       @course.grading_standard_id = 0
       @course.save
       server, server_thread, post_lines = start_test_http_server
@@ -2070,19 +2023,19 @@ describe Course, 'grade_publishing' do
       @ps.save!
       @course.publish_final_grades(teacher.user)
       server_thread.join
-      post_lines.should == [
+      verify_post_matches(post_lines, [
           "POST /endpoint HTTP/1.1",
           "Accept: */*",
           "Content-Type: text/csv",
           "",
-          "publisher_id,publisher_sis_id,section_id,section_sis_id,student_id," +
+          "publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id,student_id," +
           "student_sis_id,enrollment_id,enrollment_status,score,grade\n" +
-          "#{teacher.user.id},T1,#{getsection("S1").id},S1,#{getpseudonym("S1").user.id},S1,#{getenroll("S1", "S1").id},active,70,C-\n" +
-          "#{teacher.user.id},T1,#{getsection("S2").id},S2,#{getpseudonym("S2").user.id},S2,#{getenroll("S2", "S2").id},active,75,C\n" +
-          "#{teacher.user.id},T1,#{getsection("S2").id},S2,#{getpseudonym("S3").user.id},S3,#{getenroll("S3", "S2").id},active,80,B-\n" +
-          "#{teacher.user.id},T1,#{getsection("S1").id},S1,#{getpseudonym("S4").user.id},S4,#{getenroll("S4", "S1").id},active,0,F\n" +
-          "#{teacher.user.id},T1,#{getsection("S3").id},S3,#{stud5.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud5.user.id, getsection("S3").id).id},active,85,B\n" +
-          "#{teacher.user.id},T1,#{sec4.id},S4,#{stud6.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud6.user.id, sec4.id).id},active,90,A-\n"]
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S1").id},S1,#{getpseudonym("S1").user.id},S1,#{getenroll("S1", "S1").id},active,70,C-\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S2").id},S2,#{getpseudonym("S2").user.id},S2,#{getenroll("S2", "S2").id},active,75,C\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S2").id},S2,#{getpseudonym("S3").user.id},S3,#{getenroll("S3", "S2").id},active,80,B-\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S1").id},S1,#{getpseudonym("S4").user.id},S4,#{getenroll("S4", "S1").id},active,0,F\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{getsection("S3").id},S3,#{stud5.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud5.user.id, getsection("S3").id).id},active,85,B\n" +
+          "#{teacher.user.id},T1,#{@course.id},C1,#{sec4.id},S4,#{stud6.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud6.user.id, sec4.id).id},active,90,A-\n"])
       admin = user_model
       server, server_thread, post_lines = start_test_http_server
       @ps.posted_settings = @plugin.default_settings.merge({
@@ -2091,19 +2044,19 @@ describe Course, 'grade_publishing' do
       @ps.save!
       @course.publish_final_grades(admin)
       server_thread.join
-      post_lines.should == [
+      verify_post_matches(post_lines, [
           "POST /endpoint HTTP/1.1",
           "Accept: */*",
           "Content-Type: text/csv",
           "",
-          "publisher_id,publisher_sis_id,section_id,section_sis_id,student_id," +
+          "publisher_id,publisher_sis_id,course_id,course_sis_id,section_id,section_sis_id,student_id," +
           "student_sis_id,enrollment_id,enrollment_status,score,grade\n" +
-          "#{admin.id},,#{getsection("S1").id},S1,#{getpseudonym("S1").user.id},S1,#{getenroll("S1", "S1").id},active,70,C-\n" +
-          "#{admin.id},,#{getsection("S2").id},S2,#{getpseudonym("S2").user.id},S2,#{getenroll("S2", "S2").id},active,75,C\n" +
-          "#{admin.id},,#{getsection("S2").id},S2,#{getpseudonym("S3").user.id},S3,#{getenroll("S3", "S2").id},active,80,B-\n" +
-          "#{admin.id},,#{getsection("S1").id},S1,#{getpseudonym("S4").user.id},S4,#{getenroll("S4", "S1").id},active,0,F\n" +
-          "#{admin.id},,#{getsection("S3").id},S3,#{stud5.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud5.user.id, getsection("S3").id).id},active,85,B\n" +
-          "#{admin.id},,#{sec4.id},S4,#{stud6.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud6.user.id, sec4.id).id},active,90,A-\n"]
+          "#{admin.id},,#{@course.id},C1,#{getsection("S1").id},S1,#{getpseudonym("S1").user.id},S1,#{getenroll("S1", "S1").id},active,70,C-\n" +
+          "#{admin.id},,#{@course.id},C1,#{getsection("S2").id},S2,#{getpseudonym("S2").user.id},S2,#{getenroll("S2", "S2").id},active,75,C\n" +
+          "#{admin.id},,#{@course.id},C1,#{getsection("S2").id},S2,#{getpseudonym("S3").user.id},S3,#{getenroll("S3", "S2").id},active,80,B-\n" +
+          "#{admin.id},,#{@course.id},C1,#{getsection("S1").id},S1,#{getpseudonym("S4").user.id},S4,#{getenroll("S4", "S1").id},active,0,F\n" +
+          "#{admin.id},,#{@course.id},C1,#{getsection("S3").id},S3,#{stud5.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud5.user.id, getsection("S3").id).id},active,85,B\n" +
+          "#{admin.id},,#{@course.id},C1,#{sec4.id},S4,#{stud6.user.id},,#{Enrollment.find_by_user_id_and_course_section_id(stud6.user.id, sec4.id).id},active,90,A-\n"])
     end
 
   end
@@ -2404,7 +2357,7 @@ describe Course, "conclusions" do
   context "appointment cancelation" do
     before do
       course_with_student(:active_all => true)
-      @ag = @course.appointment_groups.create(:title => "test", :new_appointments => [['2010-01-01 13:00:00', '2010-01-01 14:00:00'], ["#{Time.now.year + 1}-01-01 13:00:00", "#{Time.now.year + 1}-01-01 14:00:00"]])
+      @ag = AppointmentGroup.create!(:title => "test", :contexts => [@course], :new_appointments => [['2010-01-01 13:00:00', '2010-01-01 14:00:00'], ["#{Time.now.year + 1}-01-01 13:00:00", "#{Time.now.year + 1}-01-01 14:00:00"]])
       @ag.appointments.each do |a|
         a.reserve_for(@user, @user)
       end

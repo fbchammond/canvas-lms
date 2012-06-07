@@ -20,7 +20,7 @@ require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 
 describe NotificationPolicy do
   it "should create a new instance given valid attributes" do
-    NotificationPolicy.create!(notification_policy_valid_attributes)
+    notification_policy_model
   end
   
   it "should default broadcast to true" do
@@ -65,17 +65,49 @@ describe NotificationPolicy do
     m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "secondary@example.com"}
     m.should be_nil
   end
+
+  it "should pass 'data' to the message" do
+    Notification.create! :name => "Hello",
+                         :subject => "Hello",
+                         :body => "here's a free <%= data.favorite_soda %>",
+                         :category => "TestImmediately"
+    class DataTest < ActiveRecord::Base
+      set_table_name :courses
+      attr_accessible :id
+      has_a_broadcast_policy
+      set_broadcast_policy do
+        dispatch :hello
+        to {
+          u = student_in_course.user
+          u.communication_channels.build(
+            :path => 'blarg@example.com',
+            :path_type => 'email'
+          ) { |cc| cc.workflow_state = 'active' }
+          u.save!
+          u.register
+          u
+        }
+        whenever { true }
+        data { {:favorite_soda => 'mtn dew'} }
+      end
+    end
+    dt = DataTest.new
+    dt.save!
+    msg = dt.messages_sent["Hello"].find { |m| m.to == "blarg@example.com" }
+    msg.should_not be_nil
+    msg.body.should include "mtn dew"
+  end
   
   context "named scopes" do
     it "should have a named scope for users" do
       user_with_pseudonym(:active_all => 1)
-      notification_policy_model(:communication_channel_id => @cc.id)
+      notification_policy_model(:communication_channel => @cc)
       NotificationPolicy.for(@user).should eql([@notification_policy])
     end
 
     it "should have a named scope for notifications" do
       notification_model
-      notification_policy_model(:notification_id => @notification.id)
+      notification_policy_model(:notification => @notification)
       NotificationPolicy.for(@notification).should eql([@notification_policy])
     end
     
@@ -129,8 +161,8 @@ describe NotificationPolicy do
       NotificationPolicy.delete_all
       
       trifecta_opts = {
-        :communication_channel_id => @communication_channel.id,
-        :notification_id => @notification.id
+        :communication_channel => @communication_channel,
+        :notification => @notification
       }
       
       n1 = notification_policy_model
@@ -186,6 +218,7 @@ describe NotificationPolicy, "communication_preference" do
   end
 
   it "should use the users default communication channel if one isn't given" do
+    @notification_policy.stubs(:communication_channel).returns(nil)
     @notification_policy.communication_preference.should eql(@cc1)
   end
   
