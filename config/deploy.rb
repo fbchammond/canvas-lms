@@ -32,8 +32,8 @@ after "deploy:update_code" do
   run "chown hb_canvas:hb_canvas #{release_path}/db"
   run "chown hb_canvas:hb_canvas #{release_path}/tmp"
   
-  run "cd #{release_path} && RAILS_ENV=assets bundle exec rake hb_canvas:compile_assets"
-  run "cd #{release_path} && RAILS_ENV=assets bundle exec rake hb_canvas:compress_assets"
+  run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compile_assets"
+  run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compress_assets"
 end
 
 after "deploy:symlink" do
