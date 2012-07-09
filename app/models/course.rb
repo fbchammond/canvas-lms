@@ -73,12 +73,12 @@ class Course < ActiveRecord::Base
   has_many :enrollments, :include => [:user, :course], :conditions => ['enrollments.workflow_state != ?', 'deleted'], :dependent => :destroy
   has_many :current_enrollments, :class_name => 'Enrollment', :conditions => ['enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.workflow_state != ?', 'rejected', 'completed', 'deleted', 'inactive'], :include => :user
   has_many :prior_enrollments, :class_name => 'Enrollment', :include => [:user, :course], :conditions => "enrollments.workflow_state = 'completed'"
-  has_many :students, :through => :student_enrollments, :source => :user, :order => User.sortable_name_order_by_clause
-  has_many :all_students, :through => :all_student_enrollments, :source => :user, :order => User.sortable_name_order_by_clause
+  has_many :students, :through => :student_enrollments, :source => :user
+  has_many :all_students, :through => :all_student_enrollments, :source => :user
   has_many :participating_students, :through => :enrollments, :source => :user, :conditions => "enrollments.type IN ('StudentEnrollment', 'StudentViewEnrollment') and enrollments.workflow_state = 'active'"
   has_many :student_enrollments, :class_name => 'Enrollment', :conditions => ["enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.workflow_state != ? AND enrollments.type IN ('StudentEnrollment', 'StudentViewEnrollment')", 'deleted', 'completed', 'rejected', 'inactive'], :include => :user
   has_many :all_student_enrollments, :class_name => 'Enrollment', :conditions => ["enrollments.workflow_state != ? AND enrollments.type IN ('StudentEnrollment', 'StudentViewEnrollment')", 'deleted'], :include => :user
-  has_many :all_real_students, :through => :all_real_student_enrollments, :source => :user, :order => User.sortable_name_order_by_clause
+  has_many :all_real_students, :through => :all_real_student_enrollments, :source => :user
   has_many :all_real_student_enrollments, :class_name => 'StudentEnrollment', :conditions => ["enrollments.workflow_state != ?", 'deleted'], :include => :user
   has_many :detailed_enrollments, :class_name => 'Enrollment', :conditions => ['enrollments.workflow_state != ?', 'deleted'], :include => {:user => {:pseudonym => :communication_channel}}
   has_many :teachers, :through => :teacher_enrollments, :source => :user
@@ -110,6 +110,7 @@ class Course < ActiveRecord::Base
   has_many :all_group_categories, :class_name => 'GroupCategory', :as => :context
   has_many :groups, :as => :context
   has_many :active_groups, :as => :context, :class_name => 'Group', :conditions => ['groups.workflow_state != ?', 'deleted']
+  has_many :group_categories, :as => :context, :conditions => ['deleted_at IS NULL']
   has_many :assignment_groups, :as => :context, :dependent => :destroy, :order => 'assignment_groups.position, assignment_groups.name'
   has_many :assignments, :as => :context, :dependent => :destroy, :order => 'assignments.created_at'
   has_many :calendar_events, :as => :context, :conditions => ['calendar_events.workflow_state != ?', 'cancelled'], :dependent => :destroy
@@ -119,7 +120,7 @@ class Course < ActiveRecord::Base
   has_many :all_discussion_topics, :as => :context, :class_name => "DiscussionTopic", :include => :user, :dependent => :destroy
   has_many :discussion_entries, :through => :discussion_topics, :include => [:discussion_topic, :user], :dependent => :destroy
   has_many :announcements, :as => :context, :class_name => 'Announcement', :dependent => :destroy
-  has_many :active_announcements, :as => :context, :class_name => 'Announcement', :conditions => ['discussion_topics.workflow_state != ?', 'deleted'], :order => 'created_at DESC'
+  has_many :active_announcements, :as => :context, :class_name => 'Announcement', :conditions => ['discussion_topics.workflow_state != ?', 'deleted']
   has_many :attachments, :as => :context, :dependent => :destroy, :extend => Attachment::FindInContextAssociation
   has_many :active_images, :as => :context, :class_name => 'Attachment', :conditions => ["attachments.file_state != ? AND attachments.content_type LIKE 'image%'", 'deleted'], :order => 'attachments.display_name', :include => :thumbnail
   has_many :active_assignments, :as => :context, :class_name => 'Assignment', :conditions => ['assignments.workflow_state != ?', 'deleted'], :order => 'assignments.title, assignments.position'
@@ -174,6 +175,7 @@ class Course < ActiveRecord::Base
   before_save :update_enrollments_later
   after_save :update_final_scores_on_weighting_scheme_change
   after_save :update_account_associations_if_changed
+  after_save :set_self_enrollment_code
   before_validation :verify_unique_sis_source_id
   validates_length_of :syllabus_body, :maximum => maximum_long_text_length, :allow_nil => true, :allow_blank => true
   validates_locale :allow_nil => true
@@ -645,9 +647,42 @@ class Course < ActiveRecord::Base
   end
 
   def self_enrollment_code
+    read_attribute(:self_enrollment_code) || set_self_enrollment_code if self_enrollment?
+  end
+
+  def set_self_enrollment_code
+    return if !self_enrollment? || read_attribute(:self_enrollment_code)
+
+    # subset of letters and numbers that are unambiguous
+    alphanums = 'ABCDEFGHJKLMNPRTWXY346789'
+    code_length = 6
+
+    # we're returning a 6-digit base-25(ish) code. that means there are ~250
+    # million possible codes. we should expect to see our first collision
+    # within the first 16k or so (thus the retry loop), but we won't risk ever
+    # exhausting a retry loop until we've used up about 15% or so of the
+    # keyspace. if needed, we can grow it at that point (but it's scoped to a
+    # shard, and not all courses will have enrollment codes, so that may not be
+    # necessary)
+    code = nil
+    self.class.unique_constraint_retry(10) do
+      code = code_length.times.map{
+        alphanums[(rand * alphanums.size).to_i, 1]
+      }.join
+      update_attribute :self_enrollment_code, code
+    end
+    code
+  end
+
+  def long_self_enrollment_code
     Digest::MD5.hexdigest("#{uuid}_for_#{id}")
   end
-  memoize :self_enrollment_code
+  memoize :long_self_enrollment_code
+
+  # still include the old longer format, since links may be out there
+  def self_enrollment_codes
+    [self_enrollment_code, long_self_enrollment_code]
+  end
 
   def update_final_scores_on_weighting_scheme_change
     if @group_weighting_scheme_changed
@@ -1322,7 +1357,11 @@ class Course < ActiveRecord::Base
     limit_privileges_to_course_section = opts[:limit_privileges_to_course_section]
     section ||= self.default_section
     enrollment_state ||= self.available? ? "invited" : "creation_pending"
-    enrollment_state = 'invited' if enrollment_state == 'creation_pending' && (type == 'TeacherEnrollment' || type == 'TaEnrollment' || type == 'DesignerEnrollment')
+    if type == 'TeacherEnrollment' || type == 'TaEnrollment' || type == 'DesignerEnrollment'
+      enrollment_state = 'invited' if enrollment_state == 'creation_pending'
+    else
+      enrollment_state = 'creation_pending' if enrollment_state == 'invited' && !self.available?
+    end
     if opts[:allow_multiple_enrollments]
       e = self.enrollments.find_by_user_id_and_type_and_course_section_id(user.id, type, section.id)
     else
@@ -1715,7 +1754,7 @@ class Course < ActiveRecord::Base
     WikiPage.process_migration_course_outline(data, migration);migration.fast_update_progress(95)
 
     if !migration.copy_options || migration.is_set?(migration.copy_options[:everything]) || migration.is_set?(migration.copy_options[:all_course_settings])
-      import_settings_from_migration(data); migration.fast_update_progress(96)
+      import_settings_from_migration(data, migration); migration.fast_update_progress(96)
     end
 
     begin
@@ -1768,17 +1807,37 @@ class Course < ActiveRecord::Base
   attr_accessor :imported_migration_items, :full_migration_hash, :external_url_hash, :content_migration
   attr_accessor :folder_name_lookups, :attachment_path_id_lookup, :assignment_group_no_drop_assignments
 
-  def import_settings_from_migration(data)
+  def import_settings_from_migration(data, migration)
     return unless data[:course]
     settings = data[:course]
     self.syllabus_body = ImportedHtmlConverter.convert(settings[:syllabus_body], self) if settings[:syllabus_body]
     if settings[:tab_configuration] && settings[:tab_configuration].is_a?(Array)
       self.tab_configuration = settings[:tab_configuration]
     end
+    if settings[:storage_quota] && ( migration.for_course_copy? || self.account.grants_right?(migration.user, nil, :manage_courses))
+      self.storage_quota = settings[:storage_quota]
+    end
+    self.settings[:hide_final_grade] = !!settings[:hide_final_grade] unless settings[:hide_final_grade].nil?
     atts = Course.clonable_attributes
     atts -= Canvas::Migration::MigratorHelper::COURSE_NO_COPY_ATTS
     settings.slice(*atts.map(&:to_s)).each do |key, val|
       self.send("#{key}=", val)
+    end
+    if settings[:grading_standard_enabled]
+      self.grading_standard_enabled = true
+      if settings[:grading_standard_identifier_ref]
+        if gs = self.grading_standards.find_by_migration_id(settings[:grading_standard_identifier_ref])
+          self.grading_standard = gs
+        else
+          migration.add_warning("Couldn't find copied grading standard for the course.")
+        end
+      elsif settings[:grading_standard_id]
+        if gs = GradingStandard.sorted_standards_for(self).find{|s|s.id == settings[:grading_standard_id]}
+          self.grading_standard = gs
+        else
+          migration.add_warning("Couldn't find account grading standard for the course.")
+        end
+      end
     end
   end
 
@@ -1843,7 +1902,7 @@ class Course < ActiveRecord::Base
       cm.fast_update_progress((i.to_f/total) * 18.0) if cm && (i % 10 == 0)
       if !ce || ce.export_object?(file)
         new_file = file.clone_for(self, nil, :overwrite => true)
-        self.attachment_path_id_lookup[new_file.full_display_path.gsub(/\A#{root_folder_name}/, '')] = new_file.migration_id
+        self.attachment_path_id_lookup[file.full_display_path.gsub(/\A#{root_folder_name}/, '')] = new_file.migration_id
         new_folder_id = merge_mapped_id(file.folder)
 
         if file.folder && file.folder.parent_folder_id.nil?

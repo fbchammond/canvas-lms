@@ -20,7 +20,12 @@ require 'lib/api_route_set'
 require 'bundler'
 Bundler.setup
 require 'action_controller'
+
+# load routing files, including those in plugins
 require 'config/routes'
+Dir.glob('vendor/plugins/*/config/routes.rb').each do |plugin_routes|
+  require plugin_routes.gsub(/\.rb$/, '')
+end
 
 # Extend YARD to generate our API documentation
 YARD::Tags::Library.define_tag("Is an API method", :API)
@@ -31,6 +36,8 @@ YARD::Tags::Library.define_tag("API example request", :example_request)
 YARD::Tags::Library.define_tag("API example response", :example_response)
 YARD::Tags::Library.define_tag("API subtopic", :subtopic)
 YARD::Tags::Library.define_tag("API resource is Beta", :beta)
+YARD::Tags::Library.define_tag("API Object Definition", :object)
+YARD::Tags::Library.define_tag("API Return Type", :returns)
 
 module YARD::Templates::Helpers
   module BaseHelper

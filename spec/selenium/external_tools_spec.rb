@@ -1,5 +1,5 @@
 require File.expand_path(File.dirname(__FILE__) + '/common')
-require File.expand_path(File.dirname(__FILE__) + '/external_tools_common')
+require File.expand_path(File.dirname(__FILE__) + '/helpers/external_tools_common')
 
 describe "editing external tools" do
   it_should_behave_like "external tools tests"
@@ -71,6 +71,31 @@ describe "editing external tools" do
     @tag.title.should == "Example"
     @tag.new_tab.should == true
     @tag.url.should == "http://www.example.com"
+  end
+
+  it "should not list external tools that don't have a url, domain, or resource_selection configured" do
+    @module = @course.context_modules.create!(:name => "module")
+    
+    @tool1 = @course.context_external_tools.create!(:name => "First Tool", :url => "http://www.example.com", :consumer_key => "key", :shared_secret => "secret")
+    @tool2 = @course.context_external_tools.new(:name => "Another Tool", :consumer_key => "key", :shared_secret => "secret")
+    @tool2.settings[:editor_button] = {:url => "http://www.example.com", :icon_url => "http://www.example.com", :selection_width => 100, :selection_height => 100}.with_indifferent_access
+    @tool2.save!
+    @tool3 = @course.context_external_tools.new(:name => "Third Tool", :consumer_key => "key", :shared_secret => "secret")
+    @tool3.settings[:resource_selection] = {:url => "http://www.example.com", :icon_url => "http://www.example.com", :selection_width => 100, :selection_height => 100}.with_indifferent_access
+    @tool3.save!
+
+    get "/courses/#{@course.id}/modules"
+
+    keep_trying_until { driver.execute_script("return window.modules.refreshed == true") }
+
+    driver.find_element(:css, "#context_module_#{@module.id} .add_module_item_link").click
+    driver.find_element(:css, "#add_module_item_select option[value='context_external_tool']").click
+    
+    keep_trying_until { driver.find_elements(:css, "#context_external_tools_select .tool .name").length > 0 }
+    names = driver.find_elements(:css, "#context_external_tools_select .tool .name").map(&:text)
+    names.should be_include(@tool1.name)
+    names.should_not be_include(@tool2.name)
+    names.should be_include(@tool3.name)
   end
 
   it "should allow adding an existing external tool to a course module, and should pick the correct tool" do
@@ -277,7 +302,7 @@ describe "editing external tools" do
     f("#edit_item_form").should be_displayed
     replace_content(f("#edit_item_form #content_tag_title"), "Example 2")
     f("#edit_item_form #content_tag_new_tab").click
-    f("#edit_item_form button[type='submit']").click
+    submit_form("#edit_item_form")
 
     wait_for_ajax_requests
 

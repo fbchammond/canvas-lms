@@ -25,6 +25,26 @@ module YARD::Templates::Helpers::HtmlHelper
   end
 end
 
+module YARD::Templates::Helpers::BaseHelper
+  def linkify_with_api(*args)
+    if args.first.is_a?(String) && args.first =~ %r{^api:([^#]+)#(.*)}
+      topic = options[:resources].find { |r,cs| cs.any? { |c| c.name.to_s == $1 } }
+      if topic
+        controller = topic.last.find { |c| c.name.to_s == $1 }
+        html_file = "#{topicize topic.first}.html"
+        action = $2
+        link_url("#{html_file}#method.#{topicize(controller.name.to_s).sub("_controller", "")}.#{action}", args[1])
+      else
+        raise "couldn't find API link for #{args.first}"
+      end
+    else
+      linkify_without_api(*args)
+    end
+  end
+  alias_method :linkify_without_api, :linkify
+  alias_method :linkify, :linkify_with_api
+end
+
 def init
   options[:objects] = run_verifier(options[:objects])
   options[:resources] = options[:objects].
@@ -33,6 +53,7 @@ def init
 
   options[:page_title] = "Canvas LMS REST API Documentation"
 
+  build_json_objects_map
   generate_assets
   serialize_index
   serialize_static_pages
@@ -115,4 +136,21 @@ def serialize_static_pages
     serialize_redirect(filename)
     options.delete(:file)
   end
+end
+
+def build_json_objects_map
+  obj_map = {}
+  resource_obj_list = {}
+  options[:resources].each do |r,cs|
+    cs.each do |controller|
+      controller.tags(:object).each do |obj|
+        name, json = obj.text.split(%r{\n+}, 2).map(&:strip)
+        obj_map[name] = topicize r
+        resource_obj_list[r] ||= []
+        resource_obj_list[r] << [name, json]
+      end
+    end
+  end
+  options[:json_objects_map] = obj_map
+  options[:json_objects] = resource_obj_list
 end

@@ -313,6 +313,14 @@ Spec::Runner.configure do |config|
     course_with_student(opts)
   end
 
+  def student_in_section(section, opts={})
+    user
+    enrollment = section.course.enroll_user(@user, 'StudentEnrollment', :section => section)
+    enrollment.workflow_state = 'active'
+    enrollment.save!
+    @user
+  end
+
   def teacher_in_course(opts={})
     opts[:course] = @course if @course && !opts[:course]
     course_with_teacher(opts)
@@ -365,19 +373,16 @@ Spec::Runner.configure do |config|
     session[:become_user_id].should == @fake_student.id.to_s
   end
 
+  VALID_GROUP_ATTRIBUTES = [:name, :context, :max_membership, :group_category, :join_level, :description, :is_public, :avatar_attachment]
   def group(opts={})
-    opts.delete(:active_all)
-    if opts[:group_context]
-      @group = opts.delete(:group_context).groups.create! opts
-    else
-      @group = Group.create! opts
-    end
+    @group = (opts[:group_context].try(:groups) || Group).create! opts.slice(VALID_GROUP_ATTRIBUTES)
   end
 
   def group_with_user(opts={})
     group(opts)
-    user(opts)
-    @group.participating_users << @user
+    u = opts[:user] || user(opts)
+    workflow_state = opts[:active_all] ? 'accepted' : nil
+    @group.add_user(u, workflow_state, opts[:moderator])
   end
 
   def group_with_user_logged_in(opts={})
@@ -743,8 +748,23 @@ Spec::Runner.configure do |config|
     Attachment.local_storage?.should eql(true)
   end
 
-  def run_job(job)
+  def run_job(job = Delayed::Job.last(:order => :id))
+    case job
+    when Hash
+      job = Delayed::Job.first(:conditions => job, :order => :id)
+    end
     Delayed::Worker.new.perform(job)
+  end
+
+  def run_jobs
+    while job = Delayed::Job.get_and_lock_next_available(
+      'spec run_jobs',
+      1.hour,
+      Delayed::Worker.queue,
+      0,
+      Delayed::MAX_PRIORITY)
+      run_job(job)
+    end
   end
 
   # send a multipart post request in an integration spec post_params is
@@ -759,5 +779,22 @@ Spec::Runner.configure do |config|
   def run_transaction_commit_callbacks(conn = ActiveRecord::Base.connection)
     conn.after_transaction_commit_callbacks.each { |cb| cb.call }
     conn.after_transaction_commit_callbacks.clear
+  end
+
+  def verify_post_matches(post_lines, expected_post_lines)
+    # first lines should match
+    post_lines[0].should == expected_post_lines[0]
+
+    # now extract the headers
+    post_headers = post_lines[1..post_lines.index("")]
+    expected_post_headers = expected_post_lines[1..expected_post_lines.index("")]
+    if RUBY_VERSION >= "1.9."
+      expected_post_headers << "User-Agent: Ruby"
+    end
+    post_headers.sort.should == expected_post_headers.sort
+
+    # now check payload
+    post_lines[post_lines.index(""),-1].should ==
+      expected_post_lines[expected_post_lines.index(""),-1]
   end
 end

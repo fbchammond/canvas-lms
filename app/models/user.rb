@@ -20,10 +20,11 @@ class User < ActiveRecord::Base
   # this has to be before include Context to prevent a circular dependency in Course
   def self.sortable_name_order_by_clause(table = nil)
     col = table ? "#{table}.sortable_name" : 'sortable_name'
-    case_insensitive(col)
+    best_unicode_collation_key(col)
   end
 
   include Context
+  include UserFollow::FollowedItem
 
   attr_accessible :name, :short_name, :sortable_name, :time_zone, :show_user_services, :gender, :visible_inbox_types, :avatar_image, :subscribe_to_emails, :locale
   attr_accessor :original_id, :menu_data
@@ -32,18 +33,34 @@ class User < ActiveRecord::Base
   serialize :preferences
   include Workflow
 
+  # Internal: SQL fragments used to return enrollments in their respective workflow
+  # states. Where needed, these consider the state of the course to ensure that
+  # students do not see their enrollments on unpublished courses.
+  ENROLLMENT_CONDITIONS = {
+    :active => "( enrollments.workflow_state = 'active' and ((courses.workflow_state = 'claimed' and (enrollments.type IN ('TeacherEnrollment', 'TaEnrollment', 'DesignerEnrollment', 'StudentViewEnrollment'))) or (enrollments.workflow_state = 'active' and courses.workflow_state = 'available')) )",
+    :invited => "( enrollments.workflow_state = 'invited' and ((courses.workflow_state = 'available' and (enrollments.type = 'StudentEnrollment' or enrollments.type = 'ObserverEnrollment')) or (courses.workflow_state != 'deleted' and (enrollments.type IN ('TeacherEnrollment', 'TaEnrollment', 'DesignerEnrollment', 'StudentViewEnrollment')))))",
+    :deleted => "enrollments.workflow_state = 'deleted'",
+    :rejected => "enrollments.workflow_state = 'rejected'",
+    :completed => "enrollments.workflow_state = 'completed'",
+    :creation_pending => "enrollments.workflow_state = 'creation_pending'",
+    :inactive => "enrollments.workflow_state = 'inactive'" }
+
   has_many :communication_channels, :order => 'position', :dependent => :destroy
   has_one :communication_channel, :order => 'position'
   has_many :enrollments, :dependent => :destroy
 
-  has_many :current_enrollments, :class_name => 'Enrollment', :include => [:course, :course_section], :conditions => "enrollments.workflow_state = 'active' and ((courses.workflow_state = 'claimed' and (enrollments.type IN ('TeacherEnrollment', 'TaEnrollment', 'DesignerEnrollment', 'StudentViewEnrollment'))) or (enrollments.workflow_state = 'active' and courses.workflow_state = 'available'))", :order => 'enrollments.created_at'
-  has_many :invited_enrollments, :class_name => 'Enrollment', :include => [:course, :course_section], :conditions => "enrollments.workflow_state = 'invited' and ((courses.workflow_state = 'available' and (enrollments.type = 'StudentEnrollment' or enrollments.type = 'ObserverEnrollment')) or (courses.workflow_state != 'deleted' and (enrollments.type = 'TeacherEnrollment' or enrollments.type = 'TaEnrollment' or enrollments.type = 'DesignerEnrollment')))", :order => 'enrollments.created_at'
+  has_many :current_enrollments, :class_name => 'Enrollment', :include => [:course, :course_section], :conditions => ENROLLMENT_CONDITIONS[:active], :order => 'enrollments.created_at'
+  has_many :invited_enrollments, :class_name => 'Enrollment', :include => [:course, :course_section], :conditions => ENROLLMENT_CONDITIONS[:invited], :order => 'enrollments.created_at'
   has_many :current_and_invited_enrollments, :class_name => 'Enrollment', :include => [:course], :order => 'enrollments.created_at',
-           :conditions => "( enrollments.workflow_state = 'active' and ((courses.workflow_state = 'claimed' and (enrollments.type IN ('TeacherEnrollment', 'TaEnrollment', 'DesignerEnrollment', 'StudentViewEnrollment'))) or (enrollments.workflow_state = 'active' and courses.workflow_state = 'available')) )
-                           OR
-                           ( enrollments.workflow_state = 'invited' and ((courses.workflow_state = 'available' and (enrollments.type = 'StudentEnrollment' or enrollments.type = 'ObserverEnrollment')) or (courses.workflow_state != 'deleted' and (enrollments.type IN ('TeacherEnrollment', 'TaEnrollment', 'DesignerEnrollment', 'StudentViewEnrollment')))) )"
+           :conditions => [ENROLLMENT_CONDITIONS[:active], ENROLLMENT_CONDITIONS[:invited]].join(' OR ')
   has_many :not_ended_enrollments, :class_name => 'Enrollment', :conditions => ["enrollments.workflow_state NOT IN (?)", ['rejected', 'completed', 'deleted']]
-  has_many :concluded_enrollments, :class_name => 'Enrollment', :include => [:course, :course_section], :conditions => "enrollments.workflow_state = 'completed'", :order => 'enrollments.created_at'
+  has_many :concluded_enrollments, :class_name => 'Enrollment', :include => [:course, :course_section], :conditions => ENROLLMENT_CONDITIONS[:completed], :order => 'enrollments.created_at'
+  has_many :observer_enrollments
+  has_many :observee_enrollments, :foreign_key => :associated_user_id, :class_name => 'ObserverEnrollment'
+  has_many :user_observers, :dependent => :delete_all
+  has_many :observers, :through => :user_observers, :class_name => 'User'
+  has_many :user_observees, :class_name => 'UserObserver', :foreign_key => :observer_id, :dependent => :delete_all
+  has_many :observed_users, :through => :user_observees, :source => :user
   has_many :courses, :through => :current_enrollments, :uniq => true
   has_many :current_and_invited_courses, :source => :course, :through => :current_and_invited_enrollments
   has_many :concluded_courses, :source => :course, :through => :concluded_enrollments, :uniq => true
@@ -109,12 +126,14 @@ class User < ActiveRecord::Base
   has_many :user_notes
   has_many :account_reports
   has_many :stream_item_instances, :dependent => :delete_all
-  has_many :stream_items, :through => :stream_item_instances
   has_many :all_conversations, :class_name => 'ConversationParticipant', :include => :conversation
   has_many :favorites
   has_many :favorite_courses, :source => :course, :through => :current_and_invited_enrollments, :conditions => "EXISTS (SELECT 1 FROM favorites WHERE context_type = 'Course' AND context_id = enrollments.course_id AND user_id = enrollments.user_id)"
   has_many :zip_file_imports, :as => :context
   has_many :messages
+
+  has_many :following_user_follows, :class_name => 'UserFollow', :as => :followed_item
+  has_many :user_follows, :foreign_key => 'following_user_id'
 
   has_many :collections, :as => :context
 
@@ -161,7 +180,9 @@ class User < ActiveRecord::Base
 
   named_scope :has_current_student_enrollments, :conditions =>  "EXISTS (SELECT * FROM enrollments JOIN courses ON courses.id = enrollments.course_id AND courses.workflow_state = 'available' WHERE enrollments.user_id = users.id AND enrollments.workflow_state IN ('active','invited') AND enrollments.type = 'StudentEnrollment')"
 
-  named_scope :order_by_sortable_name, :order => User.sortable_name_order_by_clause
+  def self.order_by_sortable_name
+    scoped(:order => sortable_name_order_by_clause)
+  end
 
   named_scope :enrolled_in_course_between, lambda{|course_ids, start_at, end_at|
     ids_string = course_ids.join(",")
@@ -815,6 +836,19 @@ class User < ActiveRecord::Base
         logger.error "migrating #{table} column #{column} failed: #{e.to_s}"
       end
     end
+    # delete duplicate enrollments where this user is the observee
+    new_user.observee_enrollments.remove_duplicates!
+
+    # delete duplicate observers/observees, move the rest
+    user_observees.where(:user_id => new_user.user_observees.map(&:user_id)).delete_all
+    user_observees.update_all(:observer_id => new_user.id)
+    xor_observer_ids = (Set.new(user_observers.map(&:observer_id)) ^ new_user.user_observers.map(&:observer_id)).to_a
+    user_observers.where(:observer_id => new_user.user_observers.map(&:observer_id)).delete_all
+    user_observers.update_all(:user_id => new_user.id)
+    # for any observers not already watching both users, make sure they have
+    # any missing observer enrollments added
+    new_user.user_observers.where(:observer_id => xor_observer_ids).each(&:create_linked_enrollments)
+
     self.reload
     Enrollment.send_later(:recompute_final_scores, new_user.id)
     new_user.update_account_associations
@@ -884,6 +918,9 @@ class User < ActiveRecord::Base
   set_policy do
     given { |user| user == self }
     can :read and can :manage and can :manage_content and can :manage_files and can :manage_calendar and can :send_messages and can :update_avatar
+
+    given { |user| user.present? && self.public? }
+    can :follow
 
     given { |user| user == self && user.user_can_edit_name? }
     can :rename
@@ -1231,6 +1268,18 @@ class User < ActiveRecord::Base
       uri.to_s
     else
       avatar_fallback_url(default_avatar_fallback, request)
+    end
+  end
+
+  # Clear the avatar_image_url attribute and save it if the URL contains the given uuid.
+  #
+  # ==== Arguments
+  # * <tt>uuid</tt> - The Attachment#uuid value for the file. Used as part of the url identifier.
+  def clear_avatar_image_url_with_uuid(uuid)
+    raise ArgumentError, "'uuid' is required and cannot be blank" if uuid.blank?
+    if self.avatar_image_url.to_s.match(/#{uuid}/)
+      self.avatar_image_url = nil
+      self.save
     end
   end
   
@@ -1632,33 +1681,26 @@ class User < ActiveRecord::Base
   end
   memoize :recent_feedback
 
-  alias_method :stream_items_simple, :stream_items
-  def stream_items(opts={})
-    opts[:start_at] ||= 2.weeks.ago
+  def visible_stream_item_instances(opts={})
+    instances = stream_item_instances.scoped(:conditions => { 'stream_item_instances.hidden' => false }, :order => 'stream_item_instances.id desc', :include => :stream_item)
 
-    items = stream_items_simple.scoped(:conditions => { 'stream_item_instances.hidden' => false })
-    # dont make the query do an stream_items.context_code IN
+    # dont make the query do an stream_item_instances.context_code IN
     # ('course_20033','course_20237','course_20247' ...) if they dont pass any
     # contexts, just assume it wants any context code.
     if opts[:contexts]
       # still need to optimize the query to use a root_context_code.  that way a
       # users course dashboard even if they have groups does a query with
       # "context_code=..." instead of "context_code IN ..."
-      items = items.scoped(:conditions => ['stream_item_instances.context_code in (?)', setup_context_lookups(opts[:contexts])])
+      instances = instances.scoped(:conditions => ['stream_item_instances.context_code in (?)', setup_context_lookups(opts[:contexts])])
     end
 
-    if opts[:before_id]
-      items = items.scoped(:conditions => ['id < ?', opts[:before_id]], :limit => 21)
-    else
-      items = items.scoped(:limit => 21)
-    end
-
-    # next line does 2 things,
-    # 1. forces the query to be run, so that we dont send one query for the count and one for the actual dataset.
-    # 2. make sure that we always return an array and not nil
-    items.all(:order => 'stream_item_instances.id desc')
+    instances
   end
-  memoize :stream_items
+
+  def recent_stream_items(opts={})
+    visible_stream_item_instances(opts).scoped(:include => :stream_item, :limit => 21).map(&:stream_item).compact
+  end
+  memoize :recent_stream_items
 
   def calendar_events_for_calendar(opts={})
     opts = opts.dup
@@ -1715,7 +1757,7 @@ class User < ActiveRecord::Base
       # according to the set_policy block in group.rb, user u can manage group
       # g if either:
       # (a) g.context.grants_right?(u, :manage_groups)
-      # (b) g.participating_users.include(u)
+      # (b) g.has_member?(u)
       # this is a very performance sensitive method, so we're bypassing the
       # normal policy checking and somewhat duplicating auth logic here. which
       # is a shame. it'd be really nice to add support to our policy framework
@@ -2303,5 +2345,13 @@ class User < ActiveRecord::Base
 
   def fake_student?
     self.preferences[:fake_student] && !!self.enrollments.find(:first, :conditions => {:type => "StudentViewEnrollment"})
+  end
+
+  def private?
+    not public?
+  end
+
+  def default_collection_name
+    t :default_collection_name, "%{user_name}'s Collection", :user_name => self.short_name
   end
 end

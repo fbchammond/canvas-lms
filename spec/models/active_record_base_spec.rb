@@ -102,6 +102,19 @@ describe ActiveRecord::Base do
       User.count.should eql @orig_user_count
     end
 
+    it "should run additional times if specified" do
+      Submission.create!(:user => @user, :assignment => @assignment)
+      tries = 0
+      lambda{
+        User.unique_constraint_retry(2) do
+          tries += 1
+          Submission.create!(:user => @user, :assignment => @assignment)
+        end
+      }.should raise_error # we don't catch the error the last time 
+      tries.should eql 3
+      Submission.count.should eql 1
+    end
+
     it "should not cause outer transactions to roll back if the second attempt succeeds" do
       Submission.create!(:user => @user, :assignment => @assignment)
       tries = 0
@@ -334,6 +347,28 @@ describe ActiveRecord::Base do
         a.should == 0
       end
       a.should == 1
+    end
+  end
+
+  context "Finder tests" do
+    before(:each) do
+      @user = user_model
+    end
+
+    it "should fail with improper nested hashes" do
+      lambda {
+        User.find(:first, :conditions => { :name => { :users => { :id => @user.id }}})
+      }.should raise_error(ActiveRecord::StatementInvalid)
+    end
+
+    it "should fail with dot in nested column name" do
+      lambda {
+        User.find(:first, :conditions => { :name => { "users.id" => @user.id }})
+      }.should raise_error(ActiveRecord::StatementInvalid)
+    end
+
+    it "should not fail with a dot in column name only" do
+      User.find(:first, :conditions => { 'users.id' => @user.id }).should_not be_nil
     end
   end
 end

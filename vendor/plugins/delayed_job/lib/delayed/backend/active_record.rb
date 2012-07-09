@@ -64,7 +64,7 @@ module Delayed
             self.class.adapter_name = connection.adapter_name
           end
           if strand.present? && adapter_name == 'PostgreSQL'
-            connection.execute("LOCK delayed_jobs IN SHARE ROW EXCLUSIVE MODE")
+            connection.execute(sanitize_sql(["SELECT pg_advisory_xact_lock(half_md5_as_bigint(?))", strand]))
           end
         end
 
@@ -111,35 +111,14 @@ module Delayed
           min_priority ||= Delayed::MIN_PRIORITY
           max_priority ||= Delayed::MAX_PRIORITY
 
-          if connection.adapter_name == 'PostgreSQL' && Setting.get_cached('delayed_jobs_db_fn_pop', 'false') == 'true'
-            # note postgresql is optimized to use this db function, and doesn't
-            # use find_available, lock_exclusively and friends
-            #
-            # the reason we do a subselect here is that pop_from_delayed_jobs
-            # is a volatile function (we can't mark it as stable because it
-            # does a FOR UPDATE, which postgresql won't allow in a stable fn)
-            #
-            # so without the subselect, it'd evaluate the function once for every row in delayed_jobs
-            now = db_time_now
-            job = self.first(:conditions => ["id = (select pop_from_delayed_jobs(?, ?, ?, ?, ?))", worker_name, queue, min_priority, max_priority, now])
-            # the pop_from_delayed_jobs function takes care of updating the db
-            # row with the locked_at/locked_by information, but that happens
-            # too late for the outer select to see those changes. so we will
-            # update the AR record client-side to match what the trigger did.
-            if job
-              job.mark_as_locked!(now, worker_name)
+          @batch_size ||= Setting.get_cached('jobs_get_next_batch_size', '5').to_i
+          loop do
+            jobs = find_available(worker_name, @batch_size, max_run_time, queue, min_priority, max_priority)
+            return nil if jobs.empty?
+            job = jobs.detect do |job|
+              job.lock_exclusively!(max_run_time, worker_name)
             end
-            return job
-          else
-            @batch_size ||= Setting.get_cached('jobs_get_next_batch_size', '5').to_i
-            loop do
-              jobs = find_available(worker_name, @batch_size, max_run_time, queue, min_priority, max_priority)
-              return nil if jobs.empty?
-              job = jobs.detect do |job|
-                job.lock_exclusively!(max_run_time, worker_name)
-              end
-              return job if job
-            end
+            return job if job
           end
         end
 

@@ -560,6 +560,64 @@ describe "Users API", :type => :integration do
     end
   end
 
+  describe "user deletion" do
+    before do
+      @admin = account_admin_user
+      course_with_student(:user => user_with_pseudonym(:name => 'Student', :username => 'student@example.com'))
+      @student = @user
+      @user = @admin
+      @path = "/api/v1/accounts/#{Account.default.id}/users/#{@student.id}"
+      @path_options = { :controller => 'users', :action => 'destroy',
+        :format => 'json', :id => @student.to_param,
+        :account_id => Account.default.to_param }
+    end
+
+    context "a user with permissions" do
+      it "should be able to delete a user" do
+        json = api_call(:delete, @path, @path_options)
+        @student.reload.should be_deleted
+        json.should == {
+          'id' => @student.id,
+          'name' => 'Student',
+          'short_name' => 'Student',
+          'sortable_name' => 'Student'
+        }
+      end
+
+      it "should be able to delete a user by SIS ID" do
+        @student.pseudonym.update_attribute(:sis_user_id, '12345')
+        id_param = "sis_user_id:#{@student.sis_user_id}"
+
+        path = "/api/v1/accounts/#{Account.default.id}/users/#{id_param}"
+        path_options = @path_options.merge(:id => id_param)
+
+        json = api_call(:delete, path, path_options)
+        response.code.should eql '200'
+        @student.reload.should be_deleted
+      end
+
+      it 'should be able to delete itself' do
+        path = "/api/v1/accounts/#{Account.default.to_param}/users/#{@user.id}"
+        json = api_call(:delete, path, @path_options.merge(:id => @user.to_param))
+        @user.reload.should be_deleted
+        json.should == {
+          'id' => @user.id,
+          'name' => @user.name,
+          'short_name' => @user.short_name,
+          'sortable_name' => @user.sortable_name
+        }
+      end
+    end
+
+    context 'an unauthorized user' do
+      it "should receive a 401" do
+        user
+        raw_api_call(:delete, @path, @path_options)
+        response.code.should eql '401'
+      end
+    end
+  end
+
   context "user files" do
     it_should_behave_like "file uploads api with folders"
 
@@ -578,6 +636,55 @@ describe "Users API", :type => :integration do
       api_call(:post, "/api/v1/users/#{user2.id}/files",
         { :controller => "users", :action => "create_file", :format => "json", :user_id => user2.to_param, },
         { :name => "my_essay.doc" }, {}, :expected_status => 401)
+    end
+  end
+
+  describe "following" do
+    before do
+      @me = @user
+      @u2 = user_model
+      @user = @me
+      @u2.update_attribute(:public, true)
+    end
+
+    it "should allow following a public user" do
+      json = api_call(:put, "/api/v1/users/#{@u2.id}/followers/self", :controller => "users", :action => "follow", :user_id => @u2.to_param, :format => "json")
+      @user.user_follows.map(&:followed_item).should == [@u2]
+      uf = @user.user_follows.first
+      json.should == { "following_user_id" => @user.id, "followed_user_id" => @u2.id, "created_at" => uf.created_at.as_json }
+    end
+
+    it "should do nothing if already following the user" do
+      @user.user_follows.create!(:followed_item => @u2)
+      uf = @user.user_follows.first
+      @user.user_follows.map(&:followed_item).should == [@u2]
+
+      json = api_call(:put, "/api/v1/users/#{@u2.id}/followers/self", :controller => "users", :action => "follow", :user_id => @u2.to_param, :format => "json")
+      @user.user_follows.map(&:followed_item).should == [@u2]
+      uf = @user.user_follows.first
+      json.should == { "following_user_id" => @user.id, "followed_user_id" => @u2.id, "created_at" => uf.created_at.as_json }
+    end
+
+    it "should not allow following a private user" do
+      @u2.update_attribute(:public, false)
+      json = api_call(:put, "/api/v1/users/#{@u2.id}/followers/self", { :controller => "users", :action => "follow", :user_id => @u2.to_param, :format => "json" }, {}, {}, :expected_status => 401)
+      @user.reload.user_follows.should == []
+    end
+
+    describe "unfollowing" do
+      it "should allow unfollowing a collection" do
+        @user.user_follows.create!(:followed_item => @u2)
+        @user.reload.user_follows.map(&:followed_item).should == [@u2]
+
+        json = api_call(:delete, "/api/v1/users/#{@u2.id}/followers/self", :controller => "users", :action => "unfollow", :user_id => @u2.to_param, :format => "json")
+        @user.reload.user_follows.should == []
+      end
+
+      it "should do nothing if not following" do
+        @user.reload.user_follows.should == []
+        json = api_call(:delete, "/api/v1/users/#{@u2.id}/followers/self", :controller => "users", :action => "unfollow", :user_id => @u2.to_param, :format => "json")
+        @user.reload.user_follows.should == []
+      end
     end
   end
 end

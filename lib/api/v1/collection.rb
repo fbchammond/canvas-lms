@@ -18,17 +18,18 @@
 
 module Api::V1::Collection
   include Api::V1::Json
+  include Api::V1::User
 
   API_COLLECTION_JSON_OPTS = {
     :only => %w(id name visibility),
   }
 
   API_COLLECTION_ITEM_JSON_OPTS = {
-    :only => %w(id collection_id description),
+    :only => %w(id collection_id user_comment created_at),
   }
 
   API_COLLECTION_ITEM_DATA_JSON_OPTS = {
-    :only => %w(item_type link_url root_item_id post_count upvote_count),
+    :only => %w(item_type link_url root_item_id post_count upvote_count html_preview title description),
     :methods => %w(upvoted_by_user),
   }
 
@@ -36,21 +37,31 @@ module Api::V1::Collection
     :only => %w(user_id created_at),
   }
 
-  def collection_json(collection, current_user, session)
-    api_json(collection, current_user, session, API_COLLECTION_JSON_OPTS)
+  def collections_json(collections, current_user, session)
+    followed = ::UserFollow.followed_by_user(collections, current_user)
+
+    collections.map do |collection|
+      hash = api_json(collection, current_user, session, API_COLLECTION_JSON_OPTS)
+      hash['followed_by_user'] = !!followed.include?(collection)
+      hash
+    end
   end
 
   def collection_items_json(items, current_user, session)
     # TODO: sharding
-    CollectionItem.send(:preload_associations, items, :collection_item_data)
+    CollectionItem.send(:preload_associations, items, { :collection_item_data => :image_attachment })
 
     CollectionItemData.load_upvoted_by_user(items.map(&:collection_item_data), current_user)
 
     items.map do |item|
       hash = api_json(item, current_user, session, API_COLLECTION_ITEM_JSON_OPTS)
-      hash['url'] = api_v1_collection_item_url(item.collection, item)
-      hash['image_url'] = nil # TODO: images
-      hash.merge!(api_json(item.collection_item_data, current_user, session, API_COLLECTION_ITEM_DATA_JSON_OPTS))
+      hash['user'] = user_display_json(item.user)
+      hash['url'] = api_v1_collection_item_url(item)
+      item_data = item.collection_item_data
+      hash['image_pending'] = item_data.image_pending
+      image = item_data.image_attachment
+      hash['image_url'] = image && thumbnail_image_url(image, image.uuid, :size => CollectionItemData::THUMBNAIL_SIZE)
+      hash.merge!(api_json(item_data, current_user, session, API_COLLECTION_ITEM_DATA_JSON_OPTS))
       hash
     end
   end

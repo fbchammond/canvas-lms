@@ -52,6 +52,7 @@ module CC::Importer::Standard
       create_file_map
       @course[:discussion_topics] = convert_discussions
       @course[:external_tools] = convert_blti_links(resources_by_type("imsbasiclti"))
+      @course[:assignments] = create_assignments_from_lti_links(@course[:external_tools])
       @course[:assessment_questions], @course[:assessments] = convert_quizzes if Qti.qti_enabled?
       @course[:modules] = convert_organizations(@manifest)
       @course[:all_files_zip] = package_course_files(@course[:file_map])
@@ -141,13 +142,13 @@ module CC::Importer::Standard
             begin
               if val =~ FILEBASE_REGEX
                 val.gsub!(FILEBASE_REGEX, '')
-                if new_url = URI::escape(get_canvas_att_replacement_url(val, resource_dir))
-                  node[attr] = new_url
+                if new_url = get_canvas_att_replacement_url(val, resource_dir)
+                  node[attr] = URI::escape(new_url)
                 end
               else
                 if ImportedHtmlConverter.relative_url?(val)
-                  if new_url = URI::escape(get_canvas_att_replacement_url(val))
-                    node[attr] = new_url
+                  if new_url = get_canvas_att_replacement_url(val)
+                    node[attr] = URI::escape(new_url)
                   end
                 end
               end
@@ -158,6 +159,10 @@ module CC::Importer::Standard
         end
       end
       doc.at_css('body').inner_html
+    end
+
+    def find_assignment(migration_id)
+      @course[:assignments].find{|a|a[:migration_id] == migration_id}
     end
     
   end

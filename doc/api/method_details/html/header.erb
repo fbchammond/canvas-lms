@@ -3,8 +3,12 @@
     <a name='<%= @method_link %>' href='#<%= @method_link %>'>
       <%= object.tag("API").try(:text) %>
     </a>
-    <% route = @routes.first %>
-    <span class='defined-in'><a href="https://github.com/instructure/canvas-lms/blob/master/app/controllers/<%= route.requirements[:controller] %>_controller.rb"><%= "#{route.requirements[:controller].camelize}Controller\##{route.requirements[:action]}" %></a></span>
+    <% if @controller_path %>
+      <span class='defined-in'><a href="https://github.com/instructure/canvas-lms/blob/master/<%= @controller_path %>"><%= "#{@route.requirements[:controller].camelize}Controller\##{@route.requirements[:action]}" %></a></span>
+    <% end %>
   </h2>
+  <% if @beta %>
+    <h3 class='beta'>BETA: This API endpoint is not finalized, and there could be breaking changes before its final release.</h3>
+  <% end %>
   <%= yieldall %>
 </div>

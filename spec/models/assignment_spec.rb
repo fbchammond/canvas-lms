@@ -122,6 +122,7 @@ describe Assignment do
     it "should update when enrollment changes" do
       setup_assignment_with_homework
       @assignment.needs_grading_count.should eql(1)
+      @course.offer!
       @course.enrollments.find_by_user_id(@user.id).destroy
       @assignment.reload
       @assignment.needs_grading_count.should eql(0)
@@ -424,6 +425,32 @@ describe Assignment do
       @a.reload
       users.each do |u|
         @submissions << @a.submit_homework(u, :submission_type => "online_url", :url => "http://www.google.com")
+      end
+      @a.peer_review_count = 1
+      res = @a.assign_peer_reviews
+      res.length.should eql(@submissions.length)
+      @submissions.each do |s|
+        res.map{|a| a.asset}.should be_include(s)
+        res.map{|a| a.assessor_asset}.should be_include(s)
+      end
+    end
+
+    it "should assign when already graded" do
+      setup_assignment
+      assignment_model
+
+      @submissions = []
+      users = []
+      10.times do |i|
+        users << User.create(:name => "user #{i}")
+      end
+      users.each do |u|
+        @c.enroll_user(u)
+      end
+      @a.reload
+      users.each do |u|
+        @submissions << @a.submit_homework(u, :submission_type => "online_url", :url => "http://www.google.com")
+        @a.grade_student(u, :grader => @teacher, :grade => '100')
       end
       @a.peer_review_count = 1
       res = @a.assign_peer_reviews

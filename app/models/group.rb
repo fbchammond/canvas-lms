@@ -19,19 +19,20 @@
 class Group < ActiveRecord::Base
   include Context
   include Workflow
+  include CustomValidations
+  include UserFollow::FollowedItem
 
-  attr_accessible :name, :context, :max_membership, :group_category, :join_level, :default_view
+  attr_accessible :name, :context, :max_membership, :group_category, :join_level, :default_view, :description, :is_public, :avatar_attachment
+  validates_allowed_transitions :is_public, false => true
+
   has_many :group_memberships, :dependent => :destroy, :conditions => ['group_memberships.workflow_state != ?', 'deleted']
   has_many :users, :through => :group_memberships, :conditions => ['users.workflow_state != ?', 'deleted']
   has_many :participating_group_memberships, :class_name => "GroupMembership", :conditions => ['group_memberships.workflow_state = ?', 'accepted']
   has_many :participating_users, :source => :user, :through => :participating_group_memberships
-  has_many :invited_group_memberships, :class_name => "GroupMembership", :conditions => ['group_memberships.workflow_state = ?', 'invited']
-  has_many :invited_users, :source => :user, :through => :invited_group_memberships
   belongs_to :context, :polymorphic => true
   belongs_to :group_category
   belongs_to :account
   belongs_to :root_account, :class_name => "Account"
-
   has_many :calendar_events, :as => :context, :dependent => :destroy
   has_many :discussion_topics, :as => :context, :conditions => ['discussion_topics.workflow_state != ?', 'deleted'], :include => :user, :dependent => :destroy, :order => 'discussion_topics.position DESC, discussion_topics.created_at DESC'
   has_many :active_discussion_topics, :as => :context, :class_name => 'DiscussionTopic', :conditions => ['discussion_topics.workflow_state != ?', 'deleted'], :include => :user
@@ -60,6 +61,10 @@ class Group < ActiveRecord::Base
   has_many :short_messages, :through => :short_message_associations, :dependent => :destroy
   has_many :media_objects, :as => :context
   has_many :zip_file_imports, :as => :context
+  has_many :collections, :as => :context
+  belongs_to :avatar_attachment, :class_name => "Attachment"
+  has_many :following_user_follows, :class_name => 'UserFollow', :as => :followed_item
+  has_many :user_follows, :foreign_key => 'following_user_id'
 
   before_save :ensure_defaults, :maintain_category_attribute
   after_save :close_memberships_if_deleted
@@ -86,26 +91,33 @@ class Group < ActiveRecord::Base
   end
 
   def auto_accept?(user)
-    self.context.grants_right?(user, :participate_in_groups) &&
-      self.student_organized? && 
-      self.join_level == 'parent_context_auto_join'
+    self.group_category && 
+    self.group_category.available_for?(user) &&
+    self.group_category.allows_multiple_memberships? &&
+    self.join_level == 'parent_context_auto_join'
   end
 
   def allow_join_request?(user)
-    self.context.grants_right?(user, :participate_in_groups) &&
-      self.student_organized? && 
-      ['parent_context_auto_join', 'parent_context_request'].include?(self.join_level)
+    self.group_category && 
+    self.group_category.available_for?(user) &&
+    self.group_category.allows_multiple_memberships? &&
+    ['parent_context_auto_join', 'parent_context_request'].include?(self.join_level)
   end
 
   def allow_self_signup?(user)
+    self.context && 
     self.context.grants_right?(user, :participate_in_groups) &&
-      self.group_category &&
-      (self.group_category.unrestricted_self_signup? ||
-        (self.group_category.restricted_self_signup? && self.has_common_section_with_user?(user)))
+    self.group_category &&
+    (self.group_category.unrestricted_self_signup? ||
+      (self.group_category.restricted_self_signup? && self.has_common_section_with_user?(user)))
   end
 
-  def free_association?(user)
-    allow_join_request?(user) || allow_self_signup?(user)
+  def can_join?(user)
+    auto_accept?(user) || allow_join_request?(user) || allow_self_signup?(user)
+  end
+
+  def can_leave?(user)
+    self.group_category.try(:allows_multiple_memberships?) || self.allow_self_signup?(user)
   end
 
   def participants(include_observers=false)
@@ -123,6 +135,18 @@ class Group < ActiveRecord::Base
 
   def membership_for_user(user)
     self.group_memberships.find_by_user_id(user && user.id)
+  end
+
+  def has_member?(user)
+    self.participating_group_memberships.find_by_user_id(user && user.id)
+  end
+
+  def has_moderator?(user)
+    self.participating_group_memberships.moderators.find_by_user_id(user && user.id)
+  end
+
+  def should_add_creator?
+    self.group_category && (self.group_category.communities? || self.group_category.student_organized?)
   end
 
   def short_name
@@ -175,11 +199,6 @@ class Group < ActiveRecord::Base
     res += (self.context.course_code rescue self.context.name) if self.context
   end
 
-
-  def is_public
-    false
-  end
-
   def to_atom
     Atom::Entry.new do |entry|
       entry.title     = self.name
@@ -190,40 +209,33 @@ class Group < ActiveRecord::Base
     end
   end
 
-  def add_user(user)
+  # this method is idempotent
+  def add_user(user, new_record_state=nil, moderator=nil)
     return nil if !user
-    unless member = self.group_memberships.find_by_user_id(user.id)
-      member = self.group_memberships.create(:user=>user)
+    attrs = { :user => user, :moderator => !!moderator }
+    new_record_state ||= case self.join_level
+      when 'invitation_only'          then 'invited'
+      when 'parent_context_request'   then 'requested'
+      when 'parent_context_auto_join' then 'accepted'
+      end
+    attrs[:workflow_state] = new_record_state if new_record_state
+    if member = self.group_memberships.find_by_user_id(user.id)
+      member.workflow_state = new_record_state unless member.active?
+      # only update moderator if true/false is explicitly passed in
+      member.moderator = moderator unless moderator.nil?
+      member.save if member.changed?
+    else
+      member = self.group_memberships.create(attrs)
     end
     return member
   end
 
   def invite_user(user)
-    return nil if !user
-    res = nil
-    Group.transaction do
-      res = self.group_memberships.find_by_user_id(user.id)
-      unless res
-        res = self.group_memberships.build(:user => user)
-        res.workflow_state = 'invited'
-        res.save
-      end
-    end
-    res
+    self.add_user(user, 'invited')
   end
 
   def request_user(user)
-    return nil if !user
-    res = nil
-    Group.transaction do
-      res = self.group_memberships.find_by_user_id(user.id)
-      unless res
-        res = self.group_memberships.build(:user => user)
-        res.workflow_state = 'requested'
-        res.save
-      end
-    end
-    res
+    self.add_user(user, 'requested')
   end
 
   def invitees=(params)
@@ -239,10 +251,8 @@ class Group < ActiveRecord::Base
   end
 
   def peer_groups
-    return [] if !self.context || self.student_organized?
-    category = self.group_category || GroupCategory.student_organized_for(self.context)
-    return [] unless category
-    category.groups.find(:all, :conditions => ["id != ?", self.id])
+    return [] if !self.context || !self.group_category || self.group_category.allows_multiple_memberships?
+    self.group_category.groups.find(:all, :conditions => ["id != ?", self.id])
   end
 
   def migrate_content_links(html, from_course)
@@ -274,6 +284,8 @@ class Group < ActiveRecord::Base
     self.uuid ||= AutoHandle.generate_securish_uuid
     self.group_category ||= GroupCategory.student_organized_for(self.context)
     self.join_level ||= 'invitation_only'
+    self.is_public ||= false
+    self.is_public = false unless self.group_category.try(:communities?)
     if self.context && self.context.is_a?(Course)
       self.account = self.context.account
     elsif self.context && self.context.is_a?(Account)
@@ -296,35 +308,62 @@ class Group < ActiveRecord::Base
   # if you modify this set_policy block, note that we've denormalized this
   # permission check for efficiency -- see User#cached_contexts
   set_policy do
-    given { |user| user && self.participating_group_memberships.find_by_user_id(user.id) }
-    can :read and can :read_roster and can :manage and can :manage_content and can :manage_students and can :manage_admin_users and
-      can :manage_files and
-      can :post_to_forum and
-      can :send_messages and can :create_conferences and
-      can :create_collaborations and can :read_roster and
-      can :manage_calendar and
-      can :update and can :delete and can :create and
-      can :manage_wiki
+    given { |user| user && self.has_member?(user) }
+    can :create_collaborations and
+    can :create_conferences and
+    can :manage_calendar and
+    can :manage_content and 
+    can :manage_files and
+    can :manage_wiki and
+    can :post_to_forum and
+    can :read and 
+    can :read_roster and
+    can :send_messages and
+    can :follow
 
     # if I am a member of this group and I can moderate_forum in the group's context
     # (makes it so group members cant edit each other's discussion entries)
-    given { |user, session| user && self.participating_group_memberships.find_by_user_id(user.id) && (!self.context || self.context.grants_right?(user, session, :moderate_forum)) }
-      can :moderate_forum
+    given { |user, session| user && self.has_member?(user) && (!self.context || self.context.grants_right?(user, session, :moderate_forum)) }
+    can :moderate_forum
 
-    given { |user| user && self.invited_users.include?(user) }
-    can :read
+    given { |user| user && self.has_moderator?(user) }
+    can :delete and
+    can :manage and
+    can :manage_admin_users and
+    can :manage_students and 
+    can :moderate_forum and
+    can :update
+
+    given { |user| self.group_category.try(:communities?) }
+    can :create
 
     given { |user, session| self.context && self.context.grants_right?(user, session, :participate_as_student) && self.context.allow_student_organized_groups }
     can :create
 
     given { |user, session| self.context && self.context.grants_right?(user, session, :manage_groups) }
-    can :read and can :read_roster and can :manage and can :manage_content and can :manage_students and can :manage_admin_users and can :update and can :delete and can :create and can :moderate_forum and can :post_to_forum and can :manage_wiki and can :manage_files and can :create_conferences
+    can :create and
+    can :create_conferences and
+    can :delete and
+    can :manage and
+    can :manage_admin_users and
+    can :manage_content and
+    can :manage_files and
+    can :manage_students and
+    can :manage_wiki and
+    can :moderate_forum and
+    can :post_to_forum and
+    can :read and
+    can :read_roster and
+    can :update
 
     given { |user, session| self.context && self.context.grants_right?(user, session, :view_group_pages) }
     can :read and can :read_roster
 
-    given { |user, session| self.context && self.free_association?(user) }
+    given { |user| user && self.can_join?(user) }
     can :read_roster
+
+    given { |user| user && self.is_public? }
+    can :follow
   end
 
   def file_structure_for(user)
@@ -347,8 +386,8 @@ class Group < ActiveRecord::Base
     end
   end
 
-  def participating_users_count
-    self.participating_users.count
+  def members_count
+    self.participating_group_memberships.count
   end
 
   def quota
@@ -380,7 +419,7 @@ class Group < ActiveRecord::Base
   def self.serialization_excludes; [:uuid]; end
 
   def self.process_migration(data, migration)
-    groups = data['groups'] ? data['groups']: []
+    groups = data['groups'] || []
     groups.each do |group|
       if migration.import_object?("groups", group['migration_id'])
         begin
@@ -448,5 +487,9 @@ class Group < ActiveRecord::Base
     return false unless self.context && self.context.is_a?(Course)
     users = self.users + [user]
     self.context.course_sections.active.any?{ |section| section.common_to_users?(users) }
+  end
+
+  def default_collection_name
+    t "#group.default_collection_name", "%{group_name}'s Collection", :group_name => self.name
   end
 end

@@ -21,7 +21,7 @@ require "selenium-webdriver"
 require "socket"
 require "timeout"
 require 'coffee-script'
-require File.expand_path(File.dirname(__FILE__) + '/custom_selenium_rspec_matchers')
+require File.expand_path(File.dirname(__FILE__) + '/helpers/custom_selenium_rspec_matchers')
 require File.expand_path(File.dirname(__FILE__) + '/server')
 include I18nUtilities
 
@@ -712,8 +712,14 @@ shared_examples_for "all selenium tests" do
     el.send_keys(value)
   end
 
-  def submit_form(form_css)
-    f(form_css + ' button[type="submit"]').click
+  # can pass in either an element or a forms css
+  def submit_form(form)
+    submit_button_css = 'button[type="submit"]'
+    form.is_a?(Selenium::WebDriver::Element) ? form.find_element(:css, submit_button_css).click : f(form + ' ' + submit_button_css).click
+  end
+
+  def submit_dialog(dialog, submit_button_css = '.submit_button')
+    dialog.is_a?(Selenium::WebDriver::Element) ? dialog.find_element(:css, submit_button_css).click : f(dialog + ' ' + submit_button_css).click
   end
 
   def check_image(element)
@@ -754,7 +760,7 @@ shared_examples_for "all selenium tests" do
   # will only load it once even if its called multiple times
   def load_simulate_js
     @load_simulate_js ||= begin
-      js = File.read('spec/selenium/jquery.simulate.js')
+      js = File.read('spec/selenium/helpers/jquery.simulate.js')
       driver.execute_script js
     end
   end
@@ -793,15 +799,13 @@ shared_examples_for "all selenium tests" do
     driver.execute_script("return $('.error_text:visible').filter(function(){ return $(this).offset().left >= 0 }).length > 0")
   end
 
-  self.use_transactional_fixtures = false
-
   append_after(:each) do
     begin
       wait_for_ajax_requests
     rescue Selenium::WebDriver::Error::WebDriverError
       # we want to ignore selenium errors when attempting to wait here
     end
-    truncate_all_tables
+    truncate_all_tables unless self.use_transactional_fixtures
   end
 
   append_before (:each) do
@@ -844,6 +848,7 @@ end
     "graded.png" => File.read(File.dirname(__FILE__) + '/../../public/images/graded.png'),
     "cc_full_test.zip" => File.read(File.dirname(__FILE__) + '/../fixtures/migration/cc_full_test.zip'),
     "cc_ark_test.zip" => File.read(File.dirname(__FILE__) + '/../fixtures/migration/cc_ark_test.zip'),
+    "canvas_cc_minimum.zip" => File.read(File.dirname(__FILE__) + '/../fixtures/migration/canvas_cc_minimum.zip'),
     "qti.zip" => File.read(File.dirname(__FILE__) + '/../fixtures/migration/package_identifier/qti.zip')
   }
 
@@ -892,10 +897,16 @@ end
       HostUrl.stubs(:default_host).returns($app_host_and_port)
       HostUrl.stubs(:file_host).returns($app_host_and_port)
     end
+    before do
+      conn = ActiveRecord::Base.connection
+      ActiveRecord::ConnectionAdapters::ConnectionPool.any_instance.stubs(:connection).returns(conn)
+    end
   end
 
   shared_examples_for "forked server selenium tests" do
     it_should_behave_like "all selenium tests"
+    self.use_transactional_fixtures = false
+
     prepend_before (:all) do
       $in_proc_webserver_shutdown.try(:call)
       $in_proc_webserver_shutdown = nil

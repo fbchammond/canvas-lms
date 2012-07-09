@@ -54,7 +54,11 @@ describe EnrollmentsApiController, :type => :integration do
           'course_id'                          => @course.id,
           'type'                               => 'StudentEnrollment',
           'html_url'                           => course_user_url(@course, @unenrolled_user),
-          'grades'                             => { 'html_url' => course_student_grades_url(@course, @unenrolled_user) },
+          'grades'                             => {
+            'html_url' => course_student_grades_url(@course, @unenrolled_user),
+            'final_score' => nil,
+            'current_score' => nil
+          },
           'associated_user_id'                 => nil,
           'updated_at'                         => new_enrollment.updated_at.xmlschema
         }
@@ -120,6 +124,21 @@ describe EnrollmentsApiController, :type => :integration do
 
         e = Enrollment.find(json['id'])
         e.workflow_state.should eql 'invited'
+        e.course_section.should eql @course.default_section
+      end
+
+      it "should default new enrollments to the 'creation_pending' state for unpublished courses" do
+        @course.update_attribute(:workflow_state, 'claimed')
+        json = api_call :post, @path, @path_options,
+          {
+            :enrollment => {
+              :user_id => @unenrolled_user.id,
+              :type => 'StudentEnrollment'
+            }
+          }
+
+        e = Enrollment.find(json['id'])
+        e.workflow_state.should eql 'creation_pending'
         e.course_section.should eql @course.default_section
       end
 
@@ -193,7 +212,11 @@ describe EnrollmentsApiController, :type => :integration do
           'course_id'                          => @course.id,
           'type'                               => 'StudentEnrollment',
           'html_url'                           => course_user_url(@course, @unenrolled_user),
-          'grades'                             => { 'html_url' => course_student_grades_url(@course, @unenrolled_user) },
+          'grades'                             => {
+            'html_url' => course_student_grades_url(@course, @unenrolled_user),
+            'final_score' => nil,
+            'current_score' => nil
+          },
           'associated_user_id'                 => nil,
           'updated_at'                         => new_enrollment.updated_at.xmlschema
         }
@@ -283,11 +306,29 @@ describe EnrollmentsApiController, :type => :integration do
             'html_url' => course_user_url(e.course_id, e.user_id),
             'grades' => {
               'html_url' => course_student_grades_url(e.course_id, e.user_id),
+              'final_score' => nil,
+              'current_score' => nil
             },
             'associated_user_id' => nil,
             'updated_at' => e.updated_at.xmlschema
           }
         }
+      end
+
+      it "should return enrollments for unpublished courses" do
+        course
+        @course.claim
+        enrollment = course.enroll_student(@student)
+        enrollment.update_attribute(:workflow_state, 'active')
+
+        # without a state[] filter
+        json = api_call(:get, @user_path, @user_params)
+        json.map { |e| e['id'] }.should include enrollment.id
+
+        # with a state[] filter
+        json = api_call(:get, "#{@user_path}?state[]=active",
+                        @user_params.merge(:state => %w{active}))
+        json.map { |e| e['id'] }.should include enrollment.id
       end
 
       it "should not return enrollments from other accounts" do
@@ -304,7 +345,7 @@ describe EnrollmentsApiController, :type => :integration do
         enrollment = @student.enrollments.first
         enrollment.course_section = @section
         enrollment.save!
-        
+
         @path = "/api/v1/sections/#{@section.id}/enrollments"
         @params = { :controller => "enrollments_api", :action => "index", :section_id => @section.id.to_param, :format => "json" }
         json = api_call(:get, @path, @params)
@@ -316,6 +357,11 @@ describe EnrollmentsApiController, :type => :integration do
 
     context "a student" do
       it "should list all members of a course" do
+        current_user = @user
+        enrollment = @course.enroll_user(user)
+        enrollment.accept!
+
+        @user = current_user
         json = api_call(:get, @path, @params)
         enrollments = %w{observer student ta teacher}.inject([]) do |res, type|
           res = res + @course.send("#{type}_enrollments").scoped(:include => :user, :order => 'users.sortable_name ASC')
@@ -340,9 +386,17 @@ describe EnrollmentsApiController, :type => :integration do
               'id' => e.user.id
             }
           }
+          # should display the user's own grades
           h['grades'] = {
             'html_url' => course_student_grades_url(@course, e.user),
-          } if e.student?
+            'final_score' => nil,
+            'current_score' => nil
+          } if e.student? && e.user_id == @user.id
+          # should not display grades for other users.
+          h['grades'] = {
+            'html_url' => course_student_grades_url(@course, e.user)
+          } if e.student? && e.user_id != @user.id
+
           h
         }
       end
@@ -376,11 +430,39 @@ describe EnrollmentsApiController, :type => :integration do
             'html_url' => course_user_url(e.course_id, e.user_id),
             'grades' => {
               'html_url' => course_student_grades_url(e.course_id, e.user_id),
+              'final_score' => nil,
+              'current_score' => nil
             },
             'associated_user_id' => nil,
             'updated_at' => e.updated_at.xmlschema
           }
         }
+      end
+
+      it "should not display grades when hide_final_grade is true for the course" do
+        @course.settings[:hide_final_grade] = true
+        @course.save
+
+        json = api_call(:get, @user_path, @user_params)
+        json[0]['grades'].keys.should eql %w{html_url}
+      end
+
+      it "should not show enrollments for courses that aren't published" do
+        # Setup test with an unpublished course and an active enrollment in
+        # that course.
+        course
+        @course.claim
+        enrollment = course.enroll_student(@user)
+        enrollment.update_attribute(:workflow_state, 'active')
+
+        # Request w/o a state[] filter.
+        json = api_call(:get, @user_path, @user_params)
+        json.map { |e| e['id'] }.should_not include enrollment.id
+
+        # Request w/ a state[] filter.
+        json = api_call(:get, "#{@user_path}?state[]=active&type[]=StudentEnrollment",
+                        @user_params.merge(:state => %w{active}, :type => %w{StudentEnrollment}))
+        json.map { |e| e['id'] }.should_not include enrollment.id
       end
 
       it "should not include the users' sis and login ids" do
@@ -429,6 +511,8 @@ describe EnrollmentsApiController, :type => :integration do
           }
           h['grades'] = {
             'html_url' => course_student_grades_url(@course, e.user),
+            'final_score' => nil,
+            'current_score' => nil
           } if e.student?
           h
         end
@@ -478,6 +562,8 @@ describe EnrollmentsApiController, :type => :integration do
           }
           h['grades'] = {
             'html_url' => course_student_grades_url(@course, e.user),
+            'final_score' => nil,
+            'current_score' => nil
           } if e.student?
           h
         end
@@ -528,7 +614,11 @@ describe EnrollmentsApiController, :type => :integration do
             'course_id'                          => @course.id,
             'type'                               => @enrollment.type,
             'html_url'                           => course_user_url(@course, @student),
-            'grades'                             => { 'html_url' => course_student_grades_url(@course, @student) },
+            'grades'                             => {
+              'html_url' => course_student_grades_url(@course, @student),
+              'final_score' => nil,
+              'current_score' => nil
+            },
             'associated_user_id'                 => @enrollment.associated_user_id,
             'updated_at'                         => @enrollment.updated_at.xmlschema
           }
@@ -547,7 +637,11 @@ describe EnrollmentsApiController, :type => :integration do
             'course_id'                          => @course.id,
             'type'                               => @enrollment.type,
             'html_url'                           => course_user_url(@course, @student),
-            'grades'                             => { 'html_url' => course_student_grades_url(@course, @student) },
+            'grades'                             => {
+              'html_url' => course_student_grades_url(@course, @student),
+              'final_score' => nil,
+              'current_score' => nil
+            },
             'associated_user_id'                 => @enrollment.associated_user_id,
             'updated_at'                         => @enrollment.updated_at.xmlschema
           }
@@ -595,7 +689,11 @@ describe EnrollmentsApiController, :type => :integration do
             'course_section_id' => e.course_section_id,
             'course_id' => e.course_id,
             'html_url' => course_user_url(@course, e.user),
-            'grades' => { 'html_url' => course_student_grades_url(@course, e.user) },
+            'grades' => {
+              'html_url' => course_student_grades_url(@course, e.user),
+              'final_score' => nil,
+              'current_score' => nil
+            },
             'associated_user_id' => nil,
             'updated_at' => e.updated_at.xmlschema,
             'user' => {
@@ -638,9 +736,20 @@ describe EnrollmentsApiController, :type => :integration do
           }
           h['grades'] = {
             'html_url' => course_student_grades_url(@course, e.user),
+            'final_score' => nil,
+            'current_score' => nil
           } if e.student?
           h
         }
+      end
+
+      it "should return an empty array when no user enrollments match a filter" do
+        site_admin_user(:active_all => true)
+
+        json = api_call(:get, "#{@user_path}?type[]=TeacherEnrollment",
+          @user_params.merge(:type => %w{TeacherEnrollment}))
+
+        json.should be_empty
       end
     end
   end

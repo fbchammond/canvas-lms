@@ -20,70 +20,6 @@ describe "Canvas Cartridge importing" do
     @copy_to.content_migration = @migration
   end
 
-  it "should import course settings" do
-    #set all the possible values to non-default values
-    @copy_from.start_at = 5.minutes.ago
-    @copy_from.conclude_at = 1.month.from_now
-    @copy_from.is_public = false
-    @copy_from.name = "haha copy from test &amp;"
-    @copy_from.course_code = 'something funny'
-    @copy_from.publish_grades_immediately = false
-    @copy_from.allow_student_wiki_edits = true
-    @copy_from.allow_student_assignment_edits = true
-    @copy_from.hashtag = 'oi'
-    @copy_from.show_public_context_messages = false
-    @copy_from.allow_student_forum_attachments = false
-    @copy_from.default_wiki_editing_roles = 'teachers'
-    @copy_from.allow_student_organized_groups = false
-    @copy_from.default_view = 'modules'
-    @copy_from.show_all_discussion_entries = false
-    @copy_from.open_enrollment = true
-    @copy_from.storage_quota = 444
-    @copy_from.allow_wiki_comments = true
-    @copy_from.turnitin_comments = "Don't plagiarize"
-    @copy_from.self_enrollment = true
-    @copy_from.license = "cc_by_nc_nd"
-    @copy_from.locale = "es"
-    @copy_from.tab_configuration = [{"id"=>0}, {"id"=>14}, {"id"=>8}, {"id"=>5}, {"id"=>6}, {"id"=>2}, {"id"=>3, "hidden"=>true}]
-    @copy_from.save!
-
-    body_with_link = %{<p>Watup? <strong>eh?</strong><a href="/courses/%s/assignments">Assignments</a></p>
-<div>
-  <div><img src="http://www.instructure.com/images/header-logo.png"></div>
-  <div><img src="http://www.instructure.com/images/header-logo.png"></div>
-</div>}
-    @copy_from.syllabus_body = body_with_link % @copy_from.id 
-
-    #export to xml
-    builder = Builder::XmlMarkup.new(:indent=>2)
-    @resource.create_course_settings("1", builder)
-    syllabus = StringIO.new
-    @resource.create_syllabus(syllabus)
-    #convert to json
-    doc = Nokogiri::XML(builder.target!)
-    hash = @converter.convert_course_settings(doc)
-    syl_doc = Nokogiri::HTML(syllabus.string)
-    hash[:syllabus_body] = @converter.convert_syllabus(syl_doc)
-    #import json into new course
-    hash = hash.with_indifferent_access
-    @copy_to.import_settings_from_migration({:course=>hash})
-    @copy_to.save!
-
-    #compare settings
-    @copy_to.conclude_at.should == nil
-    @copy_to.start_at.should == nil
-    @copy_to.syllabus_body.should == (body_with_link % @copy_to.id)
-    @copy_to.storage_quota.should_not == @copy_from.storage_quota
-    @copy_to.name.should == 'alt name'
-    @copy_to.course_code.should == 'alt name'
-    atts = Course.clonable_attributes
-    atts -= Canvas::Migration::MigratorHelper::COURSE_NO_COPY_ATTS
-    atts.each do |att|
-      @copy_to.send(att).should == @copy_from.send(att)
-    end
-    @copy_to.tab_configuration.should == @copy_from.tab_configuration
-  end
-
   it "should import assignment groups" do
     ag1 = @copy_from.assignment_groups.new
     ag1.name = "Boring assignments"
@@ -146,12 +82,14 @@ describe "Canvas Cartridge importing" do
     tool1.privacy_level = 'name_only'
     tool1.consumer_key = 'haha'
     tool1.shared_secret = "don't share me"
+    tool1.tool_id = "test_tool"
     tool1.settings[:custom_fields] = {"key1" => "value1", "key2" => "value2"}
     tool1.settings[:user_navigation] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :extra => 'extra'}
     tool1.settings[:course_navigation] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :default => 'disabled', :visibility => 'members', :extra => 'extra'}
     tool1.settings[:account_navigation] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :extra => 'extra'}
     tool1.settings[:resource_selection] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :selection_width => 100, :selection_height => 50, :extra => 'extra'}
     tool1.settings[:editor_button] = {:url => "http://www.example.com", :text => "hello", :labels => {'en' => 'hello', 'es' => 'hola'}, :selection_width => 100, :selection_height => 50, :icon_url => "http://www.example.com", :extra => 'extra'}
+    tool1.settings[:icon_url] = "http://www.example.com/favicon.ico"
     tool1.save!
     tool2 = @copy_from.context_external_tools.new
     tool2.domain = 'example.com'
@@ -190,6 +128,8 @@ describe "Canvas Cartridge importing" do
     t1.domain.should == nil
     t1.consumer_key.should == 'fake'
     t1.shared_secret.should == 'fake'
+    t1.tool_id.should == 'test_tool'
+    t1.settings[:icon_url].should == 'http://www.example.com/favicon.ico'
     [:user_navigation, :course_navigation, :account_navigation].each do |type|
       t1.settings[type][:url].should == "http://www.example.com"
       t1.settings[type][:text].should == "hello"
@@ -228,6 +168,8 @@ describe "Canvas Cartridge importing" do
     t2.workflow_state.should == tool2.workflow_state
     t2.consumer_key.should == 'fake'
     t2.shared_secret.should == 'fake'
+    t2.tool_id.should be_nil
+    t2.settings[:icon_url].should be_nil
     t2.settings[:user_navigation].should be_nil
     t2.settings[:course_navigation].should be_nil
     t2.settings[:account_navigation].should be_nil
@@ -249,10 +191,10 @@ describe "Canvas Cartridge importing" do
 
     mod1 = @copy_from.context_modules.create!(:name => "some module")
 
-    tag = mod1.add_item({:title => "test", :type => 'context_external_tool', :url => "http://example.com.ims/lti"})
+    tag = mod1.add_item({:title => "test", :type => 'context_external_tool', :url => "http://example.com.ims/lti", :new_tab => true})
     tag = mod1.add_item({:title => "test2", :type => 'context_external_tool', :url => "http://example.com.ims/lti"})
     mod1.save!
-    
+
     mod1.content_tags.count.should == 2
 
     #export to xml
@@ -271,9 +213,11 @@ describe "Canvas Cartridge importing" do
     tag = mod1_2.content_tags.first
     tag.content_id.should == tool_to.id
     tag.content_type.should == 'ContextExternalTool'
+    tag.new_tab.should == true
     tag.url.should == "http://example.com.ims/lti"
     tag = mod1_2.content_tags.last
     tag.content_id.should == tool_to.id
+    tag.new_tab.should_not == true
     tag.content_type.should == 'ContextExternalTool'
     tag.url.should == "http://example.com.ims/lti"
   end
@@ -890,50 +834,6 @@ XML
     a.points_possible.should == assignment.points_possible
     a.discussion_topic.should == dt_2
     a.assignment_group.id.should == ag1.id
-  end
-  
-  it "should import calendar events" do
-    body_with_link = "<p>Watup? <strong>eh?</strong><a href=\"/courses/%s/assignments\">Assignments</a></p>"
-    cal = @copy_from.calendar_events.new
-    cal.title = "Calendar event"
-    cal.description = body_with_link % @copy_from.id
-    cal.start_at = 1.week.from_now
-    cal.save!
-    cal.all_day = true
-    cal.save!
-    cal2 = @copy_from.calendar_events.new
-    cal2.title = "Stupid events"
-    cal2.start_at = 5.minutes.from_now
-    cal2.end_at = 10.minutes.from_now
-    cal2.all_day = false
-    cal2.save!
-    
-    #export to xml
-    builder = Builder::XmlMarkup.new(:indent=>2)
-    @resource.create_events(builder)
-    #convert to json
-    doc = Nokogiri::XML(builder.target!)
-    hash = @converter.convert_events(doc)
-    #import json into new course
-    hash[0] = hash[0].with_indifferent_access
-    hash[1] = hash[1].with_indifferent_access
-    CalendarEvent.process_migration({'calendar_events'=>hash}, @migration)
-    @copy_to.save!
-    
-    @copy_to.calendar_events.count.should == 2
-    cal_2 = @copy_to.calendar_events.find_by_migration_id(CC::CCHelper.create_key(cal))
-    cal_2.title.should == cal.title
-    cal_2.start_at.to_i.should == cal.start_at.to_i
-    cal_2.end_at.to_i.should == cal.end_at.to_i
-    cal_2.all_day.should == true
-    cal_2.all_day_date.should == cal.all_day_date
-    cal_2.description = body_with_link % @copy_to.id
-    
-    cal2_2 = @copy_to.calendar_events.find_by_migration_id(CC::CCHelper.create_key(cal2))
-    cal2_2.title.should == cal2.title
-    cal2_2.start_at.to_i.should == cal2.start_at.to_i
-    cal2_2.end_at.to_i.should == cal2.end_at.to_i
-    cal2_2.description.should == ''
   end
   
   it "should import quizzes into correct assignment group" do

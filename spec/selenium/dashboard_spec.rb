@@ -27,7 +27,7 @@ describe "dashboard" do
       get url
       find_all_with_jquery("div.communication_message.announcement").size.should == 0
 
-      @user.stream_items.size.should == 0
+      @user.recent_stream_items.size.should == 0
       items.first.reload.hidden.should == true
     end
 
@@ -59,7 +59,7 @@ describe "dashboard" do
       get "/"
       driver.find_element(:css, ".reply_message .textarea").click
       driver.find_element(:css, "textarea[name='body']").send_keys("hey there")
-      driver.find_element(:css, ".communication_sub_message .submit_button").click
+      submit_form(".communication_sub_message")
       wait_for_ajax_requests
       messages = find_all_with_jquery(".communication_message.conversation .communication_sub_message:visible")
 
@@ -84,11 +84,11 @@ describe "dashboard" do
       @appointment_group.update_attributes(:new_appointments => [[Time.now.utc + 2.hour, Time.now.utc + 3.hour]])
 
       get "/"
-      find_all_with_jquery(".topic_message div.communication_message.dashboard_notification").size.should == 3
+      ffj(".topic_message div.communication_message.dashboard_notification").size.should == 3
       # appointment group publish and update notifications
-      find_all_with_jquery("div.communication_message.message_appointment_group_#{@appointment_group.id}").size.should == 2
+      ffj("div.communication_message.message_appointment_group_#{@appointment_group.id}").size.should == 2
       # signup notification
-      find_all_with_jquery("div.communication_message.message_calendar_event_#{@event.id}").size.should == 1
+      ffj("div.communication_message.message_group_#{@group.id}").size.should == 1
     end
 
     it "should display assignment in to do list" do
@@ -243,7 +243,7 @@ describe "dashboard" do
       get "/"
       driver.find_element(:css, '.topic_message .add_entry_link').click
       driver.find_element(:name, 'discussion_entry[plaintext_message]').send_keys('first comment')
-      driver.find_element(:css, '.add_sub_message_form').submit
+      submit_form('.add_sub_message_form')
       wait_for_ajax_requests
       wait_for_animations
       driver.find_element(:css, '.topic_message .subcontent').should include_text('first comment')

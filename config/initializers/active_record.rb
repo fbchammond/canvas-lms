@@ -255,8 +255,22 @@ class ActiveRecord::Base
     end
   end
 
-  def self.case_insensitive(col)
-    ActiveRecord::Base.configurations[RAILS_ENV]['adapter'] == 'postgresql' ? "LOWER(#{col})" : col
+  def self.best_unicode_collation_key(col)
+    if ActiveRecord::Base.configurations[RAILS_ENV]['adapter'] == 'postgresql'
+      # For PostgreSQL, we can't trust a simple LOWER(column), with any collation, since
+      # Postgres just defers to the C library which is different for each platform. The best
+      # choice is the collkey function from pg_collkey which uses ICU to get a full unicode sort.
+      # If that extension isn't around, casting to a bytea sucks for international characters,
+      # but at least it's consistent, and orders commas before letters so you don't end up with
+      # Johnson, Bob sorting before Johns, Jimmy
+      @collkey ||= connection.select_value("SELECT COUNT(*) FROM pg_proc WHERE proname='collkey'").to_i
+      @collkey == 0 ? "CAST(LOWER(#{col}) AS bytea)" : "collkey(#{col}, 'root', true, 2, true)"
+    else
+      # Not yet optimized for other dbs (MySQL's default collation is case insensitive;
+      # SQLite can have custom collations inserted, but probably not worth the effort
+      # since no one will actually use SQLite in a production install of Canvas)
+      col
+    end
   end
 
   class DynamicFinderTypeError < Exception; end
@@ -365,6 +379,10 @@ class ActiveRecord::Base
     {:order => order_by}
   }
 
+  named_scope :where, lambda { |conditions|
+    {:conditions => conditions}
+  }
+
   # set up class-specific getters/setters for a polymorphic association, e.g.
   #   belongs_to :context, :polymorphic => true, :types => [:course, :account]
   def self.belongs_to(name, options={})
@@ -409,17 +427,24 @@ class ActiveRecord::Base
     end
   end
 
-  def self.unique_constraint_retry
+  def self.unique_constraint_retry(retries = 1)
     # runs the block in a (possibly nested) transaction. if a unique constraint
-    # violation occurs, it will run it a second time. the nested transaction
-    # (savepoint) ensures we don't mess up things for the outer transaction.
-    # useful for possible race conditions where we don't want to take a lock
-    # (e.g. when we create a submission).
-    transaction(:requires_new => true) { uncached { yield } }
-  rescue UniqueConstraintViolation
+    # violation occurs, it will run it "retries" more times. the nested
+    # transaction (savepoint) ensures we don't mess up things for the outer
+    # transaction. useful for possible race conditions where we don't want to
+    # take a lock (e.g. when we create a submission).
+    retries.times do
+      begin
+        return transaction(:requires_new => true) { uncached { yield } }
+      rescue UniqueConstraintViolation
+      end
+    end
     transaction(:requires_new => true) { uncached { yield } }
   end
 
+  # returns batch_size ids at a time, working through the primary key from
+  # smallest to largest.
+  #
   # note this does a raw connection.select_values, so it doesn't work with scopes
   def self.find_ids_in_batches(options = {})
     batch_size = options[:batch_size] || 1000
@@ -434,6 +459,9 @@ class ActiveRecord::Base
     end
   end
 
+  # returns 2 ids at a time (the min and the max of a range), working through
+  # the primary key from smallest to largest.
+  #
   # note this does a raw connection.select_values, so it doesn't work with scopes
   def self.find_ids_in_ranges(options = {})
     batch_size = options[:batch_size] || 1000
@@ -521,6 +549,31 @@ if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
       execute("ALTER TABLE #{quote_table_name(from_table)} VALIDATE CONSTRAINT #{quote_column_name(foreign_key_name)}") if options[:delay_validation]
     end
     alias_method_chain :add_foreign_key, :delayed_validation
+
+    # have to replace the entire method to support concurrent
+    def add_index(table_name, column_name, options = {})
+      column_names = Array(column_name)
+      index_name   = index_name(table_name, :column => column_names)
+
+      if Hash === options # legacy support, since this param was a string
+        index_type = options[:unique] ? "UNIQUE" : ""
+        index_name = options[:name].to_s if options[:name]
+      else
+        index_type = options
+      end
+
+      if index_name.length > index_name_length
+        @logger.warn("Index name '#{index_name}' on table '#{table_name}' is too long; the limit is #{index_name_length} characters. Skipping.")
+        return
+      end
+      if index_exists?(table_name, index_name, false)
+        @logger.warn("Index name '#{index_name}' on table '#{table_name}' already exists. Skipping.")
+        return
+      end
+      quoted_column_names = quoted_columns_for_index(column_names, options).join(", ")
+
+      execute "CREATE #{index_type} INDEX #{"CONCURRENTLY " if options[:concurrently]}#{quote_column_name(index_name)} ON #{quote_table_name(table_name)} (#{quoted_column_names})"
+    end
   end
 end
 

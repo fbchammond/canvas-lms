@@ -1052,7 +1052,7 @@ class Assignment < ActiveRecord::Base
       :include_root => false
     )
     avatar_methods = avatars ? [:avatar_path] : []
-    visible_students = context.students_visible_to(user).uniq
+    visible_students = context.students_visible_to(user).order_by_sortable_name.uniq
     res[:context][:students] = visible_students.
       map{|u| u.as_json(:include_root => false, :methods => avatar_methods)}
     res[:context][:active_course_sections] = context.sections_visible_to(user).
@@ -1526,8 +1526,12 @@ class Assignment < ActiveRecord::Base
     description += hash[:instructions_in_html] == false ? ImportedHtmlConverter.convert_text(hash[:instructions] || "", context) : ImportedHtmlConverter.convert(hash[:instructions] || "", context)
     description += Attachment.attachment_list_from_migration(context, hash[:attachment_ids])
     item.description = description
-    item.copied = true
-    item.copying = true
+
+    if hash[:freeze_on_copy]
+      item.freeze_on_copy = true
+      item.copied = true
+      item.copying = true
+    end
     if !hash[:submission_types].blank?
       item.submission_types = hash[:submission_types]
     elsif ['discussion_topic'].include?(hash[:submission_format])
@@ -1601,14 +1605,14 @@ class Assignment < ActiveRecord::Base
     item.assignment_group ||= context.assignment_groups.find_or_create_by_name(t :imported_assignments_group, "Imported Assignments")
 
     hash[:due_at] ||= hash[:due_date]
-    [:due_at, :lock_at, :unlock_at, :peer_reviews_due_at, :all_day_date].each do |key|
+    [:due_at, :lock_at, :unlock_at, :peer_reviews_due_at].each do |key|
       item.send"#{key}=", Canvas::Migration::MigratorHelper.get_utc_time_from_timestamp(hash[key]) unless hash[key].nil?
     end
 
-    [:all_day, :turnitin_enabled, :peer_reviews_assigned, :peer_reviews,
+    [:turnitin_enabled, :peer_reviews_assigned, :peer_reviews,
      :automatic_peer_reviews, :anonymous_peer_reviews,
      :grade_group_students_individually, :allowed_extensions, :min_score,
-     :max_score, :mastery_score, :position, :peer_review_count, :freeze_on_copy
+     :max_score, :mastery_score, :position, :peer_review_count
     ].each do |prop|
       item.send("#{prop}=", hash[prop]) unless hash[prop].nil?
     end
@@ -1636,6 +1640,10 @@ class Assignment < ActiveRecord::Base
 
   def expects_submission?
     submission_types && submission_types.strip != "" && submission_types != "none" && submission_types != 'not_graded' && submission_types != "on_paper" && submission_types != 'external_tool'
+  end
+
+  def expects_external_submission?
+    submission_types == 'on_paper' || submission_types == 'external_tool'
   end
 
   def <=>(comparable)
@@ -1727,6 +1735,10 @@ class Assignment < ActiveRecord::Base
     end
 
     false
+  end
+
+  def can_copy?(user)
+    !att_frozen?("no_copying", user)
   end
 
   def frozen_atts_not_altered

@@ -388,6 +388,7 @@ ActionController::Routing::Routes.draw do |map|
     add_users(group)
     group.remove_user 'remove_user/:id', :controller => 'groups', :action => 'remove_user', :conditions => {:method => :delete}
     group.add_user 'add_user', :controller => 'groups', :action => 'add_user'
+    group.accept_invitation 'accept_invitation/:uuid', :controller => 'groups', :action => 'accept_invitation', :conditions => {:method => :get}
     group.members 'members.:format', :controller => 'groups', :action => 'context_group_members', :conditions => {:method => :get}
     group.members 'members', :controller => 'groups', :action => 'context_group_members', :conditions => {:method => :get}
     add_announcements(group)
@@ -536,6 +537,7 @@ ActionController::Routing::Routes.draw do |map|
 
   # dashboard_url is / , not /dashboard
   map.dashboard '', :controller => 'users', :action => 'user_dashboard', :conditions => {:method => :get}
+  map.styleguide 'styleguide', :controller => 'info', :action => 'styleguide', :conditions => {:method => :get}
   map.root :dashboard
   # backwards compatibility with the old /dashboard url
   map.dashboard_redirect 'dashboard', :controller => 'users', :action => 'user_dashboard', :conditions => {:method => :get}
@@ -652,7 +654,7 @@ ActionController::Routing::Routes.draw do |map|
       courses.get 'courses/:course_id/sections', :action => :sections, :path_name => 'course_sections'
       courses.get 'courses/:course_id/students', :action => :students
       courses.get 'courses/:course_id/users', :action => :users, :path_name => 'course_users'
-      courses.get 'courses/:course_id/activity_stream', :action => :activity_stream
+      courses.get 'courses/:course_id/activity_stream', :action => :activity_stream, :path_name => 'course_activity_stream'
       courses.get 'courses/:course_id/todo', :action => :todo_items
       courses.delete 'courses/:id', :action => :destroy
       courses.post 'courses/:course_id/course_copy', :controller => :content_imports, :action => :copy_course_content
@@ -700,7 +702,12 @@ ActionController::Routing::Routes.draw do |map|
 
     api.with_options(:controller => :discussion_topics_api) do |topics|
       def topic_routes(topics, context)
+        topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id", :action => :show, :path_name => "#{context}_discussion_topic"
+        topics.post "#{context.pluralize}/:#{context}_id/discussion_topics", :controller => :discussion_topics, :action => :create
+        topics.delete "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id", :controller => :discussion_topics, :action => :destroy
+
         topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/view", :action => :view, :path_name => "#{context}_discussion_topic_view"
+
         topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entry_list", :action => :entry_list, :path_name => "#{context}_discussion_topic_entry_list"
         topics.post "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries", :action => :add_entry, :path_name => "#{context}_discussion_add_entry"
         topics.get "#{context.pluralize}/:#{context}_id/discussion_topics/:topic_id/entries", :action => :entries, :path_name => "#{context}_discussion_entries"
@@ -718,6 +725,7 @@ ActionController::Routing::Routes.draw do |map|
       end
       topic_routes(topics, "course")
       topic_routes(topics, "group")
+      topic_routes(topics, "collection_item")
     end
 
     api.with_options(:controller => :external_tools) do |tools|
@@ -738,13 +746,17 @@ ActionController::Routing::Routes.draw do |map|
     end
 
     api.with_options(:controller => :users) do |users|
-      users.get 'users/self/activity_stream', :action => :activity_stream
+      users.get 'users/self/activity_stream', :action => :activity_stream, :path_name => 'user_activity_stream'
       users.get 'users/activity_stream', :action => :activity_stream # deprecated
+
+      users.put "users/:user_id/followers/self", :action => :follow
+      users.delete "users/:user_id/followers/self", :action => :unfollow
 
       users.get 'users/self/todo', :action => :todo_items
       users.delete 'users/self/todo/:asset_string/:purpose', :action => :ignore_item, :path_name => 'users_todo_ignore'
       users.post 'accounts/:account_id/users', :action => :create
       users.get 'accounts/:account_id/users', :action => :index, :path_name => 'account_users'
+      users.delete 'accounts/:account_id/users/:id', :action => :destroy
 
       users.put 'users/:id', :action => :update
       users.post 'users/:user_id/files', :action => :create_file
@@ -826,16 +838,31 @@ ActionController::Routing::Routes.draw do |map|
     end
 
     api.with_options(:controller => :groups) do |groups|
+      groups.resources :groups, :except => [:index]
+      groups.post 'groups/:group_id/invite', :action => :invite
       groups.post 'groups/:group_id/files', :action => :create_file
+      groups.get 'groups/:group_id/activity_stream', :action => :activity_stream, :path_name => 'group_activity_stream'
+      groups.put "groups/:group_id/followers/self", :action => :follow
+      groups.delete "groups/:group_id/followers/self", :action => :unfollow
+
+      groups.with_options(:controller => :group_memberships) do |memberships|
+        memberships.resources :memberships, :path_prefix => "groups/:group_id", :name_prefix => "group_", :controller => :group_memberships, :except => [:show]
+      end
     end
 
     api.with_options(:controller => :collections) do |collections|
-      collections.resources :collections, :path_prefix => "users/:user_id", :name_prefix => "user_"
+      collections.resources :collections, :path_prefix => "users/:user_id", :name_prefix => "user_", :only => [:index, :create]
+      collections.resources :collections, :path_prefix => "groups/:group_id", :name_prefix => "group_", :only => [:index, :create]
+      collections.resources :collections, :except => [:index, :create]
+      collections.put "collections/:collection_id/followers/self", :action => :follow
+      collections.delete "collections/:collection_id/followers/self", :action => :unfollow
 
       collections.with_options(:controller => :collection_items) do |items|
-        items.resources :items, :path_prefix => "collections/:collection_id", :name_prefix => "collection_", :controller => :collection_items
-        items.put "collections/:collection_id/items/:item_id/upvote", :action => :upvote
-        items.delete "collections/:collection_id/items/:item_id/upvote", :action => :remove_upvote
+        items.get "collections/:collection_id/items", :action => :index, :path_name => 'collection_items_list'
+        items.resources :items, :path_prefix => "collections/:collection_id", :name_prefix => "collection_", :controller => :collection_items, :only => [:index, :create]
+        items.resources :items, :path_prefix => "collections", :name_prefix => "collection_", :controller => :collection_items, :except => [:index, :create]
+        items.put "collections/items/:item_id/upvotes/self", :action => :upvote
+        items.delete "collections/items/:item_id/upvotes/self", :action => :remove_upvote
       end
     end
 
@@ -876,6 +903,8 @@ ActionController::Routing::Routes.draw do |map|
   end
   map.global_outcomes 'outcomes', :controller => 'outcomes', :action => 'global_outcomes'
   map.selection_test 'selection_test', :controller => 'external_content', :action => 'selection_test'
+
+  map.collection_item_link_data 'collection_items/link_data', :controller => 'collection_items', :action => 'link_data', :conditions => { :method => :post }
 
   # See how all your routes lay out with "rake routes"
 end
