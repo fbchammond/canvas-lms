@@ -36,7 +36,7 @@ after "deploy:update_code" do
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compress_assets"
 end
 
-after "deploy:symlink" do
+after "deploy:start" do
   # restart worker
   run "service canvas_init restart"
 end
