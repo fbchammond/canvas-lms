@@ -80,7 +80,7 @@ describe ContextModule do
     end
 
     it "should progress for assignment discussions" do
-      @assignment = @course.assignments.create(:title => 'talk assn', :submission_types => 'discussion_topic')
+      @assignment = @course.assignments.create!(:title => 'talk assn', :submission_types => 'discussion_topic')
       @tag = @module.add_item(:type => 'assignment', :id => @assignment.id)
       before_after do
         post "/courses/#{@course.id}/discussion_entries", :discussion_entry => { :message => 'ohai', :discussion_topic_id => @assignment.discussion_topic.id }
@@ -132,7 +132,7 @@ describe ContextModule do
 
         get next_link
         response.should be_redirect
-        response.location.ends_with?(@test_url).should be_true
+        response.location.ends_with?(@test_url + "?module_item_id=#{@tag2.id}").should be_true
             
         get @test_url
         response.should be_success

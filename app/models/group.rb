@@ -134,15 +134,18 @@ class Group < ActiveRecord::Base
   end
 
   def membership_for_user(user)
-    self.group_memberships.find_by_user_id(user && user.id)
+    return nil unless user.present?
+    self.shard.activate { self.group_memberships.find_by_user_id(user.id) }
   end
 
   def has_member?(user)
-    self.participating_group_memberships.find_by_user_id(user && user.id)
+    return nil unless user.present?
+    self.shard.activate { self.participating_group_memberships.find_by_user_id(user.id) }
   end
 
   def has_moderator?(user)
-    self.participating_group_memberships.moderators.find_by_user_id(user && user.id)
+    return nil unless user.present?
+    self.shard.activate { self.participating_group_memberships.moderators.find_by_user_id(user.id) }
   end
 
   def should_add_creator?
@@ -394,14 +397,8 @@ class Group < ActiveRecord::Base
     self.storage_quota || Setting.get_cached('group_default_quota', 50.megabytes.to_s).to_i
   end
 
-  TAB_HOME = 0
-  TAB_PAGES = 1
-  TAB_PEOPLE = 2
-  TAB_DISCUSSIONS = 3
-  TAB_CHAT = 4
-  TAB_FILES = 5
-  TAB_CONFERENCES = 6
-  TAB_ANNOUNCEMENTS = 7
+  TAB_HOME, TAB_PAGES, TAB_PEOPLE, TAB_DISCUSSIONS, TAB_CHAT, TAB_FILES,
+    TAB_CONFERENCES, TAB_ANNOUNCEMENTS, TAB_PROFILE, TAB_SETTINGS = *1..20
   def tabs_available(user=nil, opts={})
     available_tabs = [
       { :id => TAB_HOME,          :label => t("#group.tabs.home", "Home"), :css_class => 'home', :href => :group_path },
@@ -410,9 +407,14 @@ class Group < ActiveRecord::Base
       { :id => TAB_PEOPLE,        :label => t("#group.tabs.people", "People"), :css_class => 'peopel', :href => :group_users_path },
       { :id => TAB_DISCUSSIONS,   :label => t("#group.tabs.discussions", "Discussions"), :css_class => 'discussions', :href => :group_discussion_topics_path },
       { :id => TAB_CHAT,          :label => t("#group.tabs.chat", "Chat"), :css_class => 'chat', :href => :group_chat_path },
-      { :id => TAB_FILES,         :label => t("#group.tabs.files", "Files"), :css_class => 'files', :href => :group_files_path }
+      { :id => TAB_FILES,         :label => t("#group.tabs.files", "Files"), :css_class => 'files', :href => :group_files_path },
     ]
+
+    if root_account.try :canvas_network_enabled?
+      available_tabs << {:id => TAB_PROFILE, :label => t('#tabs.profile', 'Profile'), :css_class => 'profile', :href => :group_profile_path}
+    end
     available_tabs << { :id => TAB_CONFERENCES, :label => t('#tabs.conferences', "Conferences"), :css_class => 'conferences', :href => :group_conferences_path } if user && self.grants_right?(user, nil, :read)
+    available_tabs << { :id => TAB_SETTINGS, :label => t('#tabs.settings', 'Settings'), :css_class => 'settings', :href => :edit_group_path } if user && grants_right?(user, nil, :manage)
     available_tabs
   end
 
@@ -487,6 +489,14 @@ class Group < ActiveRecord::Base
     return false unless self.context && self.context.is_a?(Course)
     users = self.users + [user]
     self.context.course_sections.active.any?{ |section| section.common_to_users?(users) }
+  end
+
+  def self.join_levels
+    [
+      ["invitation_only", "Invite only"],
+      ["parent_context_auto_join", "Auto join"],
+      ["parent_context_request", "Request to join"]
+    ]
   end
 
   def default_collection_name

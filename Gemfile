@@ -15,7 +15,7 @@ gem 'diff-lcs',       '1.1.2',  :require => 'diff/lcs'
 gem 'encrypted_cookie_store-instructure', '1.0.1', :require => 'encrypted_cookie_store'
 gem 'erubis',         '2.7.0'
 gem 'hairtrigger',    '0.1.13'
-gem 'haml',           '3.1.2'
+gem 'haml',           '3.1.6'
 if !ONE_NINE
   gem 'fastercsv', '1.5.3'
 end
@@ -48,7 +48,7 @@ gem 'require_relative', '1.0.1'
 gem 'ritex',          '1.0.1'
 gem 'rscribd',        '1.2.0'
 gem 'ruby-net-ldap',  '0.0.4',  :require => 'net/ldap'
-gem 'ruby-saml-mod',  '0.1.14'
+gem 'ruby-saml-mod',  '0.1.15'
 gem 'rubycas-client', '2.2.1'
 gem 'rubyzip',        '0.9.4',  :require => 'zip/zip'
 gem 'sanitize',       '2.0.3'
@@ -60,7 +60,8 @@ gem 'yui-compressor', '0.9.4'
 gem 'foreigner',      '0.9.2'
 
 group :assets do
-  gem 'compass-rails', '1.0.1'
+  gem 'compass-rails', '1.0.2'
+  gem 'bootstrap-sass', '2.0.3.1'
 end
 
 group :mysql do
@@ -85,7 +86,7 @@ group :test do
   gem 'rcov',         '0.9.9'
   gem 'rspec',        '1.3.2'
   gem 'rspec-rails',  '1.3.4'
-  gem 'selenium-webdriver', '2.22.2'
+  gem 'selenium-webdriver', '2.24.0'
   gem 'webrat',       '0.7.3'
   gem 'yard',         '0.8.0'
   if ONE_NINE
@@ -102,10 +103,14 @@ group :development do
   else
     gem 'ruby-debug',   '0.10.4'
   end
+  gem 'guard', '1.0.3'
+end
+
+group :i18n_tools do
   gem 'ruby_parser', '2.0.6'
   gem 'sexp_processor', '3.0.5'
   gem 'ya2yaml', '0.30'
-  gem 'guard', '1.0.3'
+  gem 'uglifier'
 end
 
 group :redis do

@@ -336,10 +336,11 @@ module ApplicationHelper
 
   # Returns a <script> tag for each registered js_bundle
   def include_js_bundles
-    paths = js_bundles.map do |(bundle,plugin)|
+    paths = js_bundles.inject([]) do |ary, (bundle, plugin)|
       base_url = js_base_url
-      base_url = "/plugins/#{plugin}#{base_url}" if plugin
-      "#{base_url}/compiled/bundles/#{bundle}.js"
+      base_url += "/plugins/#{plugin}" if plugin
+      ary.concat(Canvas::RequireJs.extensions_for(bundle, 'plugins/')) unless use_optimized_js?
+      ary << "#{base_url}/compiled/bundles/#{bundle}.js"
     end
     javascript_include_tag *paths
   end
@@ -351,22 +352,13 @@ module ApplicationHelper
     end
   end
 
-  def include_common_stylesheet
-    if @use_new_styles
-      include_stylesheets :new_common, :media => "all"
-    else
-      include_stylesheets :common, :media => "all"
-    end
-  end
-
   def section_tabs
     @section_tabs ||= begin
       if @context
-        Rails.cache.fetch([@context, @current_user, "section_tabs", I18n.locale].cache_key) do
+        html = []
+        tabs = Rails.cache.fetch([@context, @current_user, "section_tabs_hash", I18n.locale].cache_key) do
           if @context.respond_to?(:tabs_available) && !(tabs = @context.tabs_available(@current_user, :session => session, :root_account => @domain_root_account)).empty?
-            html = []
-            html << '<nav role="navigation"><ul id="section-tabs">'
-            tabs = tabs.select do |tab|
+            tabs.select do |tab|
               if (tab[:id] == @context.class::TAB_CHAT rescue false)
                 tab[:href] && tab[:label] && feature_enabled?(:tinychat)
               elsif (tab[:id] == @context.class::TAB_COLLABORATIONS rescue false)
@@ -377,21 +369,28 @@ module ApplicationHelper
                 tab[:href] && tab[:label]
               end
             end
-            tabs.each do |tab|
-              path = nil
-              if tab[:args]
-                path = send(tab[:href], *tab[:args])
-              elsif tab[:no_args]
-                path = send(tab[:href])
-              else
-                path = send(tab[:href], @context)
-              end
-              html << "<li class='section #{"hidden" if tab[:hidden] || tab[:hidden_unused] }'>" + link_to(tab[:label], path, :class => tab[:css_class].to_css_class) + "</li>" if tab[:href]
-            end
-            html << "</ul></nav>"
-            html.join("")
+          else
+            []
           end
         end
+        return '' if tabs.empty?
+        html << '<nav role="navigation"><ul id="section-tabs">'
+        tabs.each do |tab|
+          path = nil
+          if tab[:args]
+            path = send(tab[:href], *tab[:args])
+          elsif tab[:no_args]
+            path = send(tab[:href])
+          else
+            path = send(tab[:href], @context)
+          end
+          hide = tab[:hidden] || tab[:hidden_unused]
+          class_name = tab[:css_class].to_css_class
+          class_name += ' active' if @active_tab == tab[:css_class]
+          html << "<li class='section #{"hidden" if hide }'>" + link_to(tab[:label], path, :class => class_name) + "</li>" if tab[:href]
+        end
+        html << "</ul></nav>"
+        html.join("")
       end
     end
     raw(@section_tabs)
@@ -482,8 +481,8 @@ module ApplicationHelper
         {
           :name => tool.label_for(:editor_button, nil),
           :id => tool.id,
-          :url => tool.settings[:editor_button][:url],
-          :icon_url => tool.settings[:editor_button][:icon_url],
+          :url => tool.settings[:editor_button][:url] || tool.url,
+          :icon_url => tool.settings[:editor_button][:icon_url] || tool.settings[:icon_url],
           :width => tool.settings[:editor_button][:selection_width],
           :height => tool.settings[:editor_button][:selection_height]
         }
@@ -526,7 +525,7 @@ module ApplicationHelper
       child_folders = if opts[:all_folders]
                         opts[:all_folders].select {|f| f.parent_folder_id == folder.id }
                       else
-                        folder.active_sub_folders
+                        folder.active_sub_folders.by_position
                       end
       if opts[:max_depth].nil? || opts[:depth] < opts[:max_depth]
         folders_as_options(child_folders, opts.merge({:depth => opts[:depth] + 1}))

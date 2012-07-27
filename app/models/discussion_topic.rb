@@ -23,6 +23,7 @@ class DiscussionTopic < ActiveRecord::Base
   include HasContentTags
   include CopyAuthorizedLinks
   include TextHelper
+  include ContextModuleItem
 
   attr_accessible :title, :message, :user, :delayed_post_at, :assignment,
     :plaintext_message, :podcast_enabled, :podcast_has_student_posts,
@@ -39,7 +40,6 @@ class DiscussionTopic < ActiveRecord::Base
 
   has_many :discussion_entries, :order => :created_at, :dependent => :destroy
   has_many :root_discussion_entries, :class_name => 'DiscussionEntry', :include => [:user], :conditions => ['discussion_entries.parent_id IS NULL AND discussion_entries.workflow_state != ?', 'deleted']
-  has_one :context_module_tag, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND workflow_state != ?', 'context_module', 'deleted'], :include => {:context_module => [:content_tags, :context_module_progressions]}
   has_one :external_feed_entry, :as => :asset
   belongs_to :external_feed
   belongs_to :context, :polymorphic => true
@@ -48,7 +48,7 @@ class DiscussionTopic < ActiveRecord::Base
   belongs_to :assignment
   belongs_to :editor, :class_name => 'User'
   belongs_to :old_assignment, :class_name => 'Assignment'
-  belongs_to :root_topic, :class_name => 'DiscussionTopic', :touch => true
+  belongs_to :root_topic, :class_name => 'DiscussionTopic'
   has_many :child_topics, :class_name => 'DiscussionTopic', :foreign_key => :root_topic_id, :dependent => :destroy
   has_many :discussion_topic_participants, :dependent => :destroy
   has_many :discussion_entry_participants, :through => :discussion_entries
@@ -113,30 +113,37 @@ class DiscussionTopic < ActiveRecord::Base
   end
 
   def update_subtopics
-    if self.assignment && self.assignment.submission_types == 'discussion_topic' && self.assignment.has_group_category?
+    if !self.deleted? && self.assignment && self.assignment.submission_types == 'discussion_topic' && self.assignment.has_group_category?
       send_later_if_production :refresh_subtopics
     end
   end
 
   def refresh_subtopics
-    category = self.assignment && self.assignment.group_category
-    return unless category && self.context && self.context.respond_to?(:groups)
-    category.groups.active.map do |group|
-      topic = group.discussion_topics.active.find_or_initialize_by_root_topic_id(self.id)
-      topic.message = self.message
-      topic.title = "#{self.title} - #{group.name}"
-      topic.assignment_id = self.assignment_id
-      topic.user_id = self.user_id
-      topic.discussion_type = self.discussion_type
-      topic.save if topic.changed?
-      topic
+    return if self.deleted?
+    category = self.assignment.try(:group_category)
+    return unless category && self.root_topic_id.blank?
+    category.groups.active.each do |group|
+      group.shard.activate do
+        DiscussionTopic.unique_constraint_retry do
+          topic = DiscussionTopic.scoped(:conditions => { :context_id => group.id, :context_type => 'Group', :root_topic_id => self.id }).first
+          topic ||= group.discussion_topics.build{ |dt| dt.root_topic = self }
+          topic.message = self.message
+          topic.title = "#{self.title} - #{group.name}"
+          topic.assignment_id = self.assignment_id
+          topic.user_id = self.user_id
+          topic.discussion_type = self.discussion_type
+          topic.save if topic.changed?
+          topic
+        end
+      end
     end
   end
 
   attr_accessor :saved_by
   def update_assignment
-    if !self.assignment_id && @old_assignment_id && self.context_module_tag
-      self.context_module_tag.confirm_valid_module_requirements
+    return if self.deleted?
+    if !self.assignment_id && @old_assignment_id
+      self.context_module_tags.each { |tag| tag.confirm_valid_module_requirements }
     end
     if @old_assignment_id
       Assignment.update_all({:workflow_state => 'deleted', :updated_at => Time.now.utc}, {:id => @old_assignment_id, :context_id => self.context_id, :context_type => self.context_type, :submission_types => 'discussion_topic'})
@@ -420,8 +427,13 @@ class DiscussionTopic < ActiveRecord::Base
     self.workflow_state = 'deleted'
     self.deleted_at = Time.now
     self.save
-    if self.for_assignment?
+
+    if self.for_assignment? && self.root_topic_id.blank?
       self.assignment.destroy unless self.assignment.deleted?
+    end
+
+    self.child_topics.each do |child|
+      child.destroy
     end
   end
 
@@ -542,11 +554,12 @@ class DiscussionTopic < ActiveRecord::Base
   end
 
   def context_module_action(user, action, points=nil)
-    self.context_module_tag.context_module_action(user, action, points) if self.context_module_tag
+    tags_to_update = self.context_module_tags.to_a
     if self.for_assignment?
-      self.assignment.context_module_tag.context_module_action(user, action, points) if self.assignment.context_module_tag
+      tags_to_update += self.assignment.context_module_tags
       self.ensure_submission(user) if self.assignment.context.students.include?(user) && action == :contributed
     end
+    tags_to_update.each { |tag| tag.context_module_action(user, action, points) }
   end
 
   def ensure_submission(user)
@@ -597,16 +610,15 @@ class DiscussionTopic < ActiveRecord::Base
   end
 
   def locked_for?(user=nil, opts={})
-    @locks ||= {}
     return false if opts[:check_policies] && self.grants_right?(user, nil, :update)
-    @locks[user ? user.id : 0] ||= Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
+    Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
       locked = false
       if (self.delayed_post_at && self.delayed_post_at > Time.now)
         locked = {:asset_string => self.asset_string, :unlock_at => self.delayed_post_at}
       elsif (self.assignment && l = self.assignment.locked_for?(user, opts))
         locked = l
-      elsif (self.could_be_locked && self.context_module_tag && !self.context_module_tag.available_for?(user, opts[:deep_check_if_needed]))
-        locked = {:asset_string => self.asset_string, :context_module => self.context_module_tag.context_module.attributes}
+      elsif self.could_be_locked && item = locked_by_module_item?(user, opts[:deep_check_if_needed])
+        locked = {:asset_string => self.asset_string, :context_module => item.context_module.attributes}
       elsif (self.root_topic && l = self.root_topic.locked_for?(user, opts))
         locked = l
       end
