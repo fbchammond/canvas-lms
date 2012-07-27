@@ -149,6 +149,7 @@ define([
           folder_id: $.isFunction(options.folder_id) ? (options.folder_id.call($form)) : options.folder_id,
           file_elements: $form.find("input[type='file']:visible"),
           url: (options.upload_only ? null : action),
+          method: options.method,
           uploadDataUrl: options.uploadDataUrl,
           formData: formData,
           formDataTarget: options.formDataTarget,
@@ -804,7 +805,8 @@ define([
       options.property_validations = $._addObjectName(options.property_validations, options.object_name);
     }
     if (options.required) {
-      $.each(options.required, function(i, name) {
+      var required = _.result(options, 'required')
+      $.each(required, function(i, name) {
         if (!data[name]) {
           if (!errors[name]) {
             errors[name] = [];
@@ -1019,7 +1021,7 @@ define([
     for(var idx in prevList) {
       var $obj = prevList[idx],
           $box = $obj.data('associated_error_box');
-      if($box.length && $box[0].parentNode) {
+      if($box && $box.length && $box[0].parentNode) {
         list.push($obj);
         if($obj.filter(":visible").length) {
           var offset = $obj.offset();

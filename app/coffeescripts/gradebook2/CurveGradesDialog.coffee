@@ -32,7 +32,8 @@ define [
               data[pre + "[grade]"] = curves[idx]
               cnt++
             if cnt == 0
-              @$dialog.errorBox I18n.t("errors.none_to_update", "None to Update")
+              errorBox = @$dialog.errorBox I18n.t("errors.none_to_update", "None to Update")
+              setTimeout((-> errorBox.fadeOut(-> errorBox.remove())), 3500)
               return false
             data
           success: (data) =>
@@ -53,19 +54,21 @@ define [
       @$dialog.find("#assign_blanks").change @curve
 
     curve: =>
-      idx = 0
-      scores = {}
-      data = @$dialog.getFormData()
-      users_for_score = []
-      scoreCount = 0
-      middleScore = parseInt($("#middle_score").val(), 10)
-      middleScore = (middleScore / @assignment.points_possible)
+      idx                  = 0
+      scores               = {}
+      data                 = @$dialog.getFormData()
+      users_for_score      = []
+      scoreCount           = 0
+      middleScore          = parseInt($("#middle_score").val(), 10)
+      middleScore          = (middleScore / @assignment.points_possible)
+      should_assign_blanks = $('#assign_blanks').prop('checked')
+
       return  if isNaN(middleScore)
 
       for idx, student of @gradebook.students
         score = student["assignment_#{@assignment.id}"].score
         score = @assignment.points_possible if score > @assignment.points_possible
-        score = 0 if score < 0
+        score = 0 if score < 0 or score is null and should_assign_blanks
         users_for_score[parseInt(score, 10)] = users_for_score[parseInt(score, 10)] or []
         users_for_score[parseInt(score, 10)].push [ idx, (score or 0) ]
         scoreCount++

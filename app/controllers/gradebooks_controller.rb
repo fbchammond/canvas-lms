@@ -68,7 +68,9 @@ class GradebooksController < ApplicationController
           # Yes, fetch *all* submissions for this course; otherwise the view will end up doing a query for each
           # assignment in order to calculate grade distributions
           @all_submissions = @context.submissions.all(:select => "submissions.assignment_id, submissions.score, submissions.grade, submissions.quiz_submission_id")
-          @courses_with_grades = @student.available_courses.select{|c| c.grants_right?(@student, nil, :participate_as_student)}
+          if @student == @current_user
+            @courses_with_grades = @student.available_courses.select{|c| c.grants_right?(@student, nil, :participate_as_student)}
+          end
           format.html { render :action => 'grade_summary' }
         else
           format.html { render :action => 'grade_summary_list' }
@@ -175,7 +177,7 @@ class GradebooksController < ApplicationController
           cancel_cache_buster
           Enrollment.recompute_final_score_if_stale @context
           send_data(
-            @context.gradebook_to_csv(:include_sis_id => @context.grants_rights?(@current_user, session, :read_sis, :manage_sis).values.any?),
+            @context.gradebook_to_csv(:include_sis_id => @context.grants_rights?(@current_user, session, :read_sis, :manage_sis).values.any?, :user => @current_user),
             :type => "text/csv",
             :filename => t('grades_filename', "Grades").gsub(/ /, "_") + "-" + @context.name.to_s.gsub(/ /, "_") + ".csv",
             :disposition => "attachment"

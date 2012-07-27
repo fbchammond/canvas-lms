@@ -97,9 +97,18 @@ describe BasicLTI do
   end
   
   describe "generate" do
-    it "should generate correct parameters" do
+    before do
       course_with_teacher(:active_all => true)
-      @tool = @course.context_external_tools.create!(:domain => 'yahoo.com', :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool')
+      @tool = @course.context_external_tools.create!(:domain => 'yahoo.com',
+        :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool')
+    end
+
+    it "should generate correct parameters" do
+      @user = user_with_managed_pseudonym(:sis_user_id => 'testfun', :name => "A Name")
+      course_with_teacher_logged_in(:active_all => true, :user => @user, :account => @account)
+      @course.sis_source_id = 'coursesis'
+      @course.save!
+      @tool = @course.context_external_tools.create!(:domain => 'yahoo.com', :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool', :privacy_level => 'public')
       hash = BasicLTI.generate(:url => 'http://www.yahoo.com', :tool => @tool, :user => @user, :context => @course, :link_code => '123456', :return_url => 'http://www.google.com')
       hash['lti_message_type'].should == 'basic-lti-launch-request'
       hash['lti_version'].should == 'LTI-1p0'
@@ -110,6 +119,15 @@ describe BasicLTI do
       hash['context_id'].should == @course.opaque_identifier(:asset_string)
       hash['context_title'].should == @course.name
       hash['context_label'].should == @course.course_code
+      hash['custom_canvas_user_id'].should == @user.id.to_s
+      hash['custom_canvas_user_login_id'].should == @user.pseudonyms.first.unique_id
+      hash['custom_canvas_course_id'].should == @course.id.to_s
+      hash['lis_course_offering_sourcedid'].should == 'coursesis'
+      hash['lis_person_contact_email_primary'].should == 'nobody@example.com'
+      hash['lis_person_name_full'].should == 'A Name'
+      hash['lis_person_name_family'].should == 'Name'
+      hash['lis_person_name_given'].should == 'A'
+      hash['lis_person_sourcedid'].should == 'testfun'
       hash['launch_presentation_locale'].should == I18n.default_locale.to_s
       hash['launch_presentation_document_target'].should == 'iframe'
       hash['launch_presentation_width'].should == '600'
@@ -122,18 +140,48 @@ describe BasicLTI do
       hash['tool_consumer_info_version'].should == 'cloud'
       hash['oauth_callback'].should == 'about:blank'
     end
+
+    it "should set the locale if I18n.localizer exists" do
+      I18n.localizer = lambda { :es }
+      hash = BasicLTI.generate(:url => 'http://www.yahoo.com', :tool => @tool, :user => @user, :context => @course, :link_code => '123456', :return_url => 'http://www.google.com')
+      hash['launch_presentation_locale'].should == 'es'
+      I18n.localizer = lambda { :en }
+    end
+
+    it "should add account info in launch data for account navigation" do
+      @user = user_with_managed_pseudonym
+      sub_account = Account.create(:parent_account => @account)
+      sub_account.sis_source_id = 'accountsis'
+      sub_account.save!
+      @tool = sub_account.context_external_tools.create!(:domain => 'yahoo.com', :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool', :privacy_level => 'public')
+
+      hash = BasicLTI.generate(:url => 'http://www.yahoo.com', :tool => @tool, :user => @user, :context => sub_account, :link_code => '123456', :return_url => 'http://www.google.com')
+      hash['custom_canvas_account_id'] = sub_account.id.to_s
+      hash['custom_canvas_account_sis_id'] = 'accountsis'
+      hash['custom_canvas_user_login_id'].should == @user.pseudonyms.first.unique_id
+    end
+
+    it "should add account and user info in launch data for user profile launch" do
+      @user = user_with_managed_pseudonym(:sis_user_id => 'testfun')
+      sub_account = Account.create(:parent_account => @account)
+      sub_account.sis_source_id = 'accountsis'
+      sub_account.save!
+      @tool = sub_account.context_external_tools.create!(:domain => 'yahoo.com', :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool', :privacy_level => 'public')
+
+      hash = BasicLTI.generate(:url => 'http://www.yahoo.com', :tool => @tool, :user => @user, :context => @user, :link_code => '123456', :return_url => 'http://www.google.com')
+      hash['custom_canvas_account_id'] = sub_account.id.to_s
+      hash['custom_canvas_account_sis_id'] = 'accountsis'
+      hash['lis_person_sourcedid'].should == 'testfun'
+      hash['custom_canvas_user_id'].should == @user.id.to_s
+    end
     
     it "should include URI query parameters" do
-      course_with_teacher(:active_all => true)
-      @tool = @course.context_external_tools.create!(:domain => 'yahoo.com', :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool')
       hash = BasicLTI.generate(:url => 'http://www.yahoo.com?a=1&b=2', :tool => @tool, :user => @user, :context => @course, :link_code => '123456', :return_url => 'http://www.google.com')
       hash['a'].should == '1'
       hash['b'].should == '2'
     end
     
     it "should not allow overwriting other parameters from the URI query string" do
-      course_with_teacher(:active_all => true)
-      @tool = @course.context_external_tools.create!(:domain => 'yahoo.com', :consumer_key => '12345', :shared_secret => 'secret', :name => 'tool')
       hash = BasicLTI.generate(:url => 'http://www.yahoo.com?user_id=123&oauth_callback=1234', :tool => @tool, :user => @user, :context => @course, :link_code => '123456', :return_url => 'http://www.google.com')
       hash['user_id'].should == @user.opaque_identifier(:asset_string)
       hash['oauth_callback'].should == 'about:blank'

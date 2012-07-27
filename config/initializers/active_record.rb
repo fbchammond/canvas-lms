@@ -264,7 +264,7 @@ class ActiveRecord::Base
       # but at least it's consistent, and orders commas before letters so you don't end up with
       # Johnson, Bob sorting before Johns, Jimmy
       @collkey ||= connection.select_value("SELECT COUNT(*) FROM pg_proc WHERE proname='collkey'").to_i
-      @collkey == 0 ? "CAST(LOWER(#{col}) AS bytea)" : "collkey(#{col}, 'root', true, 2, true)"
+      @collkey == 0 ? "CAST(LOWER(replace(#{col}, '\\', '\\\\')) AS bytea)" : "collkey(#{col}, 'root', true, 2, true)"
     else
       # Not yet optimized for other dbs (MySQL's default collation is case insensitive;
       # SQLite can have custom collations inserted, but probably not worth the effort
@@ -975,4 +975,31 @@ ActiveRecord::ConnectionAdapters::SchemaStatements.class_eval do
     add_index_without_length_raise(table_name, column_name, options)
   end
   alias_method_chain :add_index, :length_raise
+
+  # in anticipation of having to re-run migrations due to integrity violations or
+  # killing stuff that is holding locks too long
+  def add_foreign_key_if_not_exists(from_table, to_table, options = {})
+    case self.adapter_name
+    when 'SQLite': return
+    when 'PostgreSQL'
+      begin
+        add_foreign_key(from_table, to_table, options)
+      rescue ActiveRecord::StatementInvalid => e
+        raise unless e.message =~ /PGError: ERROR:.+already exists/
+      end
+    else
+      column  = options[:column] || "#{to_table.to_s.singularize}_id"
+      foreign_key_name = foreign_key_name(from_table, column, options)
+      return if foreign_keys(from_table).find { |k| k.options[:name] == foreign_key_name }
+      add_foreign_key(from_table, to_table, options)
+    end
+  end
+
+  def remove_foreign_key_if_exists(table, options = {})
+    begin
+      remove_foreign_key(table, options)
+    rescue ActiveRecord::StatementInvalid => e
+      raise unless e.message =~ /PGError: ERROR:.+does not exist|Mysql::Error: Error on rename/
+    end
+  end
 end

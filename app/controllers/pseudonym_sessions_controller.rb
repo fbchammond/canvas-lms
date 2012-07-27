@@ -41,13 +41,7 @@ class PseudonymSessionsController < ApplicationController
     @is_cas = @domain_root_account.cas_authentication? && @is_delegated
     @is_saml = @domain_root_account.saml_authentication? && @is_delegated
     if @is_cas && !params[:no_auto]
-      if session[:exit_frame]
-        session.delete(:exit_frame)
-        render :template => 'shared/exit_frame', :layout => false, :locals => {
-          :url => login_url(params)
-        }
-        return
-      elsif params[:ticket]
+      if params[:ticket]
         # handle the callback from CAS
         logger.info "Attempting CAS login with ticket #{params[:ticket]} in account #{@domain_root_account.id}"
         st = CASClient::ServiceTicket.new(params[:ticket], login_url)
@@ -119,18 +113,18 @@ class PseudonymSessionsController < ApplicationController
     @pseudonym_session.remote_ip = request.remote_ip
     found = @pseudonym_session.save
 
-    if @pseudonym_session.too_many_attempts?
+    if !found && params[:pseudonym_session]
+      pseudonym = Pseudonym.authenticate(params[:pseudonym_session], @domain_root_account.trusted_account_ids, request.remote_ip)
+      if pseudonym && pseudonym != :too_many_attempts
+        @pseudonym_session = PseudonymSession.new(pseudonym, params[:pseudonym_session][:remember_me] == "1")
+        found = @pseudonym_session.save
+      end
+    end
+
+    if pseudonym == :too_many_attempts || @pseudonym_session.too_many_attempts?
       flash[:error] = t 'errors.max_attempts', "Too many failed login attempts. Please try again later or contact your system administrator."
       redirect_to login_url
       return
-    end
-
-    if !found && params[:pseudonym_session]
-      if pseudonym = Pseudonym.authenticate(params[:pseudonym_session], @domain_root_account.trusted_account_ids)
-        @pseudonym_session = PseudonymSession.new(pseudonym, params[:pseudonym_session][:remember_me] == "1")
-        @pseudonym_session.save
-        found = true
-      end
     end
 
     @pseudonym = @pseudonym_session && @pseudonym_session.record
@@ -368,6 +362,8 @@ class PseudonymSessionsController < ApplicationController
   end
 
   def successful_login(user, pseudonym)
+    @current_user = user
+    @current_pseudonym = pseudonym
     respond_to do |format|
       flash[:notice] = t 'notices.login_success', "Login successful." unless flash[:error]
       if session[:oauth2]
@@ -456,7 +452,7 @@ class PseudonymSessionsController < ApplicationController
     end
 
     user = User.find(code_data['user'])
-    token = AccessToken.create!(:user => user, :developer_key => key)
+    token = user.access_tokens.create!(:developer_key => key)
     render :json => {
       'access_token' => token.token,
       'user' => user.as_json(:only => [:id, :name], :include_root => false),
