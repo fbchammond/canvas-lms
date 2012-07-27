@@ -142,7 +142,8 @@ describe CoursesController, :type => :integration do
           'account_id' => @account.id,
           'root_account_id' => @account.id,
           'start_at' => '2011-01-01T07:00:00Z',
-          'end_at' => '2011-05-01T07:00:00Z'
+          'end_at' => '2011-05-01T07:00:00Z',
+          'workflow_state' => 'available',
         })
         json = api_call(:post, @resource_path, @resource_params, post_params)
         new_course = Course.find(json['id'])
@@ -171,6 +172,15 @@ describe CoursesController, :type => :integration do
         )
         new_course = Course.find(json['id'])
         new_course.should be_available
+      end
+
+      it "should allow setting sis_course_id without offering the course" do
+        json = api_call(:post, @resource_path,
+          @resource_params,
+          { :account_id => @account.id, :course => { :name => 'Test Course', :sis_course_id => '9999' } }
+        )
+        new_course = Course.find(json['id'])
+        new_course.sis_source_id.should == '9999'
       end
     end
 

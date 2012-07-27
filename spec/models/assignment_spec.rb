@@ -711,16 +711,21 @@ describe Assignment do
       @a.update_attributes(:grading_type => 'letter_grade', :points_possible => 20)
       @teacher = @a.context.enroll_user(User.create(:name => "user 1"), 'TeacherEnrollment').user
       @student = @a.context.enroll_user(User.create(:name => "user 1"), 'StudentEnrollment').user
+      @enrollment = @student.enrollments.first
       @assignment.reload
       @sub = @assignment.grade_student(@student, :grader => @teacher, :grade => 'C').first
       @sub.grade.should eql('C')
       @sub.score.should eql(15.2)
+      run_transaction_commit_callbacks
+      @enrollment.reload.computed_current_score.should == 76
 
       @assignment.points_possible = 30
       @assignment.save!
       @sub.reload
       @sub.score.should eql(15.2)
       @sub.grade.should eql('F')
+      run_transaction_commit_callbacks
+      @enrollment.reload.computed_current_score.should == 50.7
     end
 
     it "should accept lowercase letter grades" do
@@ -920,24 +925,24 @@ describe Assignment do
       res.match(/DTEND;VALUE=DATE:20080903/).should_not be_nil
     end
 
-    it ".to_ics should return a plain-text description" do
-      assignment_model(:due_at => "Sep 3 2008 12:00am", :description => <<-HTML)
-      <p>
+    it ".to_ics should return a plain-text description and alt html description" do
+      html = %{<div>
         This assignment is due December 16th. Plz discuss the reading.
         <p> </p>
-        <p> </p>
-        <p> </p>
-        <p> </p>
         <p>Test.</p>
-      </p>
-      HTML
+      </div>}
+      assignment_model(:due_at => "Sep 3 2008 12:00am", :description => html)
       ev = @assignment.to_ics(false)
-      ev.description.should == "This assignment is due December 16th. Plz discuss the reading.
-         
-         
-         
-         
-        Test."
+      ev.description.should == "This assignment is due December 16th. Plz discuss the reading.\n  \n\n\n Test."
+      ev.x_alt_desc.should == html.strip
+    end
+
+    it ".to_ics should run the description through api_user_content to translate links" do
+      html = %{<a href="/calendar">Click!</a>}
+      assignment_model(:due_at => "Sep 3 2008 12:00am", :description => html)
+      ev = @assignment.to_ics(false)
+      ev.description.should == "[Click!](http://localhost/calendar)"
+      ev.x_alt_desc.should == %{<a href="http://localhost/calendar">Click!</a>}
     end
   end
 
@@ -1102,6 +1107,14 @@ describe Assignment do
       @topic.reload
       @topic.state.should eql(:active)
     end
+
+    it "should clear the lock_at date when converted to a graded topic" do
+      assignment_model
+      @a.lock_at = 10.days.from_now
+      @a.submission_types = "discussion_topic"
+      @a.save!
+      @a.lock_at.should be_nil
+    end
   end
 
   context "broadcast policy" do
@@ -1171,6 +1184,7 @@ describe Assignment do
         @sub2 = @assignment.grade_student(@stu2, :grade => 9).first
         @sub2.messages_sent.should be_empty
       end
+
       it "should notify affected students on a mass-grade change" do
         setup_unpublished_assignment_with_students
         @assignment.publish!
@@ -1789,6 +1803,23 @@ describe Assignment do
       @quiz.lock_at = 1.hours.ago
       @quiz.save!
       Assignment.not_locked.count.should == 0
+    end
+  end
+
+  context "destroy" do
+    it "should destroy the associated discussion topic" do
+      group_discussion_assignment
+      @assignment.destroy
+      @topic.reload.should be_deleted
+      @assignment.reload.should be_deleted
+    end
+
+    it "should not revive the discussion if touched after destroyed" do
+      group_discussion_assignment
+      @assignment.destroy
+      @topic.reload.should be_deleted
+      @assignment.touch
+      @topic.reload.should be_deleted
     end
   end
 end

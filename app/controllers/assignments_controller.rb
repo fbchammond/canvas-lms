@@ -16,7 +16,10 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+# @API Assignments
 class AssignmentsController < ApplicationController
+  include Api::V1::Assignment
+
   include GoogleDocs
   before_filter :require_context
   add_crumb(proc { t '#crumbs.assignments', "Assignments" }, :except => [:destroy, :syllabus, :index]) { |c| c.send :course_assignments_path, c.instance_variable_get("@context") }
@@ -67,7 +70,7 @@ class AssignmentsController < ApplicationController
       end
       @locked = @assignment.locked_for?(@current_user, :check_policies => true, :deep_check_if_needed => true)
       @unlocked = !@locked || @assignment.grants_rights?(@current_user, session, :update)[:update]
-      @assignment_module = @assignment.context_module_tag
+      @assignment_module = ContextModuleItem.find_tag_with_preferred([@assignment], params[:module_item_id])
       @assignment.context_module_action(@current_user, :read) if @unlocked && !@assignment.new_record?
       if @assignment.grants_right?(@current_user, session, :grade)
         visible_student_ids = @context.enrollments_visible_to(@current_user).find(:all, :select => 'user_id').map(&:user_id)
@@ -324,14 +327,22 @@ class AssignmentsController < ApplicationController
     end
   end
 
+  # @API Delete an assignment
+  #
+  # Delete the given assignment.
+  #
+  # @example_request
+  #     curl https://<canvas>/api/v1/courses/<course_id>/assignments/<assignment_id> \ 
+  #          -X DELETE \ 
+  #          -H 'Authorization: Bearer <token>'
   def destroy
-    @assignment = Assignment.find(params[:id])
+    @assignment = @context.assignments.active.find(params[:id])
     if authorized_action(@assignment, @current_user, :delete)
       @assignment.destroy
 
       respond_to do |format|
         format.html { redirect_to(named_context_url(@context, :context_assignments_url)) }
-        format.json { render :json => @assignment.to_json }
+        format.json { render :json => assignment_json(@assignment, @current_user, session) }
       end
     end
   end

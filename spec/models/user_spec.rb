@@ -815,7 +815,9 @@ describe User do
 
     it "should not include users from other sections if visibility is limited to sections" do
       set_up_course_with_users
-      @course.enroll_user(@student, 'StudentEnrollment', :enrollment_state => 'active', :limit_privileges_to_course_section => true)
+      enrollment = @course.enroll_user(@student, 'StudentEnrollment', :enrollment_state => 'active', :limit_privileges_to_course_section => true)
+      # we currently force limit_privileges_to_course_section to be false for students; override it in the db
+      Enrollment.update_all({ :limit_privileges_to_course_section => true }, :id => enrollment.id)
       messageable_users = @student.messageable_users.map(&:id)
       messageable_users.should include @this_section_user.id
       messageable_users.should_not include @other_section_user.id
@@ -873,7 +875,9 @@ describe User do
 
     it "should respect section visibility when returning users for a specified group" do
       set_up_course_with_users
-      @course.enroll_user(@student, 'StudentEnrollment', :enrollment_state => 'active', :limit_privileges_to_course_section => true)
+      enrollment = @course.enroll_user(@student, 'StudentEnrollment', :enrollment_state => 'active', :limit_privileges_to_course_section => true)
+      # we currently force limit_privileges_to_course_section to be false for students; override it in the db
+      Enrollment.update_all({ :limit_privileges_to_course_section => true }, :id => enrollment.id)
 
       @group.users << @other_section_user
 
@@ -900,6 +904,24 @@ describe User do
       messageable_users.should include @student.id
       messageable_users.should_not include @this_section_user.id
       messageable_users.should_not include @other_section_user.id
+    end
+
+    it "should not show non-linked observers to students" do
+      set_up_course_with_users
+      @course.enroll_user(@admin, 'TeacherEnrollment', :enrollment_state => 'active')
+      student1, student2 = user_model, user_model
+      @course.enroll_user(student1, 'StudentEnrollment', :enrollment_state => 'active')
+      @course.enroll_user(student2, 'StudentEnrollment', :enrollment_state => 'active')
+
+      observer = user_model
+      enrollment = @course.enroll_user(observer, 'ObserverEnrollment', :enrollment_state => 'active')
+      enrollment.associated_user_id = student1.id
+      enrollment.save
+
+      student1.messageable_users.map(&:id).should include observer.id
+      student1.enrollment_visibility[:user_counts][@course.id].should eql 8
+      student2.messageable_users.map(&:id).should_not include observer.id
+      student2.enrollment_visibility[:user_counts][@course.id].should eql 7
     end
 
     it "should include all shared contexts and enrollment information" do
@@ -1021,8 +1043,10 @@ describe User do
   
       it "should return concluded enrollments in the group and section if they are still members" do
         set_up_course_with_users
-        @course.enroll_user(@student, 'StudentEnrollment', :enrollment_state => 'active', :limit_privileges_to_course_section => true)
-  
+        enrollment = @course.enroll_user(@student, 'StudentEnrollment', :enrollment_state => 'active', :limit_privileges_to_course_section => true)
+        # we currently force limit_privileges_to_course_section to be false for students; override it in the db
+        Enrollment.update_all({ :limit_privileges_to_course_section => true }, :id => enrollment.id)
+
         @group.users << @other_section_user
         @this_section_user_enrollment.conclude
   
@@ -1663,6 +1687,19 @@ describe User do
       User.create!(:name => "John Johnson")
       User.create!(:name => "John John")
       User.order_by_sortable_name.all.map(&:sortable_name).should == ["John, John", "Johnson, John"]
+    end
+  end
+
+  describe "quota" do
+    it "should default to User.default_storage_quota" do
+      user().quota.should eql User.default_storage_quota
+    end
+
+    it "should sum up associated root account quotas" do
+      user()
+      @user.associated_root_accounts << Account.create! << (a = Account.create!)
+      a.update_attribute :default_user_storage_quota_mb, a.default_user_storage_quota_mb + 10
+      @user.quota.should eql(2 * User.default_storage_quota + 10.megabytes)
     end
   end
 end

@@ -18,9 +18,14 @@
 
 # See the uploads controller and views for examples on how to use this model.
 class Attachment < ActiveRecord::Base
+  def self.display_name_order_by_clause(table = nil)
+    col = table ? "#{table}.display_name" : 'display_name'
+    best_unicode_collation_key(col)
+  end
   attr_accessible :context, :folder, :filename, :display_name, :user, :locked, :position, :lock_at, :unlock_at, :uploaded_data
   include HasContentTags
-  
+  include ContextModuleItem
+
   belongs_to :context, :polymorphic => true
   belongs_to :cloned_item
   belongs_to :folder
@@ -29,7 +34,6 @@ class Attachment < ActiveRecord::Base
   has_one :media_object
   has_many :submissions
   has_many :attachment_associations
-  has_one :context_module_tag, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND workflow_state != ?', 'context_module', 'deleted'], :include => {:context_module => :context_module_progressions}
   belongs_to :root_attachment, :class_name => 'Attachment'
   belongs_to :scribd_mime_type
   belongs_to :scribd_account
@@ -112,7 +116,8 @@ class Attachment < ActiveRecord::Base
       send_later_enqueue_args(:submit_to_scribd!, { :n_strand => 'scribd', :max_attempts => 1 })
     end
 
-    send_later(:infer_encoding) if self.encoding.nil? && self.content_type =~ /text/
+    # try an infer encoding if it would be useful to do so
+    send_later(:infer_encoding) if self.encoding.nil? && self.content_type =~ /text/ && self.context_type != 'SisBatch'
     if respond_to?(:process_attachment_with_processing) && thumbnailable? && !attachment_options[:thumbnails].blank? && parent_id.nil?
       temp_file = temp_path || create_temp_file
       self.class.attachment_options[:thumbnails].each { |suffix, size| send_later_if_production(:create_thumbnail_size, suffix) }
@@ -599,8 +604,6 @@ class Attachment < ActiveRecord::Base
     # Return existing value, even if nil, as long as it's defined
     @file_store_config ||= YAML.load_file(RAILS_ROOT + "/config/file_store.yml")[RAILS_ENV] rescue nil
     @file_store_config ||= { 'storage' => 'local' }
-    # default the secure setting to true only in production
-    @file_store_config['secure'] = Rails.env.production? unless @file_store_config.has_key?('secure')
     @file_store_config['path_prefix'] ||= @file_store_config['path'] || 'tmp/files'
     if RAILS_ENV == "test"
       # yes, a rescue nil; the problem is that in an automated test environment, this may be
@@ -641,8 +644,7 @@ class Attachment < ActiveRecord::Base
     def authenticated_s3_url(*args)
       return root_attachment.authenticated_s3_url(*args) if root_attachment
       protocol = args[0].is_a?(Hash) && args[0][:protocol]
-      protocol ||= self.class.file_store_config['secure'] ? "https://" : "http://"
-      protocol ||= "//"
+      protocol ||= "#{HostUrl.protocol}://"
       "#{protocol}#{HostUrl.context_host(context)}/#{context_type.underscore.pluralize}/#{context_id}/files/#{id}/download?verifier=#{uuid}"
     end
 
@@ -990,17 +992,16 @@ class Attachment < ActiveRecord::Base
   end
   
   def locked_for?(user, opts={})
-    @locks ||= {}
     return false if opts[:check_policies] && self.grants_right?(user, nil, :update)
     return {:manually_locked => true} if self.locked || (self.folder && self.folder.locked?)
-    @locks[user ? user.id : 0] ||= Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
+    Rails.cache.fetch(locked_cache_key(user), :expires_in => 1.minute) do
       locked = false
       if (self.unlock_at && Time.now < self.unlock_at)
         locked = {:asset_string => self.asset_string, :unlock_at => self.unlock_at}
       elsif (self.lock_at && Time.now > self.lock_at)
         locked = {:asset_string => self.asset_string, :lock_at => self.lock_at}
-      elsif (self.could_be_locked && self.context_module_tag && !self.context_module_tag.available_for?(user, opts[:deep_check_if_needed]))
-        locked = {:asset_string => self.asset_string, :context_module => self.context_module_tag.context_module.attributes}
+      elsif self.could_be_locked && item = locked_by_module_item?(user, opts[:deep_check_if_needed])
+        locked = {:asset_string => self.asset_string, :context_module => item.context_module.attributes}
       end
       locked
     end
@@ -1033,7 +1034,7 @@ class Attachment < ActiveRecord::Base
   end
   
   def context_module_action(user, action)
-    self.context_module_tag.context_module_action(user, action) if self.context_module_tag
+    self.context_module_tags.each { |tag| tag.context_module_action(user, action) }
   end
 
   include Workflow
@@ -1329,7 +1330,9 @@ class Attachment < ActiveRecord::Base
   named_scope :needing_scribd_conversion_status, :conditions => ['attachments.workflow_state = ? AND attachments.updated_at < ?', 'processing', 30.minutes.ago], :limit => 50
   named_scope :uploadable, :conditions => ['workflow_state = ?', 'pending_upload']
   named_scope :active, :conditions => ['file_state = ?', 'available']
-  named_scope :thumbnailable?, :conditions => {:content_type => Technoweenie::AttachmentFu.content_types}  
+  named_scope :thumbnailable?, :conditions => {:content_type => Technoweenie::AttachmentFu.content_types}
+  named_scope :by_display_name, :order => display_name_order_by_clause('attachments')
+  named_scope :by_position_then_display_name, :order => "attachments.position, #{display_name_order_by_clause('attachments')}"
   def self.serialization_excludes; [:uuid, :namespace]; end
   def set_serialization_options
     if self.scribd_doc

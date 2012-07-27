@@ -195,12 +195,15 @@ describe Course do
     @course.quizzes.create!
     @course.assignments.create!
     @course.wiki.wiki_page.save!
+    @course.self_enrollment = true
     @course.sis_source_id = 'sis_id'
     @course.stuck_sis_fields = [].to_set
     @course.save!
     @course.course_sections.should_not be_empty
     @course.students.should == [@student]
     @course.stuck_sis_fields.should == [].to_set
+    self_enrollment_code = @course.self_enrollment_code
+    self_enrollment_code.should_not be_nil
 
     @new_course = @course.reset_content
 
@@ -209,6 +212,7 @@ describe Course do
     @course.course_sections.should be_empty
     @course.students.should be_empty
     @course.sis_source_id.should be_nil
+    @course.self_enrollment_code.should be_nil
 
     @new_course.reload
     @new_course.course_sections.should_not be_empty
@@ -219,6 +223,7 @@ describe Course do
     @new_course.sis_source_id.should == 'sis_id'
     @new_course.syllabus_body.should be_blank
     @new_course.stuck_sis_fields.should == [].to_set
+    @new_course.self_enrollment_code.should == self_enrollment_code
 
     @course.uuid.should_not == @new_course.uuid
     @course.wiki_id.should_not == @new_course.wiki_id
@@ -335,6 +340,25 @@ describe Course do
       events.should_not include event2
       events.should include event3
       events.should include appointment_group
+      events.should include assignment
+    end
+
+    it "should return appropriate events when no user is supplied" do
+      course_with_teacher(:active_all => true)
+      event1 = @course.calendar_events.create
+      event2 = @course.calendar_events.build :child_event_data => [{:start_at => "2012-01-01", :end_at => "2012-01-02", :context_code => @course.default_section.asset_string}]
+      event2.updating_user = @teacher
+      event2.save!
+      event3 = event2.child_events.first
+      appointment_group = AppointmentGroup.create! :title => "ag", :contexts => [@course]
+      appointment_group.publish!
+      assignment = @course.assignments.create!
+
+      events = @course.events_for(nil)
+      events.should include event1
+      events.should_not include event2
+      events.should_not include event3
+      events.should_not include appointment_group
       events.should include assignment
     end
   end
@@ -650,7 +674,24 @@ describe Course, "gradebook_to_csv" do
       rows[5][1].should == @user3.id.to_s
       rows[5][2].should be_nil
       rows[5][3].should be_nil
-    end
+  end
+
+  it "should only include students from the appropriate section for a section limited teacher" do
+    course(:active_all => 1)
+    @teacher.enrollments.first.update_attribute(:limit_privileges_to_course_section, true)
+    @section = @course.course_sections.create!(:name => 'section 2')
+    @user1 = user_with_pseudonym(:active_all => true, :name => 'Brian', :username => 'brianp@instructure.com')
+    @section.enroll_user(@user1, 'StudentEnrollment', 'active')
+    @user2 = user_with_pseudonym(:active_all => true, :name => 'Jeremy', :username => 'jeremy@instructure.com')
+    @course.enroll_student(@user2)
+
+    csv = @course.gradebook_to_csv(:user => @teacher)
+    csv.should_not be_nil
+    rows = FasterCSV.parse(csv)
+    # two header rows, and one student row
+    rows.length.should == 3
+    rows[2][1].should == @user2.id.to_s
+  end
 end
 
 describe Course, "update_account_associations" do
@@ -2448,6 +2489,10 @@ describe Course, "section_visibility" do
 
     it "should return user's sections" do
       @course.sections_visible_to(@ta).should eql [@course.default_section]
+    end
+
+    it "should return non-limited admins from other sections" do
+      @course.enrollments_visible_to(@ta, :type => :teacher, :return_users => true).should eql [@teacher]
     end
   end
 
