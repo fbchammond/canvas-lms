@@ -17,6 +17,76 @@
 #
 
 # @API Submissions
+#
+# @object Submission
+#     {
+#       // The submission's assignment id
+#       assignment_id: 23,
+#
+#       // The submission's assignment (see the assignments API) (optional)
+#       assignment: Assignment
+#
+#       // The submission's course (see the course API) (optional)
+#       course: Course
+#
+#       // This is the submission attempt number.
+#       attempt: 1,
+#
+#       // The content of the submission, if it was submitted directly in a
+#       // text field.
+#       body: "There are three factors too...",
+#
+#       // The grade for the submission, translated into the assignment grading
+#       // scheme (so a letter grade, for example).
+#       grade: "A-",
+#
+#       // A boolean flag which is false if the student has re-submitted since
+#       // the submission was last graded.
+#       grade_matches_current_submission: true,
+#
+#       // URL to the submission. This will require the user to log in.
+#       html_url: "http://example.com/courses/255/assignments/543/submissions/134",
+#
+#       // URL to the submission preview. This will require the user to log in.
+#       preview_url: "http://example.com/courses/255/assignments/543/submissions/134?preview=1",
+#
+#       // The raw score
+#       score: 13.5
+#
+#       // Associated comments for a submission (optional)
+#       submission_comments: [
+#         {
+#           author_id: 134
+#           author_name: "Toph Beifong",
+#           comment: "Well here's the thing...",
+#           created_at: "2012-01-01T01:00:00Z",
+#           media_comment: {
+#             content-type: "audio/mp4",
+#             display_name: "something",
+#             media_id: "3232",
+#             media_type: "audio",
+#             url:  "http://example.com/media_url"
+#           }
+#         }
+#       ],
+#
+#       // The types of submission
+#       // ex: ("online_text_entry"|"online_url"|"online_upload"|"media_recording")
+#       submission_type: "online_text_entry",
+#
+#       // The timestamp when the assignment was submitted
+#       submitted_at: "2012-01-01T01:00:00Z",
+#
+#       // The URL of the submission (for "online_url" submissions).
+#       url: null,
+#
+#       // The id of the user who created the submission
+#       user_id: 134
+#
+#       // The submissions user (see user API) (optional)
+#       user: User
+#     }
+#
 class SubmissionsController < ApplicationController
   include GoogleDocs
   before_filter :get_course_from_section, :only => :create
@@ -396,14 +466,19 @@ class SubmissionsController < ApplicationController
           @submissions.each{|s| s.limit_comments(@current_user, session) unless @submission.grants_rights?(@current_user, session, :submit)[:submit] }
           @submissions = @submissions.select{|s| s.grants_right?(@current_user, session, :read) }
           flash[:notice] = t('assignment_submitted', 'Assignment submitted.')
+
           format.html { redirect_to course_assignment_url(@context, @assignment) }
-          excludes = @assignment.grants_right?(@current_user, session, :grade) ? [:grade, :score] : []
-          comments_type = @context_enrollment.admin? ? :submission_comments : :visible_submission_comments
+
+          json_args = Submission.json_serialization_full_parameters({
+            :exclude => @assignment.grants_right?(@current_user, session, :grade) ? [:grade, :score, :turnitin_data] : [],
+            :except => [:quiz_submission,:submission_history],
+            :comments => @context_enrollment.admin? ? :submission_comments : :visible_submission_comments
+          }).merge(:permissions => { :user => @current_user, :session => session, :include_permissions => false })
           format.json { 
-            render :json => @submissions.to_json(Submission.json_serialization_full_parameters(:exclude => excludes, :except => [:quiz_submission,:submission_history], :comments => comments_type, :avatars => service_enabled?(:avatars)).merge(:permissions => {:user => @current_user, :session => session, :include_permissions => false})), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
+            render :json => @submissions.to_json(json_args), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
           }
           format.text { 
-            render :json => @submissions.to_json(Submission.json_serialization_full_parameters(:exclude => excludes, :except => [:quiz_submission,:submission_history], :comments => comments_type, :avatars => service_enabled?(:avatars)).merge(:permissions => {:user => @current_user, :session => session, :include_permissions => false})), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
+            render :json => @submissions.to_json(json_args), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
           }
         else
           @error_message = t('errors_update_failed', "Update Failed")

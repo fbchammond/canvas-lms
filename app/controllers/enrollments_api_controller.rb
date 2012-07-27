@@ -54,6 +54,8 @@ class EnrollmentsApiController < ApplicationController
   # @response_field user_id The unique id of the user.
   # @response_field html_url The URL to the Canvas web UI page for this course enrollment.
   # @response_field grades[html_url] The URL to the Canvas web UI page for the user's grades, if this is a student enrollment.
+  # @response_field grades[current_grade] The user's current grade in the class. Only included if user has permissions to view this grade.
+  # @response_field grades[final_grade] The user's final grade for the class. Only included if user has permissions to view this grade.
   # @response_field user[id] The unique id of the user.
   # @response_field user[login_id] The unique login of the user.
   # @response_field user[name] The name of the user.
@@ -136,7 +138,10 @@ class EnrollmentsApiController < ApplicationController
     endpoint_scope = (@context.is_a?(Course) ? (@section.present? ? "section" : "course") : "user")
     scope_arguments = { :conditions => @conditions,
       :order => 'enrollments.type ASC, users.sortable_name ASC',
-      :include => [:user, :course, :course_section] }
+      :include => {:user => [], :course => [], :course_section => []} }
+    if user_json_is_admin?
+      scope_arguments[:include][:user] = :pseudonyms
+    end
 
     return unless enrollments = @context.is_a?(Course) ?
       course_index_enrollments(scope_arguments) :
@@ -239,9 +244,11 @@ class EnrollmentsApiController < ApplicationController
   # Returns an ActiveRecord scope of enrollments on success, false on failure.
   def course_index_enrollments(scope_arguments)
     if authorized_action(@context, @current_user, :read_roster)
-      scope_arguments[:conditions].include?(:workflow_state) ?
-        @context.enrollments.scoped(scope_arguments) :
-        @context.current_enrollments.scoped(scope_arguments)
+      scope = @context.enrollments_visible_to(@current_user, :type => :all, :include_priors => true).scoped(scope_arguments)
+      unless scope_arguments[:conditions].include?(:workflow_state)
+        scope = scope.scoped(:conditions =>  ['enrollments.workflow_state NOT IN (?)', ['rejected', 'completed', 'deleted', 'inactive']])
+      end
+      scope
     else
       false
     end

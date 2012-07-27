@@ -21,6 +21,8 @@ module Api::V1::Submission
   include Api::V1::Assignment
   include Api::V1::Attachment
   include Api::V1::DiscussionTopics
+  include Api::V1::Course
+  include Api::V1::User
 
   def submission_json(submission, assignment, user, session, context = nil, includes = [])
     context ||= assignment.context
@@ -58,10 +60,22 @@ module Api::V1::Submission
       hash['assignment'] = assignment_json(assignment, user, session)
     end
 
+    if includes.include?("course")
+      hash['course'] = course_json(submission.context, user, session, ['html_url'], nil)
+    end
+
+    if includes.include?("html_url")
+      hash['html_url'] = course_assignment_submission_url(submission.context.id, assignment.id, user.id)
+    end
+
+    if includes.include?("user")
+      hash['user'] = user_json(submission.user, user, session, ['avatar_url'], submission.context, nil)
+    end
+
     hash
   end
 
-  SUBMISSION_JSON_FIELDS = %w(user_id url score grade attempt submission_type submitted_at body assignment_id grade_matches_current_submission).freeze
+  SUBMISSION_JSON_FIELDS = %w(user_id url score grade attempt submission_type submitted_at body assignment_id grade_matches_current_submission workflow_state).freeze
   SUBMISSION_OTHER_FIELDS = %w(attachments discussion_entries)
 
   def submission_attempt_json(attempt, assignment, user, session, version_idx = nil, context = nil)
@@ -86,7 +100,7 @@ module Api::V1::Submission
     hash = api_json(attempt, user, session, :only => json_fields)
 
     hash['preview_url'] = course_assignment_submission_url(
-      @context, assignment, attempt[:user_id], 'preview' => '1',
+      context, assignment, attempt[:user_id], 'preview' => '1',
       'version' => version_idx)
 
     unless attempt.media_comment_id.blank?

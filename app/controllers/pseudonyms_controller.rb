@@ -59,15 +59,17 @@ class PseudonymsController < ApplicationController
   def forgot_password
     email = params[:pseudonym_session][:unique_id_forgot] if params[:pseudonym_session]
     @ccs = []
-    @ccs = CommunicationChannel.find_all_by_path_and_path_type_and_workflow_state(email, 'email', 'active')
-    if @ccs.empty?
-      @ccs += CommunicationChannel.find_all_by_path_and_path_type(email, 'email') if email and !email.empty?
-    end
-    if @domain_root_account && email && !email.empty?
-      @domain_root_account.pseudonyms.active.custom_find_by_unique_id(email, :all).each do |p|
-        cc = p.communication_channel if p.communication_channel && p.user
-        cc ||= p.user.communication_channel rescue nil
-        @ccs << cc
+    if email.present?
+      @ccs = CommunicationChannel.email.by_path(email).active.all
+      if @ccs.empty?
+        @ccs += CommunicationChannel.email.by_path(email).all
+      end
+      if @domain_root_account
+        @domain_root_account.pseudonyms.active.custom_find_by_unique_id(email, :all).each do |p|
+          cc = p.communication_channel if p.communication_channel && p.user
+          cc ||= p.user.communication_channel rescue nil
+          @ccs << cc
+        end
       end
     end
     @ccs = @ccs.flatten.compact.uniq.select do |cc|
@@ -181,7 +183,7 @@ class PseudonymsController < ApplicationController
     if @pseudonym.save
       respond_to do |format|
         flash[:notice] = t 'notices.account_registered', "Account registered!"
-        format.html { redirect_to profile_url }
+        format.html { redirect_to user_profile_url(@current_user) }
         format.json { render :json => pseudonym_json(@pseudonym, @current_user, session) }
       end
     else
@@ -252,7 +254,7 @@ class PseudonymsController < ApplicationController
     if @pseudonym.update_attributes(params[:pseudonym])
       flash[:notice] = t 'notices.account_updated', "Account updated!"
       respond_to do |format|
-        format.html { redirect_to profile_url }
+        format.html { redirect_to user_profile_url(@current_user) }
         format.json { render :json => pseudonym_json(@pseudonym, @current_user, session) }
       end
     else
