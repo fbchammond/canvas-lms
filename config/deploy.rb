@@ -22,6 +22,7 @@ after "deploy:update_code" do
   end
   
   run "ln -s #{shared_path}/files #{release_path}/tmp/files"
+  run "ln -s #{shared_path}/QTIMigrationTool #{release_path}/vendor/QTIMigrationTool"
   
   #run "ln -s #{shared_path}/google2248bfbba38f2b28.html #{release_path}/public/google2248bfbba38f2b28.html"
   
