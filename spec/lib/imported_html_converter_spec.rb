@@ -57,20 +57,23 @@ describe ImportedHtmlConverter do
   
       ImportedHtmlConverter.convert(test_string, @course).should == %{<a href="#{@path}discussion_topics/#{topic.id}">Test topic</a>}
     end
-    
-    it "should find an attachment by migration id" do
+
+    def make_test_att
       att = Attachment.create(:filename => 'test.png', :display_name => "test.png", :uploaded_data => StringIO.new('psych!'), :folder => Folder.unfiled_folder(@course), :context => @course)
       att.migration_id = "1768525836051"
       att.save!
+      att
+    end
+
+    it "should find an attachment by migration id" do
+      att = make_test_att()
       
       test_string = %{<p>This is an image: <br /><img src="%24CANVAS_OBJECT_REFERENCE%24/attachments/1768525836051" alt=":(" /></p>}
       ImportedHtmlConverter.convert(test_string, @course).should == %{<p>This is an image: <br><img src="#{@path}files/#{att.id}/preview" alt=":("></p>}
     end
     
     it "should find an attachment by path" do
-      att = Attachment.create(:filename => 'test.png', :display_name => "test.png", :uploaded_data => StringIO.new('psych!'), :folder => Folder.unfiled_folder(@course), :context => @course)
-      att.migration_id = "1768525836051"
-      att.save!
+      att = make_test_att()
       
       test_string = %{<p>This is an image: <br /><img src="%24IMS_CC_FILEBASE%24/test.png" alt=":(" /></p>}
       
@@ -79,6 +82,26 @@ describe ImportedHtmlConverter do
   
       @course.attachment_path_id_lookup = {"test.png" => att.migration_id}
       ImportedHtmlConverter.convert(test_string, @course).should == %{<p>This is an image: <br><img src="#{@path}files/#{att.id}/preview" alt=":("></p>}
+    end
+    
+    it "should find an attachment by a path with a space" do
+      att = make_test_att()
+      @course.attachment_path_id_lookup = {"subfolder/with a space/test.png" => att.migration_id}
+      
+      test_string = %{<img src="subfolder/with%20a%20space/test.png" alt="nope" />}
+      ImportedHtmlConverter.convert(test_string, @course).should == %{<img src="#{@path}files/#{att.id}/preview" alt="nope">}
+      
+      test_string = %{<img src="subfolder/with+a+space/test.png" alt="nope" />}
+      ImportedHtmlConverter.convert(test_string, @course).should == %{<img src="#{@path}files/#{att.id}/preview" alt="nope">}
+    end
+    
+    it "should find an attachment by path if capitalization is different" do
+      att = make_test_att()
+      @course.attachment_path_id_lookup = {"subfolder/withCapital/test.png" => "wrong!"}
+      @course.attachment_path_id_lookup_lower = {"subfolder/withcapital/test.png" => att.migration_id}
+      
+      test_string = %{<img src="subfolder/WithCapital/TEST.png" alt="nope" />}
+      ImportedHtmlConverter.convert(test_string, @course).should == %{<img src="#{@path}files/#{att.id}/preview" alt="nope">}
     end
   
     it "should convert course section urls" do
@@ -99,6 +122,24 @@ describe ImportedHtmlConverter do
       test_string = %{<a href="relative/path/to/file%20with%20space.html">Linkage</a>}
       ImportedHtmlConverter.convert(test_string, @course).should == %{<a href="#{@path}file_contents/course%20files/relative/path/to/file%20with%20space.html">Linkage</a>}
     end
+    
+    it "should preserve media comment links" do
+      test_string = <<-HTML.strip
+      <p>
+        with media object url: <a id="media_comment_0_l4l5n0wt" class="instructure_inline_media_comment video_comment" href="/media_objects/0_l4l5n0wt">this is a media comment</a>
+        with file content url: <a id="media_comment_0_bq09qam2" class="instructure_inline_media_comment video_comment" href="/courses/#{@course.id}/file_contents/course%20files/media_objects/0_bq09qam2">this is a media comment</a>
+      </p>
+      HTML
+
+      ImportedHtmlConverter.convert(test_string, @course).should == test_string.gsub("/courses/#{course.id}/file_contents/course%20files",'')
+    end
+    
+    it "should handle and repair half broken media links" do
+      test_string = %{<p><a href="/courses/#{@course.id}/file_contents/%24IMS_CC_FILEBASE%24/#" class="instructure_inline_media_comment video_comment" id="media_comment_0_l4l5n0wt">this is a media comment</a><br><br></p>}
+      
+      ImportedHtmlConverter.convert(test_string, @course).should == %{<p><a href="/media_objects/0_l4l5n0wt" class="instructure_inline_media_comment video_comment" id="media_comment_0_l4l5n0wt">this is a media comment</a><br><br></p>}
+    end
+    
   end
   
   context ".relative_url?" do
