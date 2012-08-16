@@ -491,8 +491,42 @@ describe Attachment do
       new_a.thumbnail_url.should_not be_nil
       new_a.thumbnail_url.should == a.thumbnail_url
     end
+
+    it "should not create root_attachment_id cycles or self-references" do
+      a = attachment_model(:uploaded_data => stub_png_data, :content_type => 'image/png')
+      a.root_attachment_id.should be_nil
+      coursea = @course
+      @context = courseb = course
+      b = a.clone_for(courseb, nil, :overwrite => true)
+      b.save
+      b.context.should == courseb
+      b.root_attachment.should == a
+
+      new_a = b.clone_for(coursea, nil, :overwrite => true)
+      new_a.should == a
+      new_a.root_attachment_id.should be_nil
+
+      new_b = new_a.clone_for(courseb, nil, :overwrite => true)
+      new_b.root_attachment_id.should == a.id
+
+      new_b = b.clone_for(courseb, nil, :overwrite => true)
+      new_b.root_attachment_id.should == a.id
+
+      @context = coursec = course
+      c = b.clone_for(coursec, nil, :overwrite => true)
+      c.root_attachment.should == a
+
+      new_a = c.clone_for(coursea, nil, :overwrite => true)
+      new_a.should == a
+      new_a.root_attachment_id.should be_nil
+
+      # pretend b's content changed so it got disconnected
+      b.update_attribute(:root_attachment_id, nil)
+      new_b = b.clone_for(courseb, nil, :overwrite => true)
+      new_b.root_attachment_id.should be_nil
+    end
   end
-  
+
   context "adheres_to_policy" do
     it "should not allow unauthorized users to read files" do
       user = user_model
@@ -813,6 +847,109 @@ describe Attachment do
       url.should be_present
       thumb.should be_present
       url.should == thumb.authenticated_s3_url
+    end
+  end
+
+  context "notifications" do
+    before :each do
+      course_model(:workflow_state => "available")
+      # ^ enrolls @teacher in @course
+
+      # create a student to receive notifications
+      @student = user_model
+      @student.register!
+      e = @course.enroll_student(@student).accept
+      @cc = @student.communication_channels.create(:path => "default@example.com")
+      @cc.confirm!
+      NotificationPolicy.create(:notification => Notification.create!(:name => 'New File Added'), :communication_channel => @cc, :frequency => "immediately")
+      NotificationPolicy.create(:notification => Notification.create!(:name => 'New Files Added'), :communication_channel => @cc, :frequency => "immediately")
+    end
+
+    it "should send a single-file notification" do
+      attachment_model(:uploaded_data => stub_file_data('file.txt', nil, 'text/html'), :content_type => 'text/html')
+      @attachment.need_notify.should be_true
+
+      new_time = Time.now + 10.minutes
+      Time.stubs(:now).returns(new_time)
+      Attachment.do_notifications
+
+      @attachment.reload
+      @attachment.need_notify.should_not be_true
+      Message.find_by_user_id_and_notification_name(@student.id, 'New File Added').should_not be_nil
+    end
+
+    it "should send a batch notification" do
+      att1 = attachment_model(:uploaded_data => stub_file_data('file1.txt', nil, 'text/html'), :content_type => 'text/html')
+      att2 = attachment_model(:uploaded_data => stub_file_data('file2.txt', nil, 'text/html'), :content_type => 'text/html')
+      att3 = attachment_model(:uploaded_data => stub_file_data('file3.txt', nil, 'text/html'), :content_type => 'text/html')
+      [att1, att2, att3].each {|att| att.need_notify.should be_true}
+
+      new_time = Time.now + 10.minutes
+      Time.stubs(:now).returns(new_time)
+      Attachment.do_notifications
+
+      [att1, att2, att3].each {|att| att.reload.need_notify.should_not be_true}
+      Message.find_by_user_id_and_notification_name(@student.id, 'New Files Added').should_not be_nil
+    end
+
+    it "should not notify before a file finishes uploading" do
+      # it's weird, but file_state is 'deleted' until the upload completes, when it is changed to 'available'
+      attachment_model(:file_state => 'deleted', :content_type => 'text/html')
+      @attachment.need_notify.should_not be_true
+    end
+
+    it "should postpone notification of a batch judged to be in-progress" do
+      att1 = attachment_model(:uploaded_data => stub_file_data('file1.txt', nil, 'text/html'), :content_type => 'text/html')
+      att2 = attachment_model(:uploaded_data => stub_file_data('file2.txt', nil, 'text/html'), :content_type => 'text/html')
+      att3 = attachment_model(:uploaded_data => stub_file_data('file3.txt', nil, 'text/html'), :content_type => 'text/html')
+      [att1, att2, att3].each {|att| att.need_notify.should be_true}
+
+      new_time = Time.now + 2.minutes
+      Time.stubs(:now).returns(new_time)
+      Attachment.do_notifications
+      [att1, att2, att3].each {|att| att.reload.need_notify.should be_true}
+      Message.find_by_user_id_and_notification_name(@student.id, 'New Files Added').should be_nil
+
+      new_time = Time.now + 4.minutes
+      Time.stubs(:now).returns(new_time)
+      Attachment.do_notifications
+      [att1, att2, att3].each {|att| att.reload.need_notify.should_not be_true}
+      Message.find_by_user_id_and_notification_name(@student.id, 'New Files Added').should_not be_nil
+    end
+
+    it "should discard really old pending notifications" do
+      attachment_model(:uploaded_data => stub_file_data('file.txt', nil, 'text/html'), :content_type => 'text/html')
+      @attachment.need_notify.should be_true
+
+      new_time = Time.now + 1.week
+      Time.stubs(:now).returns(new_time)
+      Attachment.do_notifications
+
+      @attachment.reload
+      @attachment.need_notify.should be_false
+      Message.find_by_user_id_and_notification_name(@student.id, 'New Files Added').should be_nil
+      Message.find_by_user_id_and_notification_name(@student.id, 'New File Added').should be_nil
+    end
+
+    it "should respect save_without_broadcasting" do
+      att1 = attachment_model(:file_state => 'deleted', :uploaded_data => stub_file_data('file1.txt', nil, 'text/html'), :content_type => 'text/html')
+      att2 = attachment_model(:file_state => 'deleted', :uploaded_data => stub_file_data('file2.txt', nil, 'text/html'), :content_type => 'text/html')
+      att3 = attachment_model(:file_state => 'deleted', :uploaded_data => stub_file_data('file2.txt', nil, 'text/html'), :content_type => 'text/html')
+
+      att1.need_notify.should_not be_true
+      att1.file_state = 'available'
+      att1.save!
+      att1.need_notify.should be_true
+
+      att2.need_notify.should_not be_true
+      att2.file_state = 'available'
+      att2.save_without_broadcasting
+      att2.need_notify.should_not be_true
+
+      att3.need_notify.should_not be_true
+      att3.file_state = 'available'
+      att3.save_without_broadcasting!
+      att3.need_notify.should_not be_true
     end
   end
 end
