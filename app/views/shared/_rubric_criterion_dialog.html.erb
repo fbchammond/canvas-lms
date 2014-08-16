@@ -2,10 +2,10 @@
   <div class="description" style="border-bottom: 1px solid #ccc; padding: 5px 0; font-size: 1.2em; font-weight: bold; margin-bottom: 5px;">
   </div>
   <div class="editing">
-    <textarea class="long_description" name="long_description" style="width: 370px;"></textarea>
+    <textarea class="long_description" aria-label="<%= t 'labels.long_description', "Long Description" %>" name="long_description" style="width: 370px;"></textarea>
     <div class="button-container">
-      <button type="button" class="button save_button"><%= t 'buttons.update_description', "Update Description" %></button>
-      <button type="button" class="button button-secondary cancel_button"><%= t '#buttons.cancel', "Cancel" %></button>
+      <button type="button" class="btn save_button"><%= t 'buttons.update_description', "Update Description" %></button>
+      <button type="button" class="btn btn button-secondary cancel_button"><%= t '#buttons.cancel', "Cancel" %></button>
     </div>
   </div>
   <div class="displaying">
@@ -14,14 +14,23 @@
   </div>
 </div>
 <div id="rubric_criterion_comments_dialog" style="display: none;">
-  <div class="criterion_description" style="border-bottom: 1px solid #ccc; padding: 5px 0; font-size: 1.2em; font-weight: bold; margin-bottom: 5px;">
-  </div>
+  <div
+    class="criterion_description"
+    style="border-bottom: 1px solid #ccc; padding: 5px 0; font-size: 1.2em; font-weight: bold; margin-bottom: 5px;"
+    tabindex="-1"
+  ></div>
   <div class="editing">
-    <%= before_label :additional_comments, "Additional Comments" %>
-    <textarea class="criterion_comments" name="criterion_comments" style="width: 370px;"></textarea>
+    <label for="criterion_comments_textarea">
+      <%= before_label :additional_comments, "Additional Comments" %>
+    </label>
+    <textarea 
+      id="criterion_comments_textarea"
+      class="criterion_comments"
+      name="criterion_comments"
+      style="width: 370px;"></textarea>
     <div class="button-container">
-      <button type="button" class="button save_button"><%= t 'buttons.update_comments', "Update Comments" %></button>
-      <button type="button" class="button button-secondary cancel_button"><%= t '#buttons.cancel', "Cancel" %></button>
+      <button type="button" class="btn save_button"><%= t 'buttons.update_comments', "Update Comments" %></button>
+      <button type="button" class="btn btn button-secondary cancel_button"><%= t '#buttons.cancel', "Cancel" %></button>
     </div>
   </div>
   <div class="displaying">

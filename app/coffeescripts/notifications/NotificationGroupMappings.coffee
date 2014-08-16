@@ -13,22 +13,22 @@ define [
       # gets the I18n version of the group name. The display text used for the items gets set through the
       # ProfileController#communication. The values are defined in Notification#category_display_name.
       @groups =
-        Course: ['Due Date', 'Grading Policies', 'Course Content', 'Files', 'Announcement', 'Grading', 'Invitation',
-                 'All Submissions', 'Late Grading', 'Submission Comment']
-        Discussions: ['DiscussionEntry', 'Discussion']
-        Communication: ['Added To Conversation', 'Conversation Message']
-        Scheduling: ['Student Appointment Signups', 'Appointment Signups', 'Appointment Cancelations',
-                     'Appointment Availability', 'Calendar']
+        Course: ['due_date', 'grading_policies', 'course_content', 'files', 'announcement', 'grading', 'invitation',
+                 'all_submissions', 'late_grading', 'submission_comment']
+        Discussions: ['discussion', 'discussion_entry']
+        Communication: ['added_to_conversation', 'conversation_message']
+        Scheduling: ['student_appointment_signups', 'appointment_signups', 'appointment_cancelations',
+                     'appointment_availability', 'calendar']
         Parent: []
-        Groups: ['Membership Update']
-        Alerts: ['Alert', 'Other']
+        Groups: ['membership_update']
+        Alerts: ['other']
 
     # Get the I18n display text to use for the group name.
     getGroupDisplayName: (groupName) =>
       switch groupName
         when 'Course' then I18n.t('groups.course', 'Course Activities')
         when 'Discussions' then I18n.t('groups.discussions', 'Discussions')
-        when 'Communication' then I18n.t('groups.communication', 'Communications')
+        when 'Communication' then I18n.t('groups.communication', 'Conversations')
         when 'Scheduling' then I18n.t('groups.scheduling', 'Scheduling')
         when 'Parent' then I18n.t('groups.parent', 'Parent Emails')
         when 'Groups' then I18n.t('groups.groups', 'Groups')

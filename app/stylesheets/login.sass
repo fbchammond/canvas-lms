@@ -1,4 +1,5 @@
 @import environment.sass
+@import registration_dialog.scss
 $modal_box_width: 623px
 $modal_box_padding: 20px
 
@@ -28,18 +29,17 @@ body.modal
     ul
       list-style-type: none
 
-    .button
+    .btn
       float: right
       padding: 10px 36px
-      font-size: 1.1em
       margin: 2px 7px 0 0
-      border-radius: 7px
+      font-size: 15px
 
     .button_box
       text-align: right
       margin-right: 7px
       width: 100%
-      .button
+      .btn
         float: none
 
   #modal-box
@@ -47,7 +47,7 @@ body.modal
     border-top-color: #ccc
     width: $modal_box_width - (2 * $modal_box_padding)
     padding: 2 * $modal_box_padding
-    @include vertical-gradient-no-ie(#f4f4f4, #e2e2e2)
+    @include vertical-gradient(#f4f4f4, #e2e2e2)
     .bootstrap-form
       p.instructions
         font-weight: bold
@@ -57,8 +57,8 @@ body.modal
       .btn-large
         float: none
         width: 220px
-    h2
-      background: transparent url(/images/canvas-dark.png) right top no-repeat
+    h2, .h2
+      background: transparent url(/images/canvas-dark.png) right 6px no-repeat
       margin: 0 20px
       padding: 5px 230px 0 0
       min-height: 35px
@@ -70,23 +70,23 @@ body.modal
         border-bottom: 1px solid #fff
         height: 0
     &.login-box
-      background-color: #4B555D
-      @include background(image-url("/images/Money_Noise_tm.png"), radial-gradient(50% -100px, circle cover, rgba(255, 255, 255, 0.6) 0%, transparent 100%), linear-gradient(top, #59656e, #3e464c))
+      background-color: #4b555d
+      background: image-url("/images/Money_Noise_tm.png"), radial-gradient(ellipse farthest-corner at 50% -100px, rgba(255,255,255,0.6) 0%, transparent 100%), linear-gradient(to bottom, #59656e, #3e464c)
       height: 331px
       width: $modal_box_width
       padding: $modal_box_padding
       color: #b3b3b3
       border: none
-      h1
+      h1, .h1
         height: 107px
         margin: 0 0 50px
-        background: transparent url(/images/canvas.png) 83px 46px no-repeat
+        @include bg-image(canvas, png, no-repeat, 68px, 46px, transparent, 136px, 33px)
         text-indent: -999em
       a
         color: #64b9f9 !important
         &:hover
           text-decoration: underline
-  
+
       input.text
         background: url(/images/login-input-bg.png) no-repeat
         border: 0 none
@@ -123,7 +123,7 @@ body.modal
   #forgot_password_form
     margin: 0 auto
     width: 455px
-    button.button
+    .btn
       margin: 7px 0
       float: none
       padding: 10px 24px
@@ -166,13 +166,13 @@ span.field-with-fancyplaceholder
       background: none repeat scroll 0 0 transparent
       overflow: hidden
 
-#register_link
+.register_banner
   position: absolute
   display: block
   background: url(/images/fft_ribbon.png) no-repeat
   padding-top: 10px
   width: 232px
-  height: 53px
+  height: 52px
   right: -13px
   top: 56px
   text-align: center
@@ -205,9 +205,9 @@ span.field-with-fancyplaceholder
     line-height: 1.2
     &.ui-state-error:before
       top: 15px
-    h2
+    h2, .h2
       height: 41px
-      margin: 0 0 -15px 0
+      margin: 0 0 -5px 0
       padding: 0 0 0 60px
       color: #000
     p

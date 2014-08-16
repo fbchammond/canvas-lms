@@ -31,21 +31,24 @@
 
 require 'resolv'
 require 'netaddr'
+require 'action_controller_test_process'
 
 class CutyCapt
+
   CUTYCAPT_DEFAULTS = {
     :delay => 3000,
     :timeout => 60000,
     :ip_blacklist => [ '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.169.254' ],
     :domain_blacklist => [ ],
-    :allowed_schemes => [ 'http', 'https' ]
+    :allowed_schemes => [ 'http', 'https' ],
+    :lang => 'en,*;q=0.9'
   }
 
   cattr_writer :config
 
   def self.config
     return @@config if defined?(@@config) && @@config
-    setting = (Setting.from_config('cutycapt') || {}).symbolize_keys
+    setting = (ConfigFile.load('cutycapt') || {}).symbolize_keys
     @@config = CUTYCAPT_DEFAULTS.merge(setting).with_indifferent_access
     self.process_config
     @@config = nil unless @@config[:path]
@@ -58,7 +61,7 @@ class CutyCapt
   end
 
   def self.logger
-    RAILS_DEFAULT_LOGGER
+    Rails.logger
   end
 
   def self.enabled?
@@ -89,8 +92,8 @@ class CutyCapt
     true
   end
 
-  def self.cuty_arguments(path, url, img_file, format, delay, timeout)
-    [ path, "--url=#{url}", "--out=#{img_file}", "--out-format=#{format}", "--delay=#{delay}", "--max-wait=#{timeout}" ]
+  def self.cuty_arguments(path, url, img_file, format, delay, timeout, lang)
+    [ path, "--url=#{url}", "--out=#{img_file}", "--out-format=#{format}", "--delay=#{delay}", "--max-wait=#{timeout}", "--header=Accept-Language:#{lang}" ]
   end
 
   def self.snapshot_url(url, format = "png", &block)
@@ -110,7 +113,7 @@ class CutyCapt
 
     if (pid = fork).nil?
       ENV["DISPLAY"] = config[:display] if config[:display]
-      Kernel.exec(*cuty_arguments(config[:path], url, img_file, format, config[:delay], config[:timeout]))
+      Kernel.exec(*cuty_arguments(config[:path], url, img_file, format, config[:delay], config[:timeout], config[:lang]))
     else
       begin
         Timeout::timeout(config[:timeout].to_i / 1000) do
@@ -145,13 +148,13 @@ class CutyCapt
   end
 
   def self.snapshot_attachment_for_url(url)
-    require 'action_controller/test_process.rb'
+    require 'action_controller_test_process'
 
     attachment = nil
     self.snapshot_url(url, "png") do |file_path|
       # this is a really odd way to get Attachment the data it needs, which
       # should probably be remedied at some point
-      attachment = Attachment.new(:uploaded_data => ActionController::TestUploadedFile.new(file_path, "image/png"))
+      attachment = Attachment.new(:uploaded_data => Rack::Test::UploadedFile.new(file_path, "image/png"))
     end
     return attachment
   end

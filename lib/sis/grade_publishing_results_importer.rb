@@ -21,7 +21,7 @@ module SIS
 
     def process
       start = Time.now
-      importer = Work.new(@batch_id, @root_account, @logger)
+      importer = Work.new(@batch, @root_account, @logger)
       yield importer
       @logger.debug("Grade publishing results took #{Time.now - start} seconds")
       return importer.success_count
@@ -31,8 +31,8 @@ module SIS
     class Work
       attr_accessor :success_count
 
-      def initialize(batch_id, root_account, logger)
-        @batch_id = batch_id
+      def initialize(batch, root_account, logger)
+        @batch = batch
         @root_account = root_account
         @logger = logger
         @success_count = 0
@@ -45,18 +45,12 @@ module SIS
         raise ImportError, "No grade_publishing_status given for enrollment #{enrollment_id}" if grade_publishing_status.blank?
         raise ImportError, "Improper grade_publishing_status \"#{grade_publishing_status}\" for enrollment #{enrollment_id}" unless %w{ published error }.include?(grade_publishing_status.downcase)
 
-        enrollment = Enrollment.find_by_id(enrollment_id)
-        if enrollment
-          found_root_account = enrollment.root_account_id == @root_account.id
-          found_root_account ||= enrollment.course && enrollment.course.root_account_id == @root_account.id
-          found_root_account ||= enrollment.course_section && enrollment.course_section.root_account_id == @root_account.id
-          enrollment = nil unless found_root_account
+        if (Enrollment.where(:id => enrollment_id, :root_account_id => @root_account).
+            update_all(:grade_publishing_status => grade_publishing_status.downcase,
+                               :grade_publishing_message => message.to_s,
+                               :updated_at => Time.now.utc) != 1)
+          raise ImportError, "Enrollment #{enrollment_id} doesn't exist"
         end
-        raise ImportError, "Enrollment #{enrollment_id} doesn't exist" unless enrollment
-
-        enrollment.grade_publishing_status = grade_publishing_status.downcase
-        enrollment.grade_publishing_message = message.to_s
-        enrollment.save!
 
         @success_count += 1
       end

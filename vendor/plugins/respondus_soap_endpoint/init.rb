@@ -20,5 +20,13 @@ Rails.configuration.to_prepare do
   # I guess we just gotta hope that no middlewares after that one have any
   # useful-to-this-plugin functionality. At least we still get the AR query
   # cache.
-  Rails.configuration.middleware.insert_before 'ActionController::ParamsParser', 'RespondusAPIMiddleware'
+  if CANVAS_RAILS2
+    Rails.configuration.middleware.insert_before 'ActionController::ParamsParser', 'RespondusAPIMiddleware'
+  end
+end
+
+unless CANVAS_RAILS2
+  class RespondusRailtie < Rails::Railtie
+    config.app_middleware.insert_before 'ActionDispatch::ParamsParser', 'RespondusAPIMiddleware'
+  end
 end

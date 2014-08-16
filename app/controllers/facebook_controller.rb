@@ -20,24 +20,24 @@ class FacebookController < ApplicationController
   protect_from_forgery :only => []
   before_filter :get_facebook_user
   before_filter :require_facebook_user, :only => [:settings, :notification_preferences, :hide_message]
-  filter_parameter_logging :fb_sig_friends
-  
+
   def notification_preferences
     @cc = @user.communication_channels.find_by_path_type('facebook')
     if @cc
-      @old_policies = @cc.notification_policies
+      @old_policies = @cc.notification_policies.to_a
       @policies = []
       params[:types].each do |type, frequency|
         notifications = Notification.find_all_by_category(type)
         notifications.each do |notification|
-          pref = @cc.notification_policies.new
+          pref = @old_policies.find { |p| p.notification_id == notification.id }
+          pref ||= @cc.notification_policies.build
           pref.notification_id = notification.id
           pref.frequency = frequency
           @policies << pref unless frequency == 'never'
         end
       end
       NotificationPolicy.transaction do
-        @old_policies.each{|p| p.destroy}
+        @old_policies.each{|p| p.frequency = p.notification.default_frequency; p.save! if p.changed? }
         @policies.each{|p| p.save!}
       end
     end
@@ -48,9 +48,9 @@ class FacebookController < ApplicationController
   end
   
   def hide_message
-    @message = Message.for_user(@user.id).to_facebook.find(params[:id])
+    @message = @user.messages.to_facebook.find(params[:id])
     @message.destroy
-    render :json => @message.to_json
+    render :json => @message
   end
   
   def index
@@ -61,9 +61,8 @@ class FacebookController < ApplicationController
     flash[:notice] = t :authorization_success, "Authorization successful!  Canvas and Facebook are now friends." if params[:just_authorized]
     @messages = []
     if @user
-      @messages = Message.for_user(@user.id).to_facebook.to_a
-      Facebook.dashboard_clear_count(@service) if @service
-      @domains = @user.pseudonyms.scoped({:include => :account}).to_a.once_per(&:account_id).map{|p| HostUrl.context_host(p.account) }.uniq
+      @messages = @user.messages.to_facebook.to_a
+      @domains = @user.pseudonyms.includes(:account).to_a.uniq(&:account_id).map{|p| HostUrl.context_host(p.account) }.uniq
     end
     respond_to do |format|
       format.html { render :action => 'index', :layout => 'facebook' }
@@ -103,26 +102,45 @@ class FacebookController < ApplicationController
 
   def get_facebook_user
     return false if facebook_disabled?
+    @embeddable = true
 
     if params[:signed_request]
-      data, sig = Facebook.parse_signed_request(params[:signed_request])
+      data, sig = Facebook::Connection.parse_signed_request(params[:signed_request])
       if data && sig
-        @facebook_user_id = data['user_id']
-        @service = UserService.find_by_service_and_service_user_id('facebook', @facebook_user_id)
-        @service.update_attribute(:token, data['oauth_token']) if @service && !@service.token && data['oauth_token']
-        @user = @service && @service.user
-        session[:facebook_user_id] = @facebook_user_id
+        if @facebook_user_id = data['user_id']
+          Shard.with_each_shard(UserService.associated_shards('facebook', @facebook_user_id)) do
+            @service = UserService.find_by_service_and_service_user_id('facebook', @facebook_user_id)
+            break if @service
+          end
+        end
+        if @service
+          @service.update_attribute(:token, data['oauth_token']) if !@service.token && data['oauth_token']
+          @user = @service.user
+        end
+        session[:facebook_canvas_user_id] = @user.id if @user
         return true
       else
         flash[:error] = t :invalid_signature, "Invalid Facebook signature"
         redirect_to dashboard_url
         return false
       end
+    elsif session[:facebook_canvas_user_id]
+      @user = User.find(session[:facebook_canvas_user_id])
+      @service = @user.user_services.find_by_service('facebook')
     elsif session[:facebook_user_id]
       @facebook_user_id = session[:facebook_user_id]
-      @service = UserService.find_by_service_and_service_user_id('facebook', @facebook_user_id)
+      Shard.with_each_shard(UserService.associated_shards('facebook', @facebook_user_id)) do
+        @service = UserService.find_by_service_and_service_user_id('facebook', @facebook_user_id)
+        break if @service
+      end
       @user = @service && @service.user
-      session[:facebook_user_id] = @facebook_user_id
+      session[:facebook_canvas_user_id] = @user.id if @user
+    elsif params[:force_view] == '1'
+      if @current_user
+        @user = @current_user
+        session[:facebook_canvas_user_id] = @user.id
+        @service = @user.user_services.find_by_service('facebook')
+      end
     end
   end
 end

@@ -28,6 +28,7 @@ class EnrollmentsFromUserList
   def initialize(course, opts={})
     @course = course
     @enrollment_type = opts[:enrollment_type] || 'StudentEnrollment'
+    @role_name = opts[:role_name]
     @limit = opts[:limit]
     @section = (opts[:course_section_id].present? ? @course.course_sections.active.find_by_id(opts[:course_section_id].to_i) : nil) || @course.default_section
     @limit_privileges_to_course_section = opts[:limit_privileges_to_course_section]
@@ -39,7 +40,14 @@ class EnrollmentsFromUserList
     @enrollments = []
 
     list.addresses.slice!(0,@limit) if @limit
-    list.users.each { |user| enroll_user(user) }
+    @course.transaction do
+      Enrollment.suspend_callbacks(:update_cached_due_dates) do
+        list.users.each { |user| enroll_user(user) }
+      end
+      if !@enrollments.empty?
+        DueDateCacher.recompute_course(@course)
+      end
+    end
     @enrollments
   end
   
@@ -49,7 +57,7 @@ class EnrollmentsFromUserList
     return unless user
     return if @enrolled_users.has_key?(user.id)
     @enrolled_users[user.id] = true
-    @course.enroll_user(user, @enrollment_type, :section => @section, :limit_privileges_to_course_section => @limit_privileges_to_course_section).tap do |e|
+    @course.enroll_user(user, @enrollment_type, :section => @section, :limit_privileges_to_course_section => @limit_privileges_to_course_section, :role_name => @role_name).tap do |e|
       @enrollments << e if e
     end
   end

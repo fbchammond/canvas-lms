@@ -16,10 +16,10 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper.rb')
 
 describe Folder do
-  before(:each) do
+  before(:once) do
     course
   end
   
@@ -28,30 +28,28 @@ describe Folder do
   end
   
   it "should infer its full name if it has a parent folder" do
-    f = @course.folders.create!(:name => "root")
-    f.full_name.should eql("root")
+    f = Folder.root_folders(@course).first
+    f.full_name.should eql("course files")
     child = f.active_sub_folders.build(:name => "child")
     child.context = @course
     child.save!
     child.parent_folder.should eql(f)
-    child.full_name.should eql("root/child")
+    child.full_name.should eql("course files/child")
     grandchild = child.sub_folders.build(:name => "grandchild")
     grandchild.context = @course
     grandchild.save!
-    grandchild.full_name.should eql("root/child/grandchild")
+    grandchild.full_name.should eql("course files/child/grandchild")
     great_grandchild = grandchild.sub_folders.build(:name => "great_grandchild")
     great_grandchild.context = @course
     great_grandchild.save!
-    great_grandchild.full_name.should eql("root/child/grandchild/great_grandchild")
-    child.parent_folder = nil
-    child.save!
-    child.reload
-    child.parent_folder.should be_nil
-    child.full_name.should eql("child")
+    great_grandchild.full_name.should eql("course files/child/grandchild/great_grandchild")
+
+    grandchild.parent_folder = f
+    grandchild.save!
     grandchild.reload
-    grandchild.full_name.should eql("child/grandchild")
+    grandchild.full_name.should eql("course files/grandchild")
     great_grandchild.reload
-    great_grandchild.full_name.should eql("child/grandchild/great_grandchild")
+    great_grandchild.full_name.should eql("course files/grandchild/great_grandchild")
   end
 
   it "should not allow recursive folder structures" do
@@ -60,7 +58,7 @@ describe Folder do
     f3 = f2.sub_folders.create!(:name => "f3", :context => @course)
     f1.parent_folder = f3
     f1.save.should == false
-    f1.errors.on(:parent_folder_id).should be_present
+    f1.errors.detect { |e| e.first.to_s == 'parent_folder_id' }.should be_present
   end
 
   it "files without an explicit folder_id should be inferred" do
@@ -97,5 +95,118 @@ describe Folder do
     f.active_file_attachments.should be_include(a)
     f.active_file_attachments.should_not be_include(nil_a)
   end
-  
+
+  it "should implement the not_locked scope correctly" do
+    not_locked = [
+      Folder.root_folders(@course).first,
+      @course.folders.create!(:name => "not locked 1", :locked => false),
+      @course.folders.create!(:name => "not locked 2", :lock_at => 1.days.from_now),
+      @course.folders.create!(:name => "not locked 3", :lock_at => 2.days.ago, :unlock_at => 1.days.ago)
+    ]
+    locked = [
+      @course.folders.create!(:name => "locked 1", :locked => true),
+      @course.folders.create!(:name => "locked 2", :lock_at => 1.days.ago),
+      @course.folders.create!(:name => "locked 3", :lock_at => 1.days.ago, :unlock_at => 1.days.from_now)
+    ]
+    @course.folders.map(&:id).sort.should == (not_locked + locked).map(&:id).sort
+    @course.folders.not_locked.map(&:id).sort.should == (not_locked).map(&:id).sort
+  end
+
+  it "should not create multiple root folders for a course" do
+    pending('spec requires postgres index') unless Folder.connection.adapter_name == 'PostgreSQL'
+
+    @course.folders.create!(:name => Folder::ROOT_FOLDER_NAME, :full_name => Folder::ROOT_FOLDER_NAME, :workflow_state => 'visible')
+    lambda { @course.folders.create!(:name => Folder::ROOT_FOLDER_NAME, :full_name => Folder::ROOT_FOLDER_NAME, :workflow_state => 'visible') }.should raise_error
+
+    @course.reload
+    @course.folders.count.should == 1
+  end
+
+  describe "resolve_path" do
+    before :once do
+      @root_folder = Folder.root_folders(@course).first
+    end
+
+    it "should return a sequence of Folders" do
+      foo = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      bar = @course.folders.create! name: 'bar', parent_folder: foo
+      Folder.resolve_path(@course, "foo/bar").should eql [@root_folder, foo, bar]
+    end
+
+    it "should ignore trailing slashes" do
+      foo = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      Folder.resolve_path(@course, "foo/").should eql [@root_folder, foo]
+    end
+
+    it "should find the root folder given an empty path" do
+      Folder.resolve_path(@course, '').should eql [@root_folder]
+    end
+
+    it "should find the root folder given '/'" do
+      Folder.resolve_path(@course, '/').should eql [@root_folder]
+    end
+
+    it "should find the root folder given a nil path" do
+      Folder.resolve_path(@course, nil).should eql [@root_folder]
+    end
+
+    it "should find the root folder given an empty array" do
+      Folder.resolve_path(@course, []).should eql [@root_folder]
+    end
+
+    it "should return nil on incomplete match" do
+      foo = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      Folder.resolve_path(@course, "foo/bar").should be_nil
+    end
+
+    it "should search duplicate paths" do
+      foo1 = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      foo2 = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      bar = @course.folders.create! name: 'bar', parent_folder: foo1
+      baz = @course.folders.create! name: 'baz', parent_folder: foo2
+      Folder.resolve_path(@course, "foo/bar").should eql [@root_folder, foo1, bar]
+      Folder.resolve_path(@course, "foo/baz").should eql [@root_folder, foo2, baz]
+    end
+
+    it "should exclude hidden if specified" do
+      foo = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      foo.update_attribute(:workflow_state, 'hidden')
+      bar = @course.folders.create! name: 'bar', parent_folder: foo
+      Folder.resolve_path(@course, "foo/bar", true).should eql [@root_folder, foo, bar]
+      Folder.resolve_path(@course, "foo/bar", false).should be_nil
+    end
+
+    it "should exclude locked if specified" do
+      foo = @course.folders.create! name: 'foo', parent_folder: @root_folder, locked: true
+      bar = @course.folders.create! name: 'bar', parent_folder: foo
+      Folder.resolve_path(@course, "foo/bar", true).should eql [@root_folder, foo, bar]
+      Folder.resolve_path(@course, "foo/bar", false).should be_nil
+    end
+
+    it "should accept an array" do
+      foo = @course.folders.create! name: 'foo', parent_folder: @root_folder
+      bar = @course.folders.create! name: 'bar', parent_folder: foo
+      Folder.resolve_path(@course, ['foo', 'bar']).should eql [@root_folder, foo, bar]
+    end
+  end
 end
+
+# specs_require_sharding breaks once-ler, thus it gets its own outer example group
+describe Folder do
+  describe ".assert_path" do
+    specs_require_sharding
+
+    it "should not get confused by the same context on multiple shards" do
+      user1 = User.create!
+      f1 = Folder.assert_path('myfolder', user1)
+      @shard1.activate do
+        user2 = User.new
+        user2.id = user1.local_id
+        user2.save!
+        f2 = Folder.assert_path('myfolder', user2)
+        f2.should_not == f1
+      end
+    end
+  end
+end
+

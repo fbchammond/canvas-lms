@@ -17,62 +17,162 @@
 #
 
 # @API Users
+#
+# @model Profile
+#     {
+#       "id": "Profile",
+#       "description": "Profile details for a Canvas user.",
+#       "properties": {
+#         "id": {
+#           "description": "The ID of the user.",
+#           "example": 1234,
+#           "type": "integer"
+#         },
+#         "name": {
+#           "description": "Sample User",
+#           "example": "Sample User",
+#           "type": "string"
+#         },
+#         "short_name": {
+#           "description": "Sample User",
+#           "example": "Sample User",
+#           "type": "string"
+#         },
+#         "sortable_name": {
+#           "description": "user, sample",
+#           "example": "user, sample",
+#           "type": "string"
+#         },
+#         "title": {
+#           "type": "string"
+#         },
+#         "bio": {
+#           "type": "string"
+#         },
+#         "primary_email": {
+#           "description": "sample_user@example.com",
+#           "example": "sample_user@example.com",
+#           "type": "string"
+#         },
+#         "login_id": {
+#           "description": "sample_user@example.com",
+#           "example": "sample_user@example.com",
+#           "type": "string"
+#         },
+#         "sis_user_id": {
+#           "description": "sis1",
+#           "example": "sis1",
+#           "type": "string"
+#         },
+#         "sis_login_id": {
+#           "description": "sis1-login",
+#           "example": "sis1-login",
+#           "type": "string"
+#         },
+#         "avatar_url": {
+#           "description": "The avatar_url can change over time, so we recommend not caching it for more than a few hours",
+#           "example": "..url..",
+#           "type": "string"
+#         },
+#         "calendar": {
+#           "$ref": "CalendarLink"
+#         },
+#         "time_zone": {
+#           "description": "Optional: This field is only returned in certain API calls, and will return the IANA time zone name of the user's preferred timezone.",
+#           "example": "America/Denver",
+#           "type": "string"
+#         }
+#       }
+#     }
+#
+# @model Avatar
+#     {
+#       "id": "Avatar",
+#       "description": "Possible avatar for a user.",
+#       "required": ["type", "url", "token", "display_name"],
+#       "properties": {
+#         "type": {
+#           "description": "['gravatar'|'attachment'|'no_pic'] The type of avatar record, for categorization purposes.",
+#           "example": "gravatar",
+#           "type": "string"
+#         },
+#         "url": {
+#           "description": "The url of the avatar",
+#           "example": "https://secure.gravatar.com/avatar/2284...",
+#           "type": "string"
+#         },
+#         "token": {
+#           "description": "A unique representation of the avatar record which can be used to set the avatar with the user update endpoint. Note: this is an internal representation and is subject to change without notice. It should be consumed with this api endpoint and used in the user update endpoint, and should not be constructed by the client.",
+#           "example": "<opaque_token>",
+#           "type": "string"
+#         },
+#         "display_name": {
+#           "description": "A textual description of the avatar record.",
+#           "example": "user, sample",
+#           "type": "string"
+#         },
+#         "id": {
+#           "description": "['attachment' type only] the internal id of the attachment",
+#           "example": 12,
+#           "type": "integer"
+#         },
+#         "content-type": {
+#           "description": "['attachment' type only] the content-type of the attachment.",
+#           "example": "image/jpeg",
+#           "type": "string"
+#         },
+#         "filename": {
+#           "description": "['attachment' type only] the filename of the attachment",
+#           "example": "profile.jpg",
+#           "type": "string"
+#         },
+#         "size": {
+#           "description": "['attachment' type only] the size of the attachment",
+#           "example": 32649,
+#           "type": "integer"
+#         }
+#       }
+#     }
+#
 class ProfileController < ApplicationController
-  before_filter :require_registered_user, :except => [:show, :settings]
-  before_filter :require_user, :only => :settings
+  before_filter :require_registered_user, :except => [:show, :settings, :communication, :communication_update]
+  before_filter :require_user, :only => [:settings, :communication, :communication_update, :observees]
   before_filter :require_user_for_private_profile, :only => :show
   before_filter :reject_student_view_student
+  before_filter :require_password_session, :only => [:settings, :communication, :communication_update, :update]
 
-  include Api::V1::User
   include Api::V1::Avatar
-  include Api::V1::Notification
-  include Api::V1::NotificationPolicy
   include Api::V1::CommunicationChannel
+  include Api::V1::NotificationPolicy
+  include Api::V1::UserProfile
 
   include TextHelper
 
   def show
-    if @current_user && @domain_root_account.enable_profiles?
-      # this is ghetto and we should get rid of this as soon as possible
-      @current_user.instance_variable_set(:@show_profile_tab, true)
-    else
+    unless @current_user && @domain_root_account.enable_profiles?
+      return unless require_password_session
       settings
       return
     end
 
     @user ||= @current_user
-
     @active_tab = "profile"
     @context = @user.profile if @user == @current_user
 
-    js_env :USER_ID => @user.id
+    @user_data = profile_data(
+      @user.profile,
+      @current_user,
+      session,
+      ['links', 'user_services']
+    )
 
-    @items_count = @user.collection_items.scoped(:conditions => {'collections.visibility' => 'public'}).count
-    @followers_count = @user.following_user_follow_ids.count
-
-    @following_user = @current_user &&
-      UserFollow.followed_by_user([@user], @current_user).present?
-
-    @can_follow = !@following_user &&
-      @current_user &&
-      @user.grants_right?(@current_user, :follow)
-
-    @services = @user.user_services.where(
-      :service => %w(facebook twitter linked_in delicious diigo skype)
-    ).sort_by { |s| UserService.sort_position(s.service) }
-
-    if @user.private? && @user != @current_user
-      if @user.grants_right?(@current_user, :view_statistics)
-        return render :action => :show
-      elsif @current_user.messageable_users(:ids => [@user.id]) == [@user]
-        return render :action => :show_limited
-      # TODO: also show full profile if user is following other user?
-      else
-        return render :action => :unauthorized
-      end
+    known_user = @user_data[:common_contexts].present?
+    if @user_data[:known_user] # if you can message them, you can see the profile
+      add_crumb(t('crumbs.settings_frd', "%{user}'s settings", :user => @user.short_name), user_profile_path(@user))
+      return render :action => :show
+    else
+      return render :action => :unauthorized
     end
-
-    render :action => :show
   end
 
   # @API Get user profile
@@ -81,24 +181,8 @@ class ProfileController < ApplicationController
   # When requesting the profile for the user accessing the API, the user's
   # calendar feed URL will be returned as well.
   #
-  # @example_response
-  #
-  #   {
-  #     'id': 1234,
-  #     'name': 'Sample User',
-  #     'sortable_name': 'user, sample',
-  #     'email': 'sample_user@example.com',
-  #     'login_id': 'sample_user@example.com',
-  #     'sis_user_id': 'sis1',
-  #     'sis_login_id': 'sis1-login',
-  #     'avatar_url': '..url..',
-  #     'calendar': { 'ics' => '..url..' }
-  #   }
+  # @returns Profile
   def settings
-    if @current_user && @domain_root_account.enable_profiles?
-      @current_user.instance_variable_set(:@show_profile_tab, true)
-    end
-
     if api_request?
       # allow querying this basic profile data for the current user, or any
       # user the current user has view_statistics access to
@@ -107,6 +191,7 @@ class ProfileController < ApplicationController
     else
       @user = @current_user
     end
+    @user_data = profile_data(@user.profile, @current_user, session, [])
     @channels = @user.communication_channels.unretired
     @email_channels = @channels.select{|c| c.path_type == "email"}
     @sms_channels = @channels.select{|c| c.path_type == 'sms'}
@@ -119,47 +204,52 @@ class ProfileController < ApplicationController
     @active_tab = "profile_settings"
     respond_to do |format|
       format.html do
-        add_crumb(t(:crumb, "%{user}'s profile", :user => @user.short_name), settings_profile_path )
+        add_crumb(t(:crumb, "%{user}'s settings", :user => @user.short_name), settings_profile_path )
         render :action => "profile"
       end
       format.json do
-        hash = user_json(@user, @current_user, session, 'avatar_url')
-        hash[:primary_email] = @default_email_channel.try(:path)
-        hash[:login_id] ||= @default_pseudonym.try(:unique_id)
-        if @user == @current_user
-          hash[:calendar] = { :ics => "#{feeds_calendar_url(@user.feed_code)}.ics" }
-        end
-        render :json => hash
+        render :json => user_profile_json(@user.profile, @current_user, session, params[:include])
       end
     end
   end
 
   def communication
     @user = @current_user
-    @user = User.find(params[:id]) if params[:id]
     @current_user.used_feature(:cc_prefs)
     @context = @user.profile
     @active_tab = 'notifications'
 
     # Get the list of Notification models (that are treated like categories) that make up the full list of Categories.
     full_category_list = Notification.dashboard_categories(@user)
+    categories = full_category_list.map do |category|
+      category.as_json(only: %w{id name workflow_state user_id}, include_root: false).tap do |json|
+        # Add custom method result entries to the json
+        json[:category]             = category.category.underscore.gsub(/\s/, '_')
+        json[:display_name]         = category.category_display_name
+        json[:category_description] = category.category_description
+        json[:option]               = category.related_user_setting(@user)
+      end
+    end
+
     js_env  :NOTIFICATION_PREFERENCES_OPTIONS => {
       :channels => @user.communication_channels.all_ordered_for_display(@user).map { |c| communication_channel_json(c, @user, session) },
-      :policies => NotificationPolicy.setup_with_default_policies(@user, full_category_list).map{ |p| notification_policy_json(p, @user, session) },
-      :categories => full_category_list.map{ |c| notification_category_json(c, @user, session) },
-      :update_url => communication_update_profile_path
-    }
+      :policies => NotificationPolicy.setup_with_default_policies(@user, full_category_list).map { |p| notification_policy_json(p, @user, session).tap { |json| json[:communication_channel_id] = p.communication_channel_id } },
+      :categories => categories,
+      :update_url => communication_update_profile_path,
+      },
+      :READ_PRIVACY_INFO => @user.preferences[:read_notification_privacy_info],
+      :ACCOUNT_PRIVACY_NOTICE => @domain_root_account.settings[:external_notification_warning]
   end
 
   def communication_update
     params[:root_account] = @domain_root_account
-    @policies = NotificationPolicy.setup_for(@current_user, params)
+    NotificationPolicy.setup_for(@current_user, params)
     render :json => {}, :status => :ok
   end
 
   # @API List avatar options
   # Retrieve the possible user avatar options that can be set with the user update endpoint. The response will be an array of avatar records. If the 'type' field is 'attachment', the record will include all the normal attachment json fields; otherwise it will include only the 'url' and 'display_name' fields. Additionally, all records will include a 'type' field and a 'token' field. The following explains each field in more detail
-  # type:: ["gravatar"|"twitter"|"linked_in"|"attachment"|"no_pic"] The type of avatar record, for categorization purposes.
+  # type:: ["gravatar"|"attachment"|"no_pic"] The type of avatar record, for categorization purposes.
   # url:: The url of the avatar 
   # token:: A unique representation of the avatar record which can be used to set the avatar with the user update endpoint. Note: this is an internal representation and is subject to change without notice. It should be consumed with this api endpoint and used in the user update endpoint, and should not be constructed by the client.
   # display_name:: A textual description of the avatar record
@@ -170,7 +260,7 @@ class ProfileController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/users/1/avatars.json' \ 
+  #   curl 'https://<canvas>/api/v1/users/1/avatars.json' \
   #        -H "Authorization: Bearer <token>"
   #
   # @example_response
@@ -199,6 +289,7 @@ class ProfileController < ApplicationController
   #       "display_name":"no pic"
   #     }
   #   ]
+  # @returns [Avatar]
   def profile_pics
     @user = if api_request? then api_find(User, params[:user_id]) else @current_user end
     if authorized_action(@user, @current_user, :update_avatar)
@@ -208,6 +299,14 @@ class ProfileController < ApplicationController
   
   def update
     @user = @current_user
+
+    if params[:privacy_notice].present?
+      @user.preferences[:read_notification_privacy_info] = Time.now.utc.to_s
+      @user.save
+
+      return render(:nothing => true, :status => 208)
+    end
+
     respond_to do |format|
       if !@user.user_can_edit_name? && params[:user]
         params[:user].delete(:name)
@@ -223,13 +322,16 @@ class ProfileController < ApplicationController
         if params[:pseudonym]
           change_password = params[:pseudonym].delete :change_password
           old_password = params[:pseudonym].delete :old_password
-          pseudonym_to_update = @user.pseudonyms.find(params[:pseudonym][:password_id]) if params[:pseudonym][:password_id] && change_password
+          if params[:pseudonym][:password_id] && change_password
+            pseudonym_to_update = @user.pseudonyms.find(params[:pseudonym][:password_id])
+            pseudonym_to_update.require_password = true if pseudonym_to_update
+          end
           if change_password == '1' && pseudonym_to_update && !pseudonym_to_update.valid_arbitrary_credentials?(old_password)
             error_msg = t('errors.invalid_old_passowrd', "Invalid old password for the login %{pseudonym}", :pseudonym => pseudonym_to_update.unique_id)
             pseudonymed = true
             flash[:error] = error_msg
             format.html { redirect_to user_profile_url(@current_user) }
-            format.json { render :json => {:errors => {:old_password => error_msg}}.to_json, :status => :bad_request }
+            format.json { render :json => {:errors => {:old_password => error_msg}}, :status => :bad_request }
           end
           if change_password != '1' || !pseudonym_to_update || !pseudonym_to_update.valid_arbitrary_credentials?(old_password)
             params[:pseudonym].delete :password
@@ -240,27 +342,87 @@ class ProfileController < ApplicationController
             pseudonymed = true
             flash[:error] = t('errors.profile_update_failed', "Login failed to update")
             format.html { redirect_to user_profile_url(@current_user) }
-            format.json { render :json => pseudonym_to_update.errors.to_json, :status => :bad_request }
+            format.json { render :json => pseudonym_to_update.errors, :status => :bad_request }
           end
         end
         unless pseudonymed
-          flash[:notice] = t('notices.updated_profile', "Profile successfully updated")
+          flash[:notice] = t('notices.updated_profile', "Settings successfully updated")
           format.html { redirect_to user_profile_url(@current_user) }
-          format.json { render :json => @user.to_json(:methods => :avatar_url, :include => {:communication_channel => {:only => [:id, :path]}, :pseudonym => {:only => [:id, :unique_id]} }) }
+          format.json { render :json => @user.as_json(:methods => :avatar_url, :include => {:communication_channel => {:only => [:id, :path], :include_root => false}, :pseudonym => {:only => [:id, :unique_id], :include_root => false} }) }
         end
       else
         format.html
-        format.json { render :json => @user.errors.to_json }
+        format.json { render :json => @user.errors }
+      end
+    end
+  end
+
+  # TODO: the current update method needs to get moved to the UsersController
+  # (since it is not concerned with profiles), then this should get renamed
+  #
+  # not doing API docs until we can move this to PUT /profile
+  def update_profile
+    @user = @current_user
+    @profile = @user.profile
+    @context = @profile
+
+    short_name = params[:user] && params[:user][:short_name]
+    @user.short_name = short_name if short_name && @user.user_can_edit_name?
+    if params[:user_profile]
+      params[:user_profile].delete(:title) unless @user.user_can_edit_name?
+      @profile.attributes = params[:user_profile]
+    end
+
+    if params[:link_urls] && params[:link_titles]
+      @profile.links = []
+      params[:link_urls].zip(params[:link_titles]).
+        reject { |url, title| url.blank? && title.blank? }.
+        each { |url, title|
+          @profile.links.build :url => url, :title => title
+        }
+    elsif params[:delete_links]
+      @profile.links = []
+    end
+
+    if @user.valid? && @profile.valid?
+      @user.save!
+      @profile.save!
+
+      if params[:user_services]
+        visible, invisible = params[:user_services].partition { |service,bool|
+          value_to_boolean(bool)
+        }
+        @user.user_services.where(:service => visible.map(&:first)).update_all(:visible => true)
+        @user.user_services.where(:service => invisible.map(&:first)).update_all(:visible => false)
+      end
+
+      respond_to do |format|
+        format.html { redirect_to user_profile_path(@user) }
+        format.json { render :json => user_profile_json(@user.profile, @current_user, session, params[:includes]) }
+      end
+    else
+      respond_to do |format|
+        format.html { redirect_to user_profile_path(@user) } # FIXME: need to go to edit path
+        format.json { render :json => @profile.errors, :status => :bad_request }  #NOTE: won't send back @user validation errors (i.e. short_name)
       end
     end
   end
 
   def require_user_for_private_profile
     if params[:id]
-      @user = User.find(params[:id])
+      @user = api_find(User, params[:id])
       return if @user.public?
     end
     require_user
   end
   private :require_user_for_private_profile
+
+  def observees
+    @user ||= @current_user
+    @active_tab = 'observees'
+    @context = @user.profile if @user == @current_user
+
+    add_crumb(@user.short_name, profile_path)
+    add_crumb(t('crumbs.observees', "Observing"))
+  end
 end

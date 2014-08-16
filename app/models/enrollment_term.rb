@@ -27,6 +27,14 @@ class EnrollmentTerm < ActiveRecord::Base
   has_many :courses
   has_many :enrollments, :through => :courses
   has_many :course_sections
+
+  EXPORTABLE_ATTRIBUTES = [
+    :id, :root_account_id, :name, :term_code, :sis_source_id, :sis_batch_id, :start_at, :end_at, :accepting_enrollments, :can_manually_enroll, :created_at,
+    :updated_at, :workflow_state, :ignore_term_date_restrictions
+  ]
+  EXPORTABLE_ASSOCIATIONS = [:root_account, :enrollment_dates_overrides, :courses, :course_sections]
+
+  validates_presence_of :root_account_id, :workflow_state
   before_validation :verify_unique_sis_source_id
   before_save :update_courses_later_if_necessary
 
@@ -44,7 +52,7 @@ class EnrollmentTerm < ActiveRecord::Base
 
   def touch_all_courses
     return if new_record?
-    Course.update_all({:updated_at => Time.now.utc}, "enrollment_term_id=#{self.id}")
+    self.courses.update_all(:updated_at => Time.now.utc)
   end
 
   def update_courses_later
@@ -103,12 +111,13 @@ class EnrollmentTerm < ActiveRecord::Base
   end
   
   def users_count
-    Enrollment.active.count(
-      :select => "enrollments.user_id", 
-      :distinct => true,
-      :joins => :course,
-      :conditions => ['enrollments.course_id = courses.id AND courses.enrollment_term_id = ? AND enrollments.root_account_id = ?', id, self.root_account_id]
-    )
+    scope = Enrollment.active.joins(:course).
+      where(root_account_id: root_account_id, courses: {enrollment_term_id: self})
+    if CANVAS_RAILS2
+      scope.count(:distinct => true, :select => "enrollments.user_id")
+    else
+      scope.select(:user_id).uniq.count
+    end
   end
   
   workflow do
@@ -131,7 +140,5 @@ class EnrollmentTerm < ActiveRecord::Base
     save!
   end
   
-  named_scope :active, lambda {
-    { :conditions => ['enrollment_terms.workflow_state != ?', 'deleted'] }
-  }
+  scope :active, -> { where("enrollment_terms.workflow_state<>'deleted'") }
 end

@@ -18,17 +18,30 @@
 
 class ConversationMessageParticipant < ActiveRecord::Base
   include SimpleTags
+  include Workflow
 
   belongs_to :conversation_message
+  belongs_to :user
+  # deprecated
   belongs_to :conversation_participant
   delegate :author, :author_id, :generated, :body, :to => :conversation_message
 
   attr_accessible
 
-  named_scope :for_conversation_and_message, lambda { |conversation_id, message_id|
-    {
-      :joins => "INNER JOIN conversation_participants ON conversation_participants.id = conversation_participant_id",
-      :conditions => ["conversation_id = ? AND conversation_message_id = ?", conversation_id, message_id]
-    }
+  EXPORTABLE_ATTRIBUTES = [:id, :conversation_message_id, :conversation_participant_id, :tags, :user_id, :workflow_state]
+  EXPORTABLE_ASSOCIATIONS = [:conversation_message, :user, :conversation_participant]
+
+  scope :active, -> { where("(conversation_message_participants.workflow_state <> 'deleted' OR conversation_message_participants.workflow_state IS NULL)") }
+  scope :deleted, -> { where(workflow_state: 'deleted') }
+
+  scope :for_conversation_and_message, lambda { |conversation_id, message_id|
+    joins("INNER JOIN conversation_participants ON conversation_participants.id = conversation_participant_id").
+        where(:conversation_id => conversation_id, :conversation_message_id => message_id)
   }
+
+  workflow do
+    state :active
+    state :deleted
+  end
+
 end

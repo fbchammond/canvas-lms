@@ -1,15 +1,19 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
-shared_examples_for "manage groups selenium tests" do
-  it_should_behave_like "in-process server selenium tests"
-
   def add_category(course, name, opts={})
-    driver.find_element(:css, ".add_category_link").click
-    form = driver.find_element(:css, "#add_category_form")
+    keep_trying_until do
+      f(".add_category_link").click
+      wait_for_ajaximations
+    end
+    form = f("#add_category_form")
     input = form.find_element(:css, "input[type=text]")
     replace_content input, name
     enable_self_signup = form.find_element(:css, "#category_enable_self_signup")
     enable_self_signup.click unless !!enable_self_signup.attribute('checked') == !!opts[:enable_self_signup]
+
+    if opts[:enable_self_signup] && opts[:group_limit]
+      replace_content f('#category_group_limit', form), opts[:group_limit]
+    end
 
     restrict_self_signup = form.find_element(:css, "#category_restrict_self_signup")
     restrict_self_signup.click unless !!restrict_self_signup.attribute('checked') == !!opts[:restrict_self_signup]
@@ -29,12 +33,16 @@ shared_examples_for "manage groups selenium tests" do
     keep_trying_until { find_with_jquery("#add_category_form:visible").should be_nil }
     category = course.group_categories.find_by_name(name)
     category.should_not be_nil
+    keep_trying_until { fj("#category_#{category.id} .student_links:visible") }
     category
   end
 
   def edit_category(opts={})
-    find_with_jquery(".edit_category_link:visible").click
-    form = driver.find_element(:css, "#edit_category_form")
+    keep_trying_until do
+      fj(".edit_category_link:visible").click
+      wait_for_ajaximations
+    end
+    form = f("#edit_category_form")
     input_box = form.find_element(:css, "input[type=text]")
     if opts[:new_name]
       replace_content input_bopts[:new_name]
@@ -81,14 +89,13 @@ shared_examples_for "manage groups selenium tests" do
   end
 
   def add_group_to_category(context, name)
-
-    find_with_jquery(".add_group_link:visible").click
-    driver.find_element(:css, "#group_name").send_keys(name)
+    driver.execute_script("$('.add_group_link:visible').click()")
+    wait_for_ajaximations
+    replace_content(f("#group_name"), name)
+    wait_for_ajaximations
     submit_form("#edit_group_form")
     wait_for_ajaximations
-    group = context.groups.find_by_name(name)
-    group.should_not be_nil
-    group
+    context.groups.find_by_name(name)
   end
 
   def add_groups_in_category (category, i=3)
@@ -105,6 +112,12 @@ shared_examples_for "manage groups selenium tests" do
           $('#{from_group} .user_id_#{user_id}'),
           $('#{to_group}'))
     SCRIPT
+    sleep 1
   end
 
-end
+  def expand_group(group_id)
+    group_selector = (group_id == "unassigned" ? ".unassigned-students" : ".group[data-id=\"#{group_id}\"]")
+    return if group_selector == ".unassigned-students" || f(group_selector).attribute(:class) =~ /group-expanded/
+    fj("#{group_selector} .toggle-group").click
+    wait_for_ajax_requests
+  end

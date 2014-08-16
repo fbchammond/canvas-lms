@@ -68,4 +68,34 @@ module CoursesHelper
 
     url
   end
+
+  # Public: Display the given user count, or "None" if it's 0.
+  #
+  # count - The count to display (e.g. 7)
+  #
+  # Returns a text string.
+  def user_count(count)
+    count == 0 ? t('#courses.settings.none', 'None') : count
+  end
+
+  def readable_grade(submission)
+    if submission.grade and
+       submission.workflow_state == 'graded'
+      if submission.grading_type == 'points' and
+         submission.assignment and
+         submission.assignment.respond_to?(:points_possible)
+         score_out_of_points_possible(submission.grade, submission.assignment.points_possible)
+      else
+        submission.grade.to_s.capitalize
+      end
+    else
+      nil
+    end
+  end
+
+  def skip_custom_role?(cr)
+    cr[:count] == 0 && cr[:workflow_state] == 'inactive'
+  end
+
+
 end

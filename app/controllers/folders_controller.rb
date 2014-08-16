@@ -19,34 +19,99 @@
 # @API Files
 # @subtopic Folders
 #
-# @object Folder
+# @model Folder
 #     {
-#       "context_type":"Course",
-#       "context_id":1401,
-#       "locked":null,
-#       "files_count":0,
-#       "position":3,
-#       "updated_at":"2012-07-06T14:58:50Z",
-#       "folders_url":"https://www.example.com/api/v1/folders/2937/folders",
-#       "files_url":"https://www.example.com/api/v1/folders/2937/files",
-#       "full_name":"course files/11folder",
-#       "lock_at":null,
-#       "id":2937,
-#       "folders_count":0,
-#       "name":"11folder",
-#       "parent_folder_id":2934,
-#       "created_at":"2012-07-06T14:58:50Z",
-#       "unlock_at":null
+#       "id": "Folder",
+#       "description": "",
+#       "properties": {
+#         "context_type": {
+#           "example": "Course",
+#           "type": "string"
+#         },
+#         "context_id": {
+#           "example": 1401,
+#           "type": "integer"
+#         },
+#         "files_count": {
+#           "example": 0,
+#           "type": "integer"
+#         },
+#         "position": {
+#           "example": 3,
+#           "type": "integer"
+#         },
+#         "updated_at": {
+#           "example": "2012-07-06T14:58:50Z",
+#           "type": "datetime"
+#         },
+#         "folders_url": {
+#           "example": "https://www.example.com/api/v1/folders/2937/folders",
+#           "type": "string"
+#         },
+#         "files_url": {
+#           "example": "https://www.example.com/api/v1/folders/2937/files",
+#           "type": "string"
+#         },
+#         "full_name": {
+#           "example": "course files/11folder",
+#           "type": "string"
+#         },
+#         "lock_at": {
+#           "example": "2012-07-06T14:58:50Z",
+#           "type": "datetime"
+#         },
+#         "id": {
+#           "example": 2937,
+#           "type": "integer"
+#         },
+#         "folders_count": {
+#           "example": 0,
+#           "type": "integer"
+#         },
+#         "name": {
+#           "example": "11folder",
+#           "type": "string"
+#         },
+#         "parent_folder_id": {
+#           "example": 2934,
+#           "type": "integer"
+#         },
+#         "created_at": {
+#           "example": "2012-07-06T14:58:50Z",
+#           "type": "datetime"
+#         },
+#         "unlock_at": {
+#           "type": "datetime"
+#         },
+#         "hidden": {
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "hidden_for_user": {
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "locked": {
+#           "example": true,
+#           "type": "boolean"
+#         },
+#         "locked_for_user": {
+#           "example": false,
+#           "type": "boolean"
+#         }
+#       }
 #     }
+#
 class FoldersController < ApplicationController
   include Api::V1::Folders
   include Api::V1::Attachment
+  include AttachmentHelper
 
   before_filter :require_context, :except => [:api_index, :show, :api_destroy, :update, :create, :create_file]
 
   def index
     if authorized_action(@context, @current_user, :read)
-      render :json => Folder.root_folders(@context).to_json(:permissions => {:user => @current_user, :session => session})
+      render :json => Folder.root_folders(@context).map{ |f| f.as_json(permissions: {user: @current_user, session: session}) }
     end
   end
 
@@ -55,36 +120,55 @@ class FoldersController < ApplicationController
   # @subtopic Folders
   # Returns the paginated list of folders in the folder.
   #
-  # @argument sort_by Either 'alphabetical' (default) or 'position'
-  #
   # @example_request
   #
   #   curl 'https://<canvas>/api/v1/folders/<folder_id>/folders' \ 
-  #        -H 'Authorization: Bearer <token>'
-  #
-  # @example_request
-  #
-  #   curl 'https://<canvas>/api/v1/folders/<folder_id>/folders?sort_by=position' \ 
   #        -H 'Authorization: Bearer <token>'
   #
   # @returns [Folder]
   def api_index
     folder = Folder.find(params[:id])
     if authorized_action(folder, @current_user, :read_contents)
+      can_manage_files = folder.context.grants_right?(@current_user, session, :manage_files)
+
       scope = folder.active_sub_folders
-      if !folder.grants_right?(@current_user, session, :update)
-        scope = scope.not_hidden
+      unless can_manage_files
+        scope = scope.not_hidden.not_locked
       end
       if params[:sort_by] == 'position'
         scope = scope.by_position
       else
         scope = scope.by_name
       end
-      @folders = Api.paginate(scope, self, api_v1_list_folders_url(@context))
-      render :json => folders_json(@folders, @current_user, session)
+      @folders = Api.paginate(scope, self, api_v1_list_folders_url(folder))
+      render :json => folders_json(@folders, @current_user, session, :can_manage_files => can_manage_files)
     end
   end
-  
+
+  # @API Resolve path
+  # @subtopic Folders
+  # Given the full path to a folder, returns a list of all Folders in the path hierarchy,
+  # starting at the root folder, and ending at the requested folder. The given path is
+  # relative to the context's root folder and does not include the root folder's name
+  # (e.g., "course files"). If an empty path is given, the context's root folder alone
+  # is returned. Otherwise, if no folder exists with the given full path, a Not Found
+  # error is returned.
+  #
+  # @example_request
+  #
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/folders/by_path/foo/bar/baz' \
+  #        -H 'Authorization: Bearer <token>'
+  #
+  # @returns [Folder]
+  def resolve_path
+    if authorized_action(@context, @current_user, :read)
+      can_manage_files = @context.grants_right?(@current_user, session, :manage_files)
+      folders = Folder.resolve_path(@context, params[:full_path], can_manage_files)
+      raise ActiveRecord::RecordNotFound if folders.blank?
+      render json: folders_json(folders, @current_user, session, :can_manage_files => can_manage_files)
+    end
+  end
+
   # @API Get folder
   # @subtopic Folders
   # Returns the details for a folder
@@ -125,17 +209,27 @@ class FoldersController < ApplicationController
       else
         respond_to do |format|
           format.html { redirect_to named_context_url(@context, :context_files_url, :folder_id => @folder.id) }
-          files = if @context.grants_right?(@current_user, session, :manage_files)
-                    @folder.active_file_attachments.by_position_then_display_name
-                  else
-                    @folder.visible_file_attachments.by_position_then_display_name
-                  end
-          files_options = {:permissions => {:user => @current_user}, :methods => [:currently_locked, :mime_class, :readable_size, :scribdable?], :only => [:id, :comments, :content_type, :context_id, :context_type, :display_name, :folder_id, :position, :media_entry_id, :scribd_doc, :filename]}
+          can_manage_files = @context.grants_right?(@current_user, session, :manage_files)
+
+          files = if can_manage_files
+            @folder.active_file_attachments.by_position_then_display_name
+          else
+            @folder.visible_file_attachments.not_hidden.not_locked.by_position_then_display_name
+          end
+          files_options = {:permissions => {:user => @current_user}, :methods => [:currently_locked, :mime_class, :readable_size, :scribdable?], :only => [:id, :comments, :content_type, :context_id, :context_type, :display_name, :folder_id, :position, :media_entry_id, :scribd_doc, :filename, :workflow_state]}
           folders_options = {:permissions => {:user => @current_user}, :methods => [:currently_locked, :mime_class], :only => [:id, :context_id, :context_type, :lock_at, :last_lock_at, :last_unlock_at, :name, :parent_folder_id, :position, :unlock_at]}
+          sub_folders_scope = @folder.active_sub_folders
+          unless can_manage_files
+            sub_folders_scope = sub_folders_scope.not_hidden.not_locked
+          end
           res = {
             :actual_folder => @folder.as_json(folders_options),
-            :sub_folders => @folder.active_sub_folders.by_position.map { |f| f.as_json(folders_options) },
-            :files => files.map { |f| f.as_json(files_options)}
+            :sub_folders => sub_folders_scope.by_position.map { |f| f.as_json(folders_options) },
+            :files => files.map { |f|
+              f.as_json(files_options).tap { |json|
+                json['attachment'].merge! doc_preview_json(f, @current_user)
+              }
+            }
           }
           format.json { render :json => res }
         end
@@ -153,7 +247,7 @@ class FoldersController < ApplicationController
       folder_filename = "#{t :folder_filename, "folder"}.zip"
       
       @attachments = Attachment.find_all_by_context_id_and_context_type_and_display_name_and_user_id(@folder.id, @folder.class.to_s, folder_filename, user_id).
-                                select{|a| ['to_be_zipped', 'zipping', 'zipped'].include?(a.workflow_state) && !a.deleted? }.
+                                select{|a| ['to_be_zipped', 'zipping', 'zipped', 'unattached'].include?(a.workflow_state) && !a.deleted? }.
                                 sort_by{|a| a.created_at }
       @attachment = @attachments.pop
       @attachments.each{|a| a.destroy! }
@@ -171,7 +265,7 @@ class FoldersController < ApplicationController
         @attachment.context = @folder
         @attachment.save!
         ContentZipper.send_later_enqueue_args(:process_attachment, { :priority => Delayed::LOW_PRIORITY, :max_attempts => 1 }, @attachment, @current_user)
-        render :json => @attachment.to_json
+        render :json => @attachment
       else
         respond_to do |format|
           if @attachment.zipped?
@@ -183,12 +277,12 @@ class FoldersController < ApplicationController
               format.html { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
               format.zip { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
             end
-            format.json { render :json => @attachment.to_json(:methods => :readable_size) }
+            format.json { render :json => @attachment.as_json(:methods => :readable_size) }
           else
             flash[:notice] = t :file_zip_in_process, "File zipping still in process..."
             format.html { redirect_to named_context_url(@context, :context_folder_url, @folder.id) }
             format.zip { redirect_to named_context_url(@context, :context_folder_url, @folder.id) }
-            format.json { render :json => @attachment.to_json }
+            format.json { render :json => @attachment }
           end
         end
       end
@@ -199,13 +293,26 @@ class FoldersController < ApplicationController
   # @subtopic Folders
   # Updates a folder
   #
-  # @argument name The new name of the folder
-  # @argument parent_folder_id The id of the folder to move this folder into. The new folder must be in the same context as the original parent folder.
-  # @argument lock_at The datetime to lock the folder at
-  # @argument unlock_at The datetime to unlock the folder at
-  # @argument locked Flag the folder as locked
-  # @argument hidden Flag the folder as hidden
-  # @argument position Set an explicit sort position for the folder
+  # @argument name [String]
+  #   The new name of the folder
+  #
+  # @argument parent_folder_id [String]
+  #   The id of the folder to move this folder into. The new folder must be in the same context as the original parent folder.
+  #
+  # @argument lock_at [DateTime]
+  #   The datetime to lock the folder at
+  #
+  # @argument unlock_at [DateTime]
+  #   The datetime to unlock the folder at
+  #
+  # @argument locked [Boolean]
+  #   Flag the folder as locked
+  #
+  # @argument hidden [Boolean]
+  #   Flag the folder as hidden
+  #
+  # @argument position [Integer]
+  #   Set an explicit sort position for the folder
   #
   # @example_request
   #
@@ -244,11 +351,11 @@ class FoldersController < ApplicationController
           if api_request?
             format.json { render :json => folder_json(@folder, @current_user, session) }
           else
-            format.json { render :json => @folder.to_json(:methods => [:currently_locked], :permissions => {:user => @current_user, :session => session}), :status => :ok }
+            format.json { render :json => @folder.as_json(:methods => [:currently_locked], :permissions => {:user => @current_user, :session => session}), :status => :ok }
           end
         else
           format.html { render :action => "edit" }
-          format.json { render :json => @folder.errors.to_json, :status => :bad_request }
+          format.json { render :json => @folder.errors, :status => :bad_request }
         end
       end
     end
@@ -258,14 +365,29 @@ class FoldersController < ApplicationController
   # @subtopic Folders
   # Creates a folder in the specified context
   #
-  # @argument name The name of the folder
-  # @argument parent_folder_id The id of the folder to store the file in. If this and parent_folder_path are sent an error will be returned. If neither is given, a default folder will be used.
-  # @argument parent_folder_path The path of the folder to store the new folder in. The path separator is the forward slash `/`, never a back slash. The parent folder will be created if it does not already exist. This parameter only applies to new folders in a context that has folders, such as a user, a course, or a group. If this and parent_folder_id are sent an error will be returned. If neither is given, a default folder will be used.
-  # @argument lock_at The datetime to lock the folder at
-  # @argument unlock_at The datetime to unlock the folder at
-  # @argument locked Flag the folder as locked
-  # @argument hidden Flag the folder as hidden
-  # @argument position Set an explicit sort position for the folder
+  # @argument name [String]
+  #   The name of the folder
+  #
+  # @argument parent_folder_id [String]
+  #   The id of the folder to store the file in. If this and parent_folder_path are sent an error will be returned. If neither is given, a default folder will be used.
+  #
+  # @argument parent_folder_path [String]
+  #   The path of the folder to store the new folder in. The path separator is the forward slash `/`, never a back slash. The parent folder will be created if it does not already exist. This parameter only applies to new folders in a context that has folders, such as a user, a course, or a group. If this and parent_folder_id are sent an error will be returned. If neither is given, a default folder will be used.
+  #
+  # @argument lock_at [DateTime]
+  #   The datetime to lock the folder at
+  #
+  # @argument unlock_at [DateTime]
+  #   The datetime to unlock the folder at
+  #
+  # @argument locked [Boolean]
+  #   Flag the folder as locked
+  #
+  # @argument hidden [Boolean]
+  #   Flag the folder as hidden
+  #
+  # @argument position [Integer]
+  #   Set an explicit sort position for the folder
   #
   # @example_request
   #
@@ -326,11 +448,11 @@ class FoldersController < ApplicationController
           if api_request?
             format.json { render :json => folder_json(@folder, @current_user, session) }
           else
-            format.json { render :json => @folder.to_json(:permissions => {:user => @current_user, :session => session}) }
+            format.json { render :json => @folder.as_json(:permissions => {:user => @current_user, :session => session}) }
           end
         else
           format.html { render :action => "new" }
-          format.json { render :json => @folder.errors.to_json }
+          format.json { render :json => @folder.errors }
         end
       end
     end
@@ -350,7 +472,7 @@ class FoldersController < ApplicationController
       @folder.destroy
       respond_to do |format|
         format.html { redirect_to named_context_url(@context, :context_files_url) }# show.rhtml
-        format.json { render :json => @folder.to_json }
+        format.json { render :json => @folder }
       end
     end
   end
@@ -360,7 +482,8 @@ class FoldersController < ApplicationController
   # Remove the specified folder. You can only delete empty folders unless you
   # set the 'force' flag
   #
-  # @argument force Set to 'true' to allow deleting a non-empty folder
+  # @argument force [Boolean]
+  #   Set to 'true' to allow deleting a non-empty folder
   #
   # @example_request
   #

@@ -1,9 +1,9 @@
 class BreakDownDetailedReportSnapshots < ActiveRecord::Migration
   tag :postdeploy
-  self.transactional = false
+  disable_ddl_transaction!
 
   def self.do_report_type(scope)
-    detailed = scope.find(:last, :conditions => { :account_id => nil })
+    detailed = scope.where(:account_id => nil).last
     return unless detailed
     detailed.data['detailed'].each do |(account_id, data)|
       new_detailed = detailed.clone

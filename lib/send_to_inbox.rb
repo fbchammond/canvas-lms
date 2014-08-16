@@ -20,7 +20,11 @@ module SendToInbox
 
   module SendToInboxClassMethods
     def self.extended(klass)
-      klass.send(:class_inheritable_accessor, :send_to_inbox_block)
+      if CANVAS_RAILS2
+        klass.send(:class_inheritable_accessor, :send_to_inbox_block)
+      else
+        klass.send(:class_attribute, :send_to_inbox_block)
+      end
     end
 
     def on_create_send_to_inboxes(&block)
@@ -39,9 +43,9 @@ module SendToInbox
       block = self.class.send_to_inbox_block
       inbox_results = self.instance_eval(&block) || {}
       inbox_results[:body_teaser] = if inbox_results[:body]
-                                      truncate_text(inbox_results[:body], :max_length => 255)
+        CanvasTextHelper.truncate_text(inbox_results[:body], :max_length => 255)
                                     elsif inbox_results[:html_body]
-                                      strip_and_truncate(inbox_results[:html_body] || "", :max_length => 255)
+                                      HtmlTextHelper.strip_and_truncate(inbox_results[:html_body] || "", :max_length => 255)
                                     else
                                       ""
                                     end
@@ -52,7 +56,7 @@ module SendToInbox
           InboxItem.create(
             :user_id => user_id,
             :asset => self,
-            :subject => inbox_results[:subject] || I18n.t('lib.send_to_inbox.default_subject', "No Subject"),
+            :subject => CanvasTextHelper.truncate_text(inbox_results[:subject] || I18n.t('lib.send_to_inbox.default_subject', "No Subject"), :max_length => 255),
             :body_teaser => inbox_results[:body_teaser],
             :sender_id => sender_id
           )

@@ -21,8 +21,14 @@ class UserService < ActiveRecord::Base
   
   belongs_to :user
   attr_accessor :password
-  attr_accessible :user, :service, :protocol, :token, :secret, :service_user_url, :service_user_id, :service_user_name, :service_domain
-  
+  attr_accessible :user, :service, :protocol, :token, :secret, :service_user_url, :service_user_id, :service_user_name, :service_domain, :visible
+
+  EXPORTABLE_ATTRIBUTES = [
+    :id, :user_id, :protocol, :service, :created_at, :updated_at, :service_user_url, :service_user_id, :service_user_name, :service_domain, :type, :workflow_state, :last_result_id, :refresh_at, :visible]
+  EXPORTABLE_ASSOCIATIONS = [:user]
+
+  validates_presence_of :user_id, :service, :service_user_id, :workflow_state
+
   before_save :infer_defaults
   after_save :assert_relations
   after_save :touch_user
@@ -41,7 +47,7 @@ class UserService < ActiveRecord::Base
       cc.save!
     end
     if self.user_id && self.service
-      UserService.delete_all(['user_id=? AND service=? AND id != ?', self.user_id, self.service, self.id]) rescue nil
+      UserService.where(:user_id => self.user_id, :service => self.service).where("id<>?", self).delete_all
     end
     true
   end
@@ -71,24 +77,15 @@ class UserService < ActiveRecord::Base
     state :failed
   end
   
-  named_scope :of_type, lambda { |type| 
-    { :conditions => ['user_services.type = ?', type.to_s]}
+  scope :of_type, lambda { |type| where(:type => type.to_s) }
+
+  scope :to_be_polled, -> { where("refresh_at<", Time.now.utc).order(:refresh_at).limit(1) }
+  scope :for_user, lambda { |user| where(:user_id => user) }
+  scope :for_service, lambda { |service|
+    service = service.service if service.is_a?(UserService)
+    where(:service => service.to_s)
   }
-  
-  named_scope :to_be_polled, lambda {
-    { :conditions => ['refresh_at < ?', Time.now.utc], :order => :refresh_at, :limit => 1 }
-  }
-  named_scope :for_user, lambda{|user|
-    users = Array(user)
-    {:conditions => {:user_id => users.map(&:id)} }
-  }
-  named_scope :for_service, lambda { |service|
-    if(service.is_a?(UserService))
-      { :conditions => ['user_services.service = ?', service.service]}
-    else
-      { :conditions => ['user_services.service = ?', service.to_s]}
-    end
-  }
+  scope :visible, -> { where("visible") }
   
   def service_name
     self.service.titleize rescue ""
@@ -231,8 +228,8 @@ class UserService < ActiveRecord::Base
   end
   
   def service_access_link
-    if service == 'facebook' && Facebook.config && Facebook.config['canvas_name']
-      "https://apps.facebook.com/#{Facebook.config['canvas_name']}"
+    if service == 'facebook' && Facebook::Connection.config && Facebook::Connection.config['canvas_name']
+      "https://apps.facebook.com/#{Facebook::Connection.config['canvas_name']}"
     else
       service_user_link
     end
@@ -279,4 +276,8 @@ class UserService < ActiveRecord::Base
     end
   end
   def self.serialization_excludes; [:crypted_password, :password_salt, :token, :secret]; end
+
+  def self.associated_shards(service, service_user_id)
+    [Shard.default]
+  end
 end

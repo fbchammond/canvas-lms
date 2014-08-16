@@ -21,6 +21,7 @@ define [
   class
     constructor: (@event) ->
       @currentContextInfo = null
+      dialog.on('dialogclose', @dialogClose)
 
     contextInfoForCode: (code) ->
       for context in @event.possibleContexts()
@@ -39,7 +40,7 @@ define [
         tabs.tabs('select', 0)
         tabs.tabs('remove', 1)
         @calendarEventForm.activate()
-      else if @event.eventType == 'assignment'
+      else if @event.eventType.match(/assignment/)
         tabs.tabs('select', 1)
         tabs.tabs('remove', 0)
         @assignmentDetailsForm.activate()
@@ -62,6 +63,11 @@ define [
     closeCB: () =>
       dialog.dialog('close')
 
+    dialogClose: () =>
+      if @oldFocus?
+        @oldFocus.focus()
+        @oldFocus = null
+
     show: =>
       if @event.isAppointmentGroupEvent()
         new EditApptCalendarEventDialog(@event).show()
@@ -74,7 +80,7 @@ define [
           @calendarEventForm = new EditCalendarEventDetails(formHolder, @event, @contextChange, @closeCB)
           formHolder.data('form-widget', @calendarEventForm)
 
-        if @event.isNewEvent() || @event.eventType == 'assignment'
+        if @event.isNewEvent() || @event.eventType.match(/assignment/)
           @assignmentDetailsForm = new EditAssignmentDetails($('#edit_assignment_form_holder'), @event, @contextChange, @closeCB)
           dialog.find("#edit_assignment_form_holder").data('form-widget', @assignmentDetailsForm)
 
@@ -82,4 +88,5 @@ define [
 
         # TODO: select the tab that should be active
 
+        @oldFocus = document.activeElement
         dialog.dialog('open')

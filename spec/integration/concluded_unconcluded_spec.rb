@@ -40,7 +40,7 @@ describe "concluded/unconcluded courses" do
     @assignment = @course.assignments.create!(:submission_types => 'online_quiz', :title => 'quiz assignment', :assignment_group => @group)
     @quiz = @assignment.reload.quiz
     @quiz.should_not be_nil
-    @qsub = @quiz.find_or_create_submission(@student)
+    @qsub = Quizzes::SubmissionManager.new(@quiz).find_or_create_submission(@student)
     @qsub.quiz_data = [{:correct_comments=>"", :assessment_question_id=>nil, :incorrect_comments=>"", :question_name=>"Question 1", :points_possible=>1, :question_text=>"Which book(s) are required for this course?", :name=>"Question 1", :id=>128, :answers=>[{:weight=>0, :text=>"A", :comments=>"", :id=>1490}, {:weight=>0, :text=>"B", :comments=>"", :id=>1020}, {:weight=>0, :text=>"C", :comments=>"", :id=>7051}], :question_type=>"multiple_choice_question"}]
     @qsub.submission_data = [{:points=>0, :text=>"7051", :question_id=>128, :correct=>false, :answer_id=>7051}]
     @qsub.workflow_state = 'complete'
@@ -95,7 +95,7 @@ describe "concluded/unconcluded courses" do
     
     html = Nokogiri::HTML(response.body)
     html.css('#fudge_points_entry').length.should == 1
-    html.css('.question_neutral_comment textarea').length.should == 1
+    html.css('.quiz_comment textarea').length.should == 1
     html.css('.user_points .question_input').length.should == 1
   end
   
@@ -107,7 +107,7 @@ describe "concluded/unconcluded courses" do
     
     html = Nokogiri::HTML(response.body)
     html.css('#fudge_points_entry').length.should == 0
-    html.css('.question_neutral_comment textarea').length.should == 0
+    html.css('.quiz_comment textarea').length.should == 0
     html.css('.user_points .question_input').length.should == 0
   end
   

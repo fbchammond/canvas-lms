@@ -2,10 +2,20 @@ $canvas_tasks_loaded ||= false
 unless $canvas_tasks_loaded
 $canvas_tasks_loaded = true
 
+def log_time(name, &block)
+  puts "--> Starting: '#{name}'"
+  time = Benchmark.realtime(&block)
+  puts "--> Finished: '#{name}' in #{time}"
+  time
+end
+
 def check_syntax(files)
   quick = ENV["quick"] && ENV["quick"] == "true"
-
+  puts "--> Checking Syntax...."
   show_stoppers = []
+  raise "jsl needs to be in your $PATH, download from: javascriptlint.com" if `which jsl`.empty?
+  puts "--> Found jsl..."
+
   Array(files).each do |js_file|
     js_file.strip!
     # only lint things in public/javascripts that are not in /vendor, /compiled, etc.
@@ -34,12 +44,11 @@ def check_syntax(files)
         end
       end
 
-      raise "jsl needs to be in your $PATH, download from: javascriptlint.com" if `which jsl`.empty?
-      puts " --> Checking #{js_file} using jsl:"
       jsl_output = `jsl -process "#{file_path}" -nologo -conf "#{File.join(Rails.root, 'config', 'jslint.conf')}"`
       exit_status = $?.exitstatus
       if exit_status != 0
-        if jsl_output.match("warning: trailing comma is not legal in ECMA-262 object initializers")
+        puts " --> Error checking #{js_file} using jsl:"
+        if jsl_output.match("warning: trailing comma is not legal in ECMA-262 object initializers") || jsl_output.match("extra comma is not recommended in array initializers")
           exit_status = 2
           jsl_output << "fatal trailing comma found. Stupid IE!"
         end
@@ -50,7 +59,11 @@ def check_syntax(files)
       end
     end
   end
-  raise "Fatal JavaScript errors found" unless show_stoppers.empty?
+  if show_stoppers.empty?
+    puts " --> No JavaScript errors found using jsl"
+  else
+    raise "FATAL JavaScript errors found using jsl"
+  end
 end
 
 
@@ -92,27 +105,59 @@ namespace :canvas do
   end
 
   desc "Compile javascript and css assets."
-  task :compile_assets do
-    puts "--> Compiling static assets [css]"
-    Rake::Task['css:generate'].invoke
+  task :compile_assets, :generate_documentation, :use_sass_cache, :check_syntax do |t, args|
+    args.with_defaults(:generate_documentation => true, :use_sass_cache => false, :check_syntax => false)
+    truthy_values = [true, 'true', '1']
+    generate_documentation = truthy_values.include?(args[:generate_documentation])
+    use_sass_cache = !truthy_values.include?(args[:use_sass_cache])
+    check_syntax = truthy_values.include?(args[:check_syntax])
 
-    puts "--> Compiling static assets [jammit]"
-    output = `bundle exec jammit 2>&1`
-    raise "Error running jammit: \n#{output}\nABORTING" if $?.exitstatus != 0
+    tasks = {
+      "Compile sass and make jammit css bundles" => -> {
+        log_time('css:generate') do
+          Rake::Task['css:generate'].invoke(use_sass_cache, !!:quiet, :production)
+        end
 
-    puts "--> Compiled static assets [css/jammit]"
+        log_time("Jammit") do
+          require 'jammit'
+          Jammit.package!
+        end
+      },
+      "css:styleguide" => -> {
+        Rake::Task['css:styleguide'].invoke
+      },
+      "compile coffee, js 18n, and run r.js optimizer" => -> {
+        ['js:generate', 'i18n:generate_js', 'js:build'].each do |name|
+          log_time(name) { Rake::Task[name].invoke }
+        end
+      }
+    }
 
-    puts "--> Compiling static assets [javascript]"
-    Rake::Task['js:generate'].invoke
+    if check_syntax
+      tasks["check JavaScript syntax"] = -> {
+        Rake::Task['canvas:check_syntax'].invoke
+      }
+    end
 
-    puts "--> Generating js localization bundles"
-    Rake::Task['i18n:generate_js'].invoke
+    if generate_documentation
+      tasks["Generate documentation [yardoc]"] = -> {
+        Rake::Task['doc:api'].invoke
+      }
+    end
 
-    puts "--> Optimizing JavaScript [r.js]"
-    Rake::Task['js:build'].invoke
 
-    puts "--> Generating documentation [yardoc]"
-    Rake::Task['doc:api'].invoke
+
+    require 'parallel'
+    processes = ENV['CANVAS_BUILD_CONCURRENCY'] || Parallel.processor_count
+    puts "working in #{processes} processes"
+    times = nil
+    real_time = Benchmark.realtime do
+      times = Parallel.map(tasks, :in_processes => processes.to_i) do |name, lamduh|
+        log_time(name) { lamduh.call }
+      end
+    end
+    combined_time = times.reduce(:+)
+    puts "Finished compiling assets in #{real_time}. parallelism saved #{combined_time - real_time} (#{real_time.to_f / combined_time.to_f * 100.0}%)"
   end
 
   desc "Check static assets and generate api documentation."
@@ -141,6 +186,20 @@ namespace :canvas do
    end
 end
 
+namespace :lint do
+  desc "lint controllers for bad render json calls."
+  task :render_json do
+    output = `script/render_json_lint`
+    exit_status = $?.exitstatus
+    puts output
+    if exit_status != 0
+      raise "lint:render_json test failed"
+    else
+      puts "lint:render_json test succeeded"
+    end
+  end
+end
+
 namespace :db do
   desc "Shows pending db migrations."
   task :pending_migrations => :environment do
@@ -151,6 +210,18 @@ namespace :db do
       puts '  %4d %s%s' % [pending_migration.version, pending_migration.name, tags]
     end
   end
+
+   desc "execute migration_lint script."
+   task :migration_lint do
+     output = `script/migration_lint`
+     exit_status = $?.exitstatus
+     puts output
+     if exit_status != 0
+       raise "migration_lint test failed"
+     else
+       puts "migration_lint test succeeded"
+     end
+   end
 
   namespace :migrate do
     desc "Run all pending predeploy migrations"
@@ -165,19 +236,32 @@ namespace :db do
   end
 
   namespace :test do
-    unless Rake::Task.task_defined?('db:test:reset')
-      task :reset => [:environment, :load_config] do
-        raise "Run with RAILS_ENV=test" unless Rails.env.test?
-        config = ActiveRecord::Base.configurations['test']
-        queue = config['queue']
-        drop_database(queue) if queue rescue nil
-        drop_database(config) rescue nil
-        create_database(queue) if queue
-        create_database(config)
-        Rake::Task['db:migrate'].invoke
+    desc "Drop and regenerate the test db by running migrations"
+    task :reset => [:environment, :load_config] do
+      raise "Run with RAILS_ENV=test" unless Rails.env.test?
+      config = ActiveRecord::Base.configurations['test']
+      queue = config['queue']
+      drop_database(queue) if queue rescue nil
+      drop_database(config) rescue nil
+      Canvas::Cassandra::DatabaseBuilder.config_names.each do |cass_config|
+        db = Canvas::Cassandra::DatabaseBuilder.from_config(cass_config)
+        db.tables.each do |table|
+          db.execute("DROP TABLE #{table}")
+        end
       end
+      create_database(queue) if queue
+      create_database(config)
+      unless CANVAS_RAILS2
+        ::ActiveRecord::Base.connection.schema_cache.clear!
+        ::ActiveRecord::Base.descendants.each(&:reset_column_information)
+      end
+      Rake::Task['db:migrate'].invoke
     end
   end
+end
+
+if CANVAS_RAILS3
+  %w{db:pending_migrations db:migrate:predeploy db:migrate:postdeploy}.each { |task_name| Switchman.shardify_task(task_name) }
 end
 
 end

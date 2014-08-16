@@ -1,10 +1,11 @@
 require File.expand_path(File.dirname(__FILE__) + '/common')
 
 describe "layout" do
-  it_should_behave_like "in-process server selenium tests"
+  include_examples "in-process server selenium tests"
 
   before (:each) do
     course_with_student_logged_in
+    @user.update_attribute(:name, "</script><b>evil html & name</b>")
     get "/"
   end
 
@@ -28,7 +29,7 @@ describe "layout" do
     rs_wrapper.should_not have_class 'with-scrolling-right-side'
     rs_wrapper.should have_class 'with-sidebar-pinned-to-bottom'
 
-    f('#topic_list').location_once_scrolled_into_view
+    f('#dashboard').location_once_scrolled_into_view
     sleep 0.1
     rs_wrapper.should have_class 'with-scrolling-right-side'
     rs_wrapper.should_not have_class 'with-sidebar-pinned-to-bottom'
@@ -40,6 +41,10 @@ describe "layout" do
   end
 
   it "should have ENV available to the JavaScript from js_env" do
-    driver.execute_script("return ENV.current_user_id").should == @user.id
+    driver.execute_script("return ENV.current_user_id").should == @user.id.to_s
+  end
+
+  it "should escape JSON injected directly into the view" do
+    driver.execute_script("return ENV.current_user.display_name").should ==  "</script><b>evil html & name</b>"
   end
 end

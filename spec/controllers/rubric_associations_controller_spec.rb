@@ -29,22 +29,13 @@ describe RubricAssociationsController do
     it "should assign variables" do
       course_with_teacher_logged_in(:active_all => true)
       rubric_association_model(:user => @user, :context => @course)
-      post 'create', :course_id => @course.id, :rubric_association => {:rubric_id => @rubric.id, :title => "some association", :association_type => @rubric_association.association.class.name, :association_id => @rubric_association.association.id}
+      post 'create', :course_id => @course.id, :rubric_association => {:rubric_id => @rubric.id, :title => "some association", :association_type => @rubric_association.association_object.class.name, :association_id => @rubric_association.association_object.id}
       assigns[:association].should_not be_nil
       assigns[:association].title.should eql("some association")
-      response.should be_success
-    end
-    it "should invite users if specified" do
-      course_with_teacher_logged_in(:active_all => true)
-      rubric_association_model(:user => @user, :context => @course, :purpose => 'grading')
-      post 'create', :course_id => @course.id, :rubric_association => {:rubric_id => @rubric.id, :title => "some association", :invitations => "bob@example.com", :association_type => @rubric_association.association.class.name, :association_id => @rubric_association.association.id, :purpose => 'grading'}
-      assigns[:association].should_not be_nil
-      assigns[:association].title.should eql("some association")
-      assigns[:association].assessment_requests.should_not be_empty
       response.should be_success
     end
   end
-  
+
   describe "PUT 'update'" do
     it "should require authorization" do
       course_with_teacher(:active_all => true)
@@ -90,7 +81,7 @@ describe RubricAssociationsController do
       response.should be_success
     end
   end
-  
+
   describe "DELETE 'destroy'" do
     it "should require authorization" do
       course_with_teacher(:active_all => true)
@@ -133,6 +124,21 @@ describe RubricAssociationsController do
       assigns[:rubric].should_not be_frozen
       assigns[:association].should_not be_nil
       assigns[:association].should be_frozen
+    end
+
+    it "should remove aligments links" do
+      course_with_teacher_logged_in(:active_all => true)
+      outcome_with_rubric
+      rubric_association_model(:user => @user, :context => @course, :rubric => @rubric)
+
+      @rubric_association_object.reload.learning_outcome_alignments.count.should == 1
+      @rubric.reload.learning_outcome_alignments.count.should == 1
+
+      delete 'destroy', :course_id => @course.id, :id => @rubric_association.id
+
+      @rubric.reload.deleted?.should be_true
+      @rubric_association_object.reload.learning_outcome_alignments.count.should == 0
+      @rubric.reload.learning_outcome_alignments.count.should == 0
     end
   end
 end

@@ -1,4 +1,4 @@
-<% fields_for :settings, OpenObject.new(settings) do |f| %>
+<%= fields_for :settings, OpenObject.new(settings) do |f| %>
   <table style="width: 500px;" class="formtable">
     <tr>
       <td colspan="2">
@@ -17,6 +17,12 @@
       <td>
         <%= f.password_field :secret, :autocomplete => false %><br>
         <%= mt :secret_description, "This is the %{parameter_name} parameter that can be found in the %{filename} config file.", :parameter_name => markdown_safe('**beans.dynamicConferenceService.securitySalt**'), :filename => markdown_safe('**bigbluebutton.properties**') %>
+      </td>
+    </tr>
+    <tr>
+      <td></td>
+      <td>
+        <%= f.check_box :recording_enabled %> <%= f.label :recording_enabled, :en => "Allow conferences to be recorded." %>
       </td>
     </tr>
   </table>

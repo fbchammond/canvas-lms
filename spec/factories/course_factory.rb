@@ -43,10 +43,7 @@ def course_valid_attributes
     :start_at => Time.now,
     :conclude_at => Time.now + 100,
     :is_public => true,
-    :publish_grades_immediately => true,
     :allow_student_wiki_edits => true,
-    :sis_batch_id => 1,
-    :allow_student_assignment_edits => true
   }
 end
 

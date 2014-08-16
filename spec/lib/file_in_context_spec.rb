@@ -35,21 +35,12 @@ describe FileInContext do
       # to test S3), we fake out just the part we care about. Also, we can't use Mocha because we need the
       # argument of the method. This will be fixed when we've refactored Attachment to allow dynamically
       # switching between S3 and local.
+      unbound_method = Attachment.instance_method(:filename=)
       class Attachment; def filename=(new_name); write_attribute :filename, sanitize_filename(new_name); end; end
       filename = File.expand_path(File.join(File.dirname(__FILE__), %w(.. fixtures files escaping_test[0].txt)))
       attachment = FileInContext.attach(@course, filename, nil, @folder)
       attachment.filename.should == 'escaping_test%5B0%5D.txt'
-      class Attachment; undef_method :filename=; end
-    end
-
-    it "should close the temp file" do
-      # If more than one thread is processing these specs another IO object could
-      # be opened. We don't think that should happen so hopefully this won't
-      # give any false-fails
-      before_count = ObjectSpace.each_object(IO).count {|io| !io.closed?}
-      filename = File.expand_path(File.join(File.dirname(__FILE__), %w(.. fixtures files escaping_test[0].txt)))
-      attachment = FileInContext.attach(@course, filename, nil, @folder)
-      ObjectSpace.each_object(IO).count {|io| !io.closed?}.should == before_count
+      Attachment.send(:define_method, :filename=, unbound_method)
     end
   end
 end

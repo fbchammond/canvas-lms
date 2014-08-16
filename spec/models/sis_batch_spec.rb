@@ -16,6 +16,7 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'tmpdir'
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 
 describe SisBatch do
@@ -25,30 +26,26 @@ describe SisBatch do
 
   def create_csv_data(data)
     i = 0
-    tempfile = Tempfile.new("sis_rspec.zip")
-    path = tempfile.path
-    # we just want the path, and if we don't tell the tempfile to close,
-    # it'll try to delete the file later during finalization, which is
-    # not a convenient time for us.
-    tempfile.close!
-    Zip::ZipFile.open(path, true) do |z|
-      data.each do |dat|
-        z.get_output_stream("csv_#{i}.csv") { |f| f.puts(dat) }
-        i += 1
+    Dir.mktmpdir("sis_rspec") do |tmpdir|
+      path = "#{tmpdir}/sisfile.zip"
+      Zip::File.open(path, Zip::File::CREATE) do |z|
+        data.each do |dat|
+          z.get_output_stream("csv_#{i}.csv") { |f| f.puts(dat) }
+          i += 1
+        end
       end
-    end
-    tmp = File.open(path, 'rb')
 
-    # arrrgh attachment.rb
-    def tmp.original_filename; File.basename(path); end
-    old_job_count = Delayed::Job.count
-    batch = SisBatch.create_with_attachment(@account, 'instructure_csv', tmp)
-    # SisBatches shouldn't need any background processing
-    Delayed::Job.count.should == old_job_count
-    yield batch if block_given?
-    batch
-  ensure
-    FileUtils.rm(path) if path and File.file?(path)
+      old_job_count = Delayed::Job.count
+      batch = File.open(path, 'rb') do |tmp|
+        # arrrgh attachment.rb
+        def tmp.original_filename; File.basename(path); end
+        SisBatch.create_with_attachment(@account, 'instructure_csv', tmp, @user || user)
+      end
+      # SisBatches shouldn't need any background processing
+      Delayed::Job.count.should == old_job_count
+      yield batch if block_given?
+      batch
+    end
   end
 
   def process_csv_data(data, opts = {})
@@ -66,7 +63,7 @@ describe SisBatch do
   end
 
   it "should keep the batch in initializing state during create_with_attachment" do
-    batch = SisBatch.create_with_attachment(@account, 'instructure_csv', stub_file_data('test.csv', 'abc', 'text')) do |batch|
+    batch = SisBatch.create_with_attachment(@account, 'instructure_csv', stub_file_data('test.csv', 'abc', 'text'), user) do |batch|
       batch.attachment.should_not be_new_record
       batch.workflow_state.should == 'initializing'
       batch.options = { :override_sis_stickiness => true }
@@ -96,21 +93,43 @@ describe SisBatch do
   end
 
   it "should schedule in the future if configured" do
-    create_csv_data(['abc']) do |batch|
-      batch.process
-      Delayed::Job.find_by_tag('SisBatch.process_all_for_account').run_at.to_i.should <= Time.now.to_i
+    track_jobs do
+      create_csv_data(['abc']) do |batch|
+        batch.process
+      end
     end
 
-    Delayed::Job.delete_all
+    job = created_jobs.find { |j| j.tag == 'SisBatch.process_all_for_account' }
+    job.should be_present
+    job.run_at.to_i.should <= Time.now.to_i
+
+    job.destroy
 
     Setting.set('sis_batch_process_start_delay', '120')
-    create_csv_data(['abc']) do |batch|
-      start_time = Time.now.to_i
-      batch.process
-      job = Delayed::Job.find_by_tag('SisBatch.process_all_for_account')
-      job.run_at.to_i.should >= 100.seconds.from_now.to_i
-      job.run_at.to_i.should <= 150.minutes.from_now.to_i
+    track_jobs do
+      create_csv_data(['abc']) do |batch|
+        batch.process
+      end
     end
+
+    job = created_jobs.find { |j| j.tag == 'SisBatch.process_all_for_account' }
+    job.should be_present
+    job.run_at.to_i.should >= 100.seconds.from_now.to_i
+    job.run_at.to_i.should <= 150.minutes.from_now.to_i
+  end
+
+  it "should fail itself if the jobs dies" do
+    batch = nil
+    track_jobs do
+      batch = create_csv_data(['abc'])
+      batch.process
+      batch.update_attribute(:workflow_state, 'importing')
+      batch
+    end
+
+    job = created_jobs.find { |j| j.tag == 'SisBatch.process_all_for_account' }
+    job.reschedule
+    batch.reload.should be_failed
   end
 
   describe "batch mode" do
@@ -119,8 +138,8 @@ describe SisBatch do
       @term1 = @account.enrollment_terms.first
       @term1.update_attribute(:sis_source_id, 'term1')
       @term2 = @account.enrollment_terms.create!(:name => 'term2')
-      @previous_batch = SisBatch.create!
-      @old_batch = SisBatch.create!
+      @previous_batch = @account.sis_batches.create!
+      @old_batch = @account.sis_batches.create!
 
       @c1 = factory_with_protected_attributes(@subacct.courses, :name => "delete me", :enrollment_term => @term1, :sis_batch_id => @previous_batch.id)
       @c1.offer!
@@ -143,11 +162,11 @@ describe SisBatch do
       @s4 = factory_with_protected_attributes(@c2.course_sections, :name => "delete me", :sis_batch_id => @old_batch.id) # c2 won't be deleted, but this section should still be
 
       # enrollments are keyed off what term their course is in
-      @e1 = factory_with_protected_attributes(@c1.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id)
-      @e2 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user)
-      @e3 = factory_with_protected_attributes(@c3.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id)
-      @e4 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id) # c2 won't be deleted, but this enrollment should still be
-      @e5 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user_with_pseudonym, :sis_batch_id => @old_batch.id, :course_section => @s2) # c2 won't be deleted, and this enrollment sticks around because it's specified in the new csv
+      @e1 = factory_with_protected_attributes(@c1.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id, :type => 'StudentEnrollment')
+      @e2 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user, :type => 'StudentEnrollment')
+      @e3 = factory_with_protected_attributes(@c3.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id, :type => 'StudentEnrollment')
+      @e4 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id, :type => 'StudentEnrollment') # c2 won't be deleted, but this enrollment should still be
+      @e5 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user_with_pseudonym, :sis_batch_id => @old_batch.id, :course_section => @s2, :type => 'StudentEnrollment') # c2 won't be deleted, and this enrollment sticks around because it's specified in the new csv
       @e5.user.pseudonym.update_attribute(:sis_user_id, 'my_user')
       @e5.user.pseudonym.update_attribute(:account_id, @account.id)
 
@@ -188,13 +207,13 @@ s2,test_1,section2,active},
       @e5.reload.should be_active
     end
 
-    it "should remove only from the specific term if it is given" do
+    def test_remove_specific_term
       @subacct = @account.sub_accounts.create(:name => 'sub1')
       @term1 = @account.enrollment_terms.first
       @term1.update_attribute(:sis_source_id, 'term1')
       @term2 = @account.enrollment_terms.create!(:name => 'term2')
-      @previous_batch = SisBatch.create!
-      @old_batch = SisBatch.create!
+      @previous_batch = @account.sis_batches.create!
+      @old_batch = @account.sis_batches.create!
 
       @c1 = factory_with_protected_attributes(@subacct.courses, :name => "delete me", :enrollment_term => @term1, :sis_batch_id => @previous_batch.id)
       @c1.offer!
@@ -217,10 +236,10 @@ another_course,not-delete,not deleted not changed,,term1,active}
       @s4 = factory_with_protected_attributes(@c2.course_sections, :name => "delete me", :sis_batch_id => @old_batch.id) # c2 won't be deleted, but this section should still be
 
       # enrollments are keyed off what term their course is in
-      @e1 = factory_with_protected_attributes(@c1.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id)
-      @e2 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user)
-      @e3 = factory_with_protected_attributes(@c3.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id)
-      @e4 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id) # c2 won't be deleted, but this enrollment should still be
+      @e1 = factory_with_protected_attributes(@c1.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id, :type => 'StudentEnrollment')
+      @e2 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user, :type => 'StudentEnrollment')
+      @e3 = factory_with_protected_attributes(@c3.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id, :type => 'StudentEnrollment')
+      @e4 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user, :sis_batch_id => @old_batch.id, :type => 'StudentEnrollment') # c2 won't be deleted, but this enrollment should still be
       @e5 = factory_with_protected_attributes(@c2.enrollments, :workflow_state => 'active', :user => user_with_pseudonym, :sis_batch_id => @old_batch.id, :course_section => @s2, :type => 'StudentEnrollment') # c2 won't be deleted, and this enrollment sticks around because it's specified in the new csv
       @e5.user.pseudonym.update_attribute(:sis_user_id, 'my_user')
       @e5.user.pseudonym.update_attribute(:account_id, @account.id)
@@ -239,6 +258,8 @@ s2,test_1,section2,active},
         ],
         :batch_mode => true,
         :batch_mode_term => @term1)
+
+      @batch.data[:stack_trace].should be_nil
 
       @c1.reload.should be_deleted
       @c1.stuck_sis_fields.should_not be_include(:workflow_state)
@@ -262,12 +283,27 @@ s2,test_1,section2,active},
       @e3.reload.should be_active
       @e4.reload.should be_deleted
       @e5.reload.should be_active
+
+    end
+
+    describe "with cursor based find_each" do
+      it "should remove only from the specific term if it is given" do
+        Course.transaction {
+          test_remove_specific_term
+        }
+      end
+    end
+
+    describe "without cursor based find_each" do
+      it "should remove only from the specific term if it is given" do
+        test_remove_specific_term
+      end
     end
 
     it "shouldn't do batch mode removals if not in batch mode" do
       @term1 = @account.enrollment_terms.first
       @term2 = @account.enrollment_terms.create!(:name => 'term2')
-      @previous_batch = SisBatch.create!
+      @previous_batch = @account.sis_batches.create!
 
       @c1 = factory_with_protected_attributes(@account.courses, :name => "delete me", :enrollment_term => @term1, :sis_batch_id => @previous_batch.id)
       @c1.offer!
@@ -282,7 +318,7 @@ s2,test_1,section2,active},
     it "should only do batch mode removals for supplied data types" do
       @term = @account.enrollment_terms.first
       @term.update_attribute(:sis_source_id, 'term_1')
-      @previous_batch = SisBatch.create!
+      @previous_batch = @account.sis_batches.create!
 
       process_csv_data(
           [
@@ -325,6 +361,9 @@ s2,test_1,section2,active},
           :batch_mode => true, :batch_mode_term => @term)
       @user.reload.should be_registered
       @section.reload.should be_deleted
+      @section.enrollments.not_fake.each do |e|
+        e.should be_deleted
+      end
       @course.reload.should be_claimed
 
       # only supply courses
@@ -333,5 +372,56 @@ s2,test_1,section2,active},
           :batch_mode => true, :batch_mode_term => @term)
       @course.reload.should be_deleted
     end
+
+    it "should treat crosslisted sections as belonging to their original course" do
+      @term1 = @account.enrollment_terms.first
+      @term2 = @account.enrollment_terms.create!(:name => 'term2')
+      @term2.sis_source_id = 'term2'; @term2.save!
+      @previous_batch = @account.sis_batches.create!
+
+      @course1 = @account.courses.build
+      @course1.sis_source_id = 'c1'
+      @course1.save!
+      @course2 = @account.courses.build
+      @course2.sis_source_id = 'c2'
+      @course2.enrollment_term = @term2
+      @course2.save!
+      @section1 = @course1.course_sections.build
+      @section1.sis_source_id = 's1'
+      @section1.sis_batch_id = @previous_batch.id
+      @section1.save!
+      @section2 = @course2.course_sections.build
+      @section2.sis_source_id = 's2'
+      @section2.sis_batch_id = @previous_batch.id
+      @section2.save!
+      @section2.crosslist_to_course(@course1)
+
+      process_csv_data(
+          ['section_id,course_id,name,status}'],
+          :batch_mode => true, :batch_mode_term => @term1)
+      @section1.reload.should be_deleted
+      @section2.reload.should_not be_deleted
+    end
+  end
+
+  it "should limit the # of warnings/errors" do
+    Setting.set('sis_batch_max_messages', '3')
+    batch = @account.sis_batches.create! # doesn't error when nil
+    batch.processing_warnings = [ ['testfile.csv', 'test warning'] ] * 3
+    batch.processing_errors = [ ['testfile.csv', 'test error'] ] * 3
+    batch.save!
+    batch.reload
+    batch.processing_warnings.size.should == 3
+    batch.processing_warnings.last.should == ['testfile.csv', 'test warning']
+    batch.processing_errors.size.should == 3
+    batch.processing_errors.last.should == ['testfile.csv', 'test error']
+    batch.processing_warnings = [ ['testfile.csv', 'test warning'] ] * 5
+    batch.processing_errors = [ ['testfile.csv', 'test error'] ] * 5
+    batch.save!
+    batch.reload
+    batch.processing_warnings.size.should == 3
+    batch.processing_warnings.last.should == ['', 'There were 3 more warnings']
+    batch.processing_errors.size.should == 3
+    batch.processing_errors.last.should == ['', 'There were 3 more errors']
   end
 end

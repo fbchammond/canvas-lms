@@ -1,27 +1,20 @@
 require [
-  'compiled/views/course_settings/UserCollectionView'
+  'jquery'
+  'underscore'
+  'Backbone'
+  'compiled/views/course_settings/NavigationView'
   'compiled/collections/UserCollection'
-  'compiled/views/course_settings/tabs/tabUsers'
+  'compiled/views/feature_flags/FeatureFlagAdminView'
   'vendor/jquery.cookie'
   'course_settings'
-  'external_tools'
   'grading_standards'
-], (UserCollectionView, UserCollection) ->
+], ($, _, Backbone, NavigationView, UserCollection, FeatureFlagAdminView) ->
+  nav_view = new NavigationView
+    el: $('#tab-navigation')
 
-  loadUsersTab = ->
-    window.app = usersTab: {}
-    for eType in ['student', 'observer', 'teacher', 'designer', 'ta']
-      # produces app.usersTab.studentsView .observerView etc.
-      window.app.usersTab["#{eType}sView"] = new UserCollectionView
-        el: $("##{eType}_enrollments")
-        url: ENV.USERS_URL
-        requestParams:
-          enrollment_type: eType
+  featureFlagView = new FeatureFlagAdminView(el: '#tab-features')
+  featureFlagView.collection.fetch()
 
   $ ->
-    if $("#tab-users").is(":visible")
-      loadUsersTab()
+    nav_view.render()
 
-    $("#course_details_tabs").bind 'tabsshow', (e,ui) ->
-      if ui.tab.hash == '#tab-users' and not window.app?.usersTab
-        loadUsersTab()

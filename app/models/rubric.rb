@@ -22,124 +22,136 @@ class Rubric < ActiveRecord::Base
   belongs_to :user
   belongs_to :rubric # based on another rubric
   belongs_to :context, :polymorphic => true
+  validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course', 'Account']
   has_many :rubric_associations, :class_name => 'RubricAssociation', :dependent => :destroy
   has_many :rubric_assessments, :through => :rubric_associations, :dependent => :destroy
-  has_many :learning_outcome_tags, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND content_tags.workflow_state != ?', 'learning_outcome', 'deleted'], :include => :learning_outcome
-  before_save :default_values
-  after_save :update_outcome_tags
+  has_many :learning_outcome_alignments, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND content_tags.workflow_state != ?', 'learning_outcome', 'deleted'], :include => :learning_outcome
+
+  EXPORTABLE_ATTRIBUTES = [
+    :id, :user_id, :rubric_id, :context_id, :context_type, :data, :points_possible, :title, :description, :created_at, :updated_at, :reusable, :public, :read_only,
+    :association_count, :free_form_criterion_comments, :context_code, :hide_score_total, :workflow_state
+  ]
+
+  EXPORTABLE_ASSOCIATIONS = [:user, :rubric, :context, :rubric_associations, :rubric_assessments, :learning_outcome_alignments]
+
+  validates_presence_of :context_id, :context_type, :workflow_state
   validates_length_of :description, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
-  
+  validates_length_of :title, :maximum => maximum_string_length, :allow_nil => true, :allow_blank => true
+
+  before_save :default_values
+  after_save :update_alignments
+  after_save :touch_associations
+
   serialize :data
   simply_versioned
-  
-  named_scope :publicly_reusable, lambda {
-    {:conditions => {:reusable => true}, :order => :title}
-  }
-  named_scope :matching, lambda {|search|
-    {:order => 'rubrics.association_count DESC', :conditions => wildcard('rubrics.title', search)}
-  }
-  named_scope :before, lambda{|date|
-    {:conditions => ['rubrics.created_at < ?', date]}
-  }
-  named_scope :active, lambda{
-    {:conditions => ['workflow_state != ?', 'deleted'] }
-  }
-  
+
+  scope :publicly_reusable, -> { where(:reusable => true).order(best_unicode_collation_key('title')) }
+  scope :matching, lambda { |search| where(wildcard('rubrics.title', search)).order("rubrics.association_count DESC") }
+  scope :before, lambda { |date| where("rubrics.created_at<?", date) }
+  scope :active, -> { where("workflow_state<>'deleted'") }
+
   set_policy do
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_grades)}
+    given {|user, session| self.context.grants_right?(user, session, :manage_rubrics)}
     can :read and can :create and can :delete_associations
-    
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_assignments)}
+
+    given {|user, session| self.context.grants_right?(user, session, :manage_assignments)}
     can :read and can :create and can :delete_associations
-    
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage)}
+
+    given {|user, session| self.context.grants_right?(user, session, :manage)}
     can :read and can :create and can :delete_associations
-    
+
     # read_only means "associated with > 1 object for grading purposes"
-    given {|user, session| !self.read_only && self.rubric_associations.for_grading.length < 2 && self.cached_context_grants_right?(user, session, :manage_assignments)}
-    can :update and can :delete
-    
-    given {|user, session| !self.read_only && self.rubric_associations.for_grading.length < 2 && self.cached_context_grants_right?(user, session, :manage_grades)}
+    given {|user, session| !self.read_only && self.rubric_associations.for_grading.length < 2 && self.context.grants_right?(user, session, :manage_assignments)}
     can :update and can :delete
 
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_assignments)}
-    can :delete
-    
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_grades)}
+    given {|user, session| !self.read_only && self.rubric_associations.for_grading.length < 2 && self.context.grants_right?(user, session, :manage_rubrics)}
+    can :update and can :delete
+
+    given {|user, session| self.context.grants_right?(user, session, :manage_assignments)}
     can :delete
 
-    given {|user, session| self.cached_context_grants_right?(user, session, :read) }
+    given {|user, session| self.context.grants_right?(user, session, :manage_rubrics)}
+    can :delete
+
+    given {|user, session| self.context.grants_right?(user, session, :read) }
     can :read
   end
-  
+
   workflow do
     state :active
     state :deleted
   end
-  
+
   def default_values
     original_title = self.title
     cnt = 0
-
-    loop do
-      dup_title = if new_record?
-                    Rubric.first :conditions => ["title = ? AND context_id = ? AND context_type = ? AND workflow_state != 'deleted'", self.title, self.context_id, self.context_type]
-                  else
-                    Rubric.first :conditions => ["title = ? AND context_id = ? AND context_type = ? AND id != ? AND workflow_state != 'deleted'", self.title, self.context_id, self.context_type, self.id]
-                  end
-      break unless dup_title
-
+    siblings = Rubric.where(context_id: self.context_id, context_type: self.context_type).where("workflow_state<>'deleted'")
+    siblings = siblings.where("id<>?", self.id) unless new_record?
+    while siblings.where(title: self.title).exists?
       cnt += 1
       self.title = "#{original_title} (#{cnt})"
     end
     self.context_code = "#{self.context_type.underscore}_#{self.context_id}" rescue nil
   end
-  
+
   alias_method :destroy!, :destroy
   def destroy
-    RubricAssociation.update_all({:bookmarked => false, :updated_at => Time.now.utc}, {:rubric_id => self.id})
+    rubric_associations.update_all(:bookmarked => false, :updated_at => Time.now.utc)
     self.workflow_state = 'deleted'
     self.save
   end
-  
+
   def restore
     self.workflow_state = 'active'
     self.save
   end
-  
+
   # If any rubric_associations for a given context are marked as
   # bookmarked, then the rubric will show up in the context's list
   # of rubrics.  The two main values for the 'purpose' field on
   # a rubric_association are 'grading' and 'bookmark'.  Confusing,
   # I know.
   def destroy_for(context)
-    RubricAssociation.update_all({:bookmarked => false, :updated_at => Time.now.utc}, {:rubric_id => self.id, :context_id => context.id, :context_type => context.class.to_s})
-    if RubricAssociation.scoped(:conditions => {:rubric_id => self.id, :bookmarked => true}).count == 0
+    rubric_associations.where(:context_id => context, :context_type => context.class.to_s).
+        update_all(:bookmarked => false, :updated_at => Time.now.utc)
+    unless rubric_associations.bookmarked.exists?
       self.destroy
     end
   end
-  
-  def update_outcome_tags
-    return unless @outcomes_changed
-    ids = (self.data || []).map{|c| c[:learning_outcome_id] }.compact.map(&:to_i).uniq
-    tags = self.learning_outcome_tags
-    tag_outcome_ids = tags.map(&:learning_outcome_id).compact.uniq
-    outcomes = LearningOutcome.find(ids)
-    missing_ids = ids.select{|id| !tag_outcome_ids.include?(id) }
-    tags_to_delete = tags.select{|t| !ids.include?(t.learning_outcome_id) }
-    missing_ids.each do |id|
-      lot = self.learning_outcome_tags.build(:context => self.context, :tag_type => 'learning_outcome')
-      lot.learning_outcome_id = id
-      lot.save!
+
+  def update_alignments
+    if alignments_need_update?
+      outcome_ids = []
+      unless deleted?
+        outcome_ids = data_outcome_ids
+      end
+      LearningOutcome.update_alignments(self, context, outcome_ids)
     end
-    tags_to_delete.each{|t| t.destroy }
     true
   end
-  
+
+  def touch_associations
+    if alignments_need_update?
+      # associations might need to update their alignments also
+      rubric_associations.bookmarked.each { |ra|
+        ra.skip_updating_points_possible = @skip_updating_points_possible
+        ra.save
+      }
+    end
+  end
+
+  def alignments_need_update?
+    data_changed? || workflow_state_changed?
+  end
+
+  def data_outcome_ids
+    (data || []).map{|c| c[:learning_outcome_id] }.compact.map(&:to_i).uniq
+  end
+
   def criteria_object
     OpenObject.process(self.data)
   end
-  
+
   def display_name
     res = ""
     res += self.user.name + ", " rescue ""
@@ -151,7 +163,7 @@ class Rubric < ActiveRecord::Base
   def criteria
     self.data
   end
-  
+
   def associate_with(association, context, opts={})
     if opts[:purpose] == "grading"
       res = self.rubric_associations.find_by_association_id_and_association_type_and_purpose(association.id, association.class.to_s, 'grading')
@@ -161,31 +173,23 @@ class Rubric < ActiveRecord::Base
       return res if res
     end
     purpose = opts[:purpose] || "unknown"
-    self.rubric_associations.create(:association => association, :context => context, :use_for_grading => !!opts[:use_for_grading], :purpose => purpose)
+    ra = rubric_associations.build :association_object => association,
+                                   :context => context,
+                                   :use_for_grading => !!opts[:use_for_grading],
+                                   :purpose => purpose
+    ra.skip_updating_points_possible = @skip_updating_points_possible
+    ra.tap &:save
   end
-  
-  def clone_for_association(current_user, association, rubric_params, association_params, invitees="")
-    rubric = Rubric.new
-    self.attributes.delete_if{|k, v| false}.each do |key, value|
-      rubric.send("#{key}=", value) if rubric.respond_to?(key)
-    end
-    rubric.migration_id = "cloned_from_#{self.id}"
-    rubric.rubric_id = self.id
-    rubric.free_form_criterion_comments = rubric_params[:free_form_criterion_comments] == '1' if rubric_params[:free_form_criterion_comments]
-    rubric.user = current_user
-    rubric_params[:hide_score_total] ||= association_params[:hide_score_total]
-    rubric.update_criteria(rubric_params)
-    RubricAssociation.generate_with_invitees(current_user, rubric, context, association_params, invitees) if association_params[:association] || association_params[:url]
-  end
-  
-  def update_with_association(current_user, rubric_params, context, association_params, invitees="")
+
+  def update_with_association(current_user, rubric_params, context, association_params)
     self.free_form_criterion_comments = rubric_params[:free_form_criterion_comments] == '1' if rubric_params[:free_form_criterion_comments]
     self.user ||= current_user
     rubric_params[:hide_score_total] ||= association_params[:hide_score_total]
+    @skip_updating_points_possible = association_params[:skip_updating_points_possible]
     self.update_criteria(rubric_params)
-    RubricAssociation.generate_with_invitees(current_user, self, context, association_params, invitees) if association_params[:association] || association_params[:url]
+    RubricAssociation.generate(current_user, self, context, association_params) if association_params[:association_object] || association_params[:url]
   end
-  
+
   def unique_item_id(id=nil)
     @used_ids ||= {}
     while !id || @used_ids[id]
@@ -194,7 +198,7 @@ class Rubric < ActiveRecord::Base
     @used_ids[id] = true
     id
   end
-  
+
   def update_criteria(params)
     self.without_versioning(&:save) if self.new_record?
     data = generate_criteria(params)
@@ -206,7 +210,7 @@ class Rubric < ActiveRecord::Base
     self.save
     self
   end
-  
+
   def will_change_with_update?(params)
     return true if params[:free_form_criterion_comments] && !!self.free_form_criterion_comments != (params[:free_form_criterion_comments] == '1')
     data = generate_criteria(params)
@@ -214,7 +218,8 @@ class Rubric < ActiveRecord::Base
     return true if data.criteria != self.criteria
     false
   end
-  
+
+  CriteriaData = Struct.new(:criteria, :points_possible, :title)
   def generate_criteria(params)
     @used_ids = {}
     title = params[:title] || t('context_name_rubric', "%{course_name} Rubric", :course_name => context.name)
@@ -233,7 +238,6 @@ class Rubric < ActiveRecord::Base
       if criterion_data[:learning_outcome_id].present?
         outcome = LearningOutcome.find_by_id(criterion_data[:learning_outcome_id])
         if outcome
-          @outcomes_changed = true
           criterion[:learning_outcome_id] = outcome.id
           criterion[:mastery_points] = ((criterion_data[:mastery_points] || outcome.data[:rubric_criterion][:mastery_points]).to_f rescue nil)
           criterion[:ignore_for_scoring] = criterion_data[:ignore_for_scoring] == '1'
@@ -249,77 +253,16 @@ class Rubric < ActiveRecord::Base
         rating[:id] = unique_item_id(rating_data[:id])
         ratings[jdx.to_i] = rating
       end
-      criterion[:ratings] = ratings.select{|r| r}.sort_by{|r| [-1 * (r[:points] || 0), (r[:description] || "")]}
+      criterion[:ratings] = ratings.select{|r| r}.sort_by{|r| [-1 * (r[:points] || 0), r[:description] || CanvasSort::First]}
       criterion[:points] = criterion[:ratings].map{|r| r[:points]}.max || 0
       points_possible += criterion[:points] unless criterion[:ignore_for_scoring]
       criteria[idx.to_i] = criterion
     end
-    criteria = criteria.select{|c| c}
-    OpenObject.new(:criteria => criteria, :points_possible => points_possible, :title => title)
+    criteria = criteria.compact
+    CriteriaData.new(criteria, points_possible, title)
   end
-  
+
   def update_assessments_for_new_criteria(new_criteria)
     criteria = self.data
   end
-
-  def self.process_migration(data, migration)
-    rubrics = data['rubrics'] ? data['rubrics']: []
-    rubrics.each do |rubric|
-      if migration.import_object?("rubrics", rubric['migration_id'])
-        begin
-          import_from_migration(rubric, migration.context)
-        rescue
-          migration.add_warning(t('errors.could_not_import', "Couldn't import rubric %{rubric}", :rubric => rubric[:title]), $!)
-        end
-      end
-    end
-  end
-  
-  def self.import_from_migration(hash, context, item=nil)
-    hash = hash.with_indifferent_access
-    return nil if hash[:migration_id] && hash[:rubrics_to_import] && !hash[:rubrics_to_import][hash[:migration_id]]
-    item ||= find_by_context_id_and_context_type_and_id(context.id, context.class.to_s, hash[:id])
-    item ||= find_by_context_id_and_context_type_and_migration_id(context.id, context.class.to_s, hash[:migration_id]) if hash[:migration_id]
-    item ||= self.new(:context => context)
-    item.migration_id = hash[:migration_id]
-    item.workflow_state = 'active' if item.deleted?
-    item.title = hash[:title]
-    item.description = hash[:description]
-    item.points_possible = hash[:points_possible].to_f
-    item.read_only = hash[:read_only] unless hash[:read_only].nil?
-    item.reusable = hash[:reusable] unless hash[:reusable].nil?
-    item.public = hash[:public] unless hash[:public].nil?
-    item.hide_score_total = hash[:hide_score_total] unless hash[:hide_score_total].nil?
-    item.free_form_criterion_comments = hash[:free_form_criterion_comments] unless hash[:free_form_criterion_comments].nil?
-    
-    item.data = hash[:data]
-    item.data.each do |crit|
-      if crit[:learning_outcome_migration_id]
-        if lo = context.learning_outcomes.find_by_migration_id(crit[:learning_outcome_migration_id])
-          crit[:learning_outcome_id] = lo.id
-        end
-        crit.delete :learning_outcome_migration_id
-      end
-    end
-    
-    context.imported_migration_items << item if context.imported_migration_items && item.new_record?
-    item.save!
-    
-    unless context.rubric_associations.find_by_rubric_id(item.id)
-      item.associate_with(context, context)
-    end
-    
-    item
-  end
-  
-  def self.generate(opts={})
-    context = opts[:context]
-    raise "Context required for rubrics" unless context
-    rubric = context.rubrics.build(:user => opts[:user])
-    user = opts[:user]
-    params = opts[:data]
-    rubric.update_criteria(params)
-    rubric
-  end
-  
 end

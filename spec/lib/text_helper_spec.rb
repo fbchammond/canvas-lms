@@ -75,9 +75,19 @@ describe TextHelper do
       th.datetime_string(today).split.size.should == (datestring.split.size - 1)
     end
 
+    it "accepts a timezone override" do
+      datetime = Time.zone.parse("#{Time.zone.now.year}-01-01 12:00:00")
+      mountain = th.datetime_string(datetime, :event, nil, false, ActiveSupport::TimeZone["America/Denver"])
+      central = th.datetime_string(datetime, :event, nil, false, ActiveSupport::TimeZone["America/Chicago"])
+      mountain.should == "Jan 1 at  5am"
+      central.should == "Jan 1 at  6am"
+    end
+
   end
 
   context "time_string" do
+    before { Timecop.freeze(Time.utc(2010, 8, 18, 12, 21)) }
+    after { Timecop.return }
 
     it "should be formatted properly" do
       time = Time.zone.now
@@ -89,6 +99,14 @@ describe TextHelper do
       time = Time.zone.now
       time -= time.min.minutes
       th.time_string(time).should == I18n.l(time, :format => :tiny_on_the_hour)
+    end
+
+    it "accepts a timezone override" do
+      time = Time.zone.now
+      mountain = th.time_string(time, nil, ActiveSupport::TimeZone["America/Denver"])
+      central = th.time_string(time, nil, ActiveSupport::TimeZone["America/Chicago"])
+      mountain.should == " 6:21am"
+      central.should == " 7:21am"
     end
 
   end
@@ -140,71 +158,6 @@ describe TextHelper do
     end
   end
 
-  context "format_message" do
-    it "should detect and linkify URLs" do
-      str = th.format_message("click here: (http://www.instructure.com) to check things out\nnewline").first
-      html = Nokogiri::HTML::DocumentFragment.parse(str)
-      link = html.css('a').first
-      link['href'].should == "http://www.instructure.com"
-
-      str = th.format_message("click here: http://www.instructure.com\nnewline").first
-      html = Nokogiri::HTML::DocumentFragment.parse(str)
-      link = html.css('a').first
-      link['href'].should == "http://www.instructure.com"
-
-      str = th.format_message("click here: www.instructure.com/a/b?a=1&b=2\nnewline").first
-      html = Nokogiri::HTML::DocumentFragment.parse(str)
-      link = html.css('a').first
-      link['href'].should == "http://www.instructure.com/a/b?a=1&b=2"
-
-      str = th.format_message("click here: http://www.instructure.com/\nnewline").first
-      html = Nokogiri::HTML::DocumentFragment.parse(str)
-      link = html.css('a').first
-      link['href'].should == "http://www.instructure.com/"
-
-      str = th.format_message("click here: http://www.instructure.com/courses/1/wiki/informação").first
-      html = Nokogiri::HTML::DocumentFragment.parse(str)
-      link = html.css('a').first
-      link['href'].should == "http://www.instructure.com/courses/1/wiki/informa%C3%A7%C3%A3o"
-
-      str = th.format_message("click here: http://www.instructure.com/'onclick=alert(document.cookie)//\nnewline").first
-      html = Nokogiri::HTML::DocumentFragment.parse(str)
-      link = html.css('a').first
-      link['href'].should == "http://www.instructure.com/%27onclick=alert(document.cookie)//"
-    end
-
-    it "should handle having the placeholder in the text body" do
-      str = th.format_message("this text has the placeholder #{TextHelper::AUTO_LINKIFY_PLACEHOLDER} embedded right in it.\nhttp://www.instructure.com/\n").first
-      str.should == "this text has the placeholder #{TextHelper::AUTO_LINKIFY_PLACEHOLDER} embedded right in it.<br/>\r\n<a href='http://www.instructure.com/'>http://www.instructure.com/</a><br/>\r"
-    end
-  end
-
-  context "truncate_text" do
-    it "should not split if max_length is exact text length" do
-      str = "I am an exact length"
-      th.truncate_text(str, :max_length => str.length).should == str
-    end
-
-    it "should split on multi-byte character boundaries" do
-      str = "This\ntext\nhere\n获\nis\nutf-8"
-      th.truncate_text(str, :max_length => 9).should ==  "This\nt..."
-      th.truncate_text(str, :max_length => 18).should == "This\ntext\nhere\n..."
-      th.truncate_text(str, :max_length => 19).should == "This\ntext\nhere\n..."
-      th.truncate_text(str, :max_length => 20).should == "This\ntext\nhere\n..."
-      th.truncate_text(str, :max_length => 21).should == "This\ntext\nhere\n获..."
-      th.truncate_text(str, :max_length => 22).should == "This\ntext\nhere\n获\n..."
-      th.truncate_text(str, :max_length => 23).should == "This\ntext\nhere\n获\ni..."
-      th.truncate_text(str, :max_length => 80).should == str
-    end
-
-    it "should split on words if specified" do
-      str = "I am a sentence with areallylongwordattheendthatcantbesplit and then a few more words"
-      th.truncate_text(str, :max_words => 4, :max_length => 30).should == "I am a sentence"
-      th.truncate_text(str, :max_words => 6, :max_length => 30).should == "I am a sentence with areall..."
-      th.truncate_text(str, :max_words => 5, :max_length => 20).should == "I am a sentence with"
-    end
-  end
-
   context "truncate_html" do
     it "should truncate in the middle of an element" do
       str = "<div>a b c d e</div>"
@@ -227,21 +180,6 @@ describe TextHelper do
     TextHelper.make_subject_reply_to('Re: ohai').should == 'Re: ohai'
   end
 
-  context ".html_to_text" do
-    it "should format links in markdown-like style" do
-      th.html_to_text("<a href='www.example.com'>Link</a>").should == "[Link](www.example.com)"
-      th.html_to_text("<a href='www.example.com'>www.example.com</a>").should == "www.example.com"
-    end
-
-    it "should turn images into urls" do
-      th.html_to_text("<img src='http://www.example.com/a'>").should == "http://www.example.com/a"
-    end
-
-    it "should insert newlines for ps and brs" do
-      th.html_to_text("Ohai<br>Text <p>paragraph of text.</p>End").should == "Ohai\n\nText paragraph of text.\n\nEnd"
-    end
-  end
-
   context "markdown" do
     context "safety" do
       it "should escape Strings correctly" do
@@ -254,7 +192,7 @@ describe TextHelper do
     context "i18n" do
       it "should automatically escape Strings" do
         th.mt(:foo, "We **don't** trust the following input: %{input}", :input => "`a` **b** _c_ ![d](e)\n# f\n + g\n - h").
-          should == "We <strong>don't</strong> trust the following input: `a` **b** _c_ ![d](e) # f + g - h"
+          should == "We <strong>don&#x27;t</strong> trust the following input: `a` **b** _c_ ![d](e) # f + g - h"
       end
 
       it "should not escape MarkdownSafeBuffers" do

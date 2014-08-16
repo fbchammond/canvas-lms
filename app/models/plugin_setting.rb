@@ -35,6 +35,15 @@ class PluginSetting < ActiveRecord::Base
   attr_writer :plugin
 
   before_save :encrypt_settings
+  after_save :clear_cache
+  after_destroy :clear_cache
+  if CANVAS_RAILS2
+    def after_initialize
+      initialize_plugin_setting
+    end
+  else
+    after_initialize :initialize_plugin_setting
+  end
   
   def validate_uniqueness_of_name?
     true
@@ -54,7 +63,7 @@ class PluginSetting < ActiveRecord::Base
   # dummy value for encrypted fields so that you can still have something in the form (to indicate
   # it's set) and be able to tell when it gets blanked out.
   DUMMY_STRING = "~!?3NCRYPT3D?!~"
-  def after_initialize
+  def initialize_plugin_setting
     return unless settings && self.plugin
     @valid_settings = true
     if self.plugin.encrypted_settings
@@ -95,9 +104,17 @@ class PluginSetting < ActiveRecord::Base
   def enabled?
     read_attribute(:disabled) != true
   end
-  
+
+  def self.cached_plugin_setting(name)
+    plugin_setting = Rails.cache.fetch(settings_cache_key(name)) do
+      PluginSetting.find_by_name(name.to_s) || :nil
+    end
+    plugin_setting = nil if plugin_setting == :nil
+    plugin_setting
+  end
+
   def self.settings_for_plugin(name, plugin=nil)
-    if (plugin_setting = PluginSetting.find_by_name(name.to_s)) && plugin_setting.valid_settings? && plugin_setting.enabled?
+    if (plugin_setting = cached_plugin_setting(name)) && plugin_setting.valid_settings? && plugin_setting.enabled?
       plugin_setting.plugin = plugin
       settings = plugin_setting.settings
     else
@@ -105,8 +122,18 @@ class PluginSetting < ActiveRecord::Base
       raise Canvas::NoPluginError unless plugin
       settings = plugin.default_settings
     end
-    
+
     settings
+  end
+
+  def self.settings_cache_key(name)
+    ["settings_for_plugin2", name].cache_key
+  end
+
+  def clear_cache
+    connection.after_transaction_commit do
+      Rails.cache.delete(PluginSetting.settings_cache_key(self.name))
+    end
   end
 
   def self.encrypt(text)

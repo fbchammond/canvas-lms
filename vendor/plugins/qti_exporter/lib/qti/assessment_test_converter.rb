@@ -87,11 +87,9 @@ class AssessmentTestConverter
     @quiz[:quiz_name] = @quiz[:title]
     @quiz[:migration_id] = get_node_att(doc, 'assessmentTest', 'identifier')
     if limit = doc.at_css('timeLimits')
-      limit = limit['maxTime'].to_i
-      #instructure uses minutes, QTI uses seconds
-      @quiz[:time_limit] = limit / 60
+      @quiz[:time_limit] = AssessmentTestConverter.parse_time_limit(limit['maxTime'])
     end
-    if part = doc.at_css('testPart[identifier=BaseTestPart]')
+    if part = doc.at_css('testPart[identifier=BaseTestPart]') || doc.at_css('testPart')
       if control = part.at_css('itemSessionControl')
         if max = control['maxAttempts']
           max = -1 if max =~ /unlimited/i
@@ -110,6 +108,23 @@ class AssessmentTestConverter
       @quiz[:qti_error] = "Instructure doesn't support QTI importing from this source." 
       @log.error "Attempted to convert QTI from non-supported source. (it wasn't run through the python conversion tool.)"
     end
+  end
+
+  def self.parse_time_limit(time_limit)
+    limit = 0
+    time_indicator = time_limit[0..0].downcase if time_limit.length > 0
+    if time_indicator == 'd'
+      limit = 24 * 60 * time_limit[1..-1].to_i
+    elsif time_indicator == 'h'
+      limit = 60 * time_limit[1..-1].to_i
+    elsif time_indicator == 'm'
+      limit = time_limit[1..-1].to_i
+    else
+      #instructure uses minutes, QTI uses seconds
+      limit = time_limit.to_i / 60
+    end
+
+    limit
   end
 
   def process_section(section)
@@ -138,14 +153,14 @@ class AssessmentTestConverter
         if val = get_bool_val(section, 'sourcebank_is_external')
           group[:question_bank_is_external] = val
         end
-        group[:migration_id] = section['identifier'] && section['identifier'] != "" ? section['identifier'] : rand(100_000)
+        group[:migration_id] = section['identifier'] && section['identifier'] != "" ? section['identifier'] : unique_local_id
         questions_list = group[:questions]
       end
     end
     if section['visible'] and section['visible'] =~ /true/i
       if title = section['title']
         #Create an empty question with a title in it
-        @quiz[:questions] << {:question_type => 'text_only_question', :question_text => title, :migration_id => rand(100_000)}
+        @quiz[:questions] << {:question_type => 'text_only_question', :question_text => title, :migration_id => unique_local_id}
       end
     end
     
@@ -183,8 +198,9 @@ class AssessmentTestConverter
     @quiz[:question_count] += 1
     # The colons are replaced with dashes in the conversion from QTI 1.2
     question[:migration_id] = item_ref['identifier'].gsub(/:/, '-')
-    if @opts[:alternate_ids] && @opts[:alternate_ids][question[:migration_id]]
-      question[:migration_id] = @opts[:alternate_ids][question[:migration_id]]
+    # D2L references questions by label instead of ident
+    if @opts[:flavor] == Qti::Flavors::D2L && item_ref['label'].present?
+      question[:migration_id] = item_ref['label']
     end
     if weight = get_node_att(item_ref, 'weight','value')
       question[:points_possible] = convert_weight_to_points(weight)
@@ -206,5 +222,14 @@ class AssessmentTestConverter
     weight
   end
 
+  def unique_local_id
+    @@ids ||= {}
+    id = rand(100_000)
+    while @@ids[id]
+      id = rand(100_000)
+    end
+    @@ids[id] = true
+    id
+  end
 end
 end

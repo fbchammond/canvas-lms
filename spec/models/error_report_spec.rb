@@ -63,4 +63,37 @@ describe ErrorReport do
     ErrorReport.create! { |r| r.category = 'fred' }
     ErrorReport.categories.should == ['bob', 'fred', 'george']
   end
+
+  it "should filter the url when it is assigned" do
+    report = ErrorReport.new
+    report.url = "https://www.instructure.example.com?access_token=abcdef"
+    report.url.should == "https://www.instructure.example.com?access_token=[FILTERED]"
+  end
+
+  it "should use class name for category" do
+    report = ErrorReport.log_exception(nil, e = Exception.new("error"))
+    report.category.should == e.class.name
+  end
+
+  it "should filter params" do
+    mock_attrs = {
+      :env => {
+          "QUERY_STRING" => "access_token=abcdef&pseudonym[password]=zzz",
+          "REQUEST_URI" => "https://www.instructure.example.com?access_token=abcdef&pseudonym[password]=zzz",
+      },
+      :remote_ip => "",
+      :path_parameters => { :api_key => "1" },
+      :query_parameters => { "access_token" => "abcdef", "pseudonym[password]" => "zzz" },
+      :request_parameters => { "client_secret" => "xoxo" }
+    }
+    mock_attrs[:url] = mock_attrs[:env]["REQUEST_URI"] unless CANVAS_RAILS2
+    req = mock(mock_attrs)
+    report = ErrorReport.new
+    report.assign_data(ErrorReport.useful_http_env_stuff_from_request(req))
+    report.data["QUERY_STRING"].should == "?access_token=[FILTERED]&pseudonym[password]=[FILTERED]"
+    report.data["REQUEST_URI"].should == "https://www.instructure.example.com?access_token=[FILTERED]&pseudonym[password]=[FILTERED]"
+    report.data["path_parameters"].should == { :api_key => "[FILTERED]" }.inspect
+    report.data["query_parameters"].should == { "access_token" => "[FILTERED]", "pseudonym[password]" => "[FILTERED]" }.inspect
+    report.data["request_parameters"].should == { "client_secret" => "[FILTERED]" }.inspect
+  end
 end

@@ -21,8 +21,8 @@ require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 describe ContentExport do
 
   context "export_object?" do
-    before do
-      @ce = ContentExport.new
+    before :once do
+      @ce = ContentExport.new(course: Account.default.courses.create!)
     end
 
     it "should return true for everything if there are no copy options" do
@@ -61,8 +61,8 @@ describe ContentExport do
   end
 
   context "add_item_to_export" do
-    before do
-      @ce = ContentExport.new
+    before :once do
+      @ce = ContentExport.new(course: Account.default.courses.create!)
     end
 
     it "should not add nil" do
@@ -96,7 +96,7 @@ describe ContentExport do
   end
 
   context "notifications" do
-    before(:each) do
+    before :once do
       course_with_teacher(:active_all => true)
       @ce = ContentExport.create! { |ce| ce.user = @user; ce.course = @course }
 
@@ -105,7 +105,7 @@ describe ContentExport do
     end
 
     it "should send notifications immediately" do
-      communication_channel_model(:user_id => @user).confirm!
+      communication_channel_model.confirm!
 
       ['created', 'exporting', 'exported_for_course_copy', 'deleted'].each do |workflow|
         @ce.workflow_state = workflow 
@@ -124,7 +124,7 @@ describe ContentExport do
     end
 
     it "should not send emails as part of a content migration (course copy)" do
-      @cm = ContentMigration.new(:user => @user, :copy_options => {:everything => "1"})
+      @cm = ContentMigration.new(:user => @user, :copy_options => {:everything => "1"}, :context => @course)
       @ce.content_migration = @cm
       @ce.save!
 

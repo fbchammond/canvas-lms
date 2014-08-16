@@ -7,12 +7,13 @@ define [
   'compiled/calendar/EditAppointmentGroupDialog'
   'compiled/calendar/MessageParticipantsDialog'
   'jst/calendar/deleteItem'
+  'compiled/util/semanticDateRange'
   'jquery.instructure_date_and_time'
   'jqueryui/dialog'
   'jquery.instructure_misc_plugins'
   'vendor/jquery.ba-tinypubsub'
   'vendor/jquery.spin'
-], ($, _, I18n, appointmentGroupListTemplate, schedulerRightSideAdminSectionTemplate, EditAppointmentGroupDialog, MessageParticipantsDialog, deleteItemTemplate) ->
+], ($, _, I18n, appointmentGroupListTemplate, schedulerRightSideAdminSectionTemplate, EditAppointmentGroupDialog, MessageParticipantsDialog, deleteItemTemplate, semanticDateRange) ->
 
   class Scheduler
     constructor: (selector, @calendar) ->
@@ -20,8 +21,6 @@ define [
       @contexts = @calendar.contexts
 
       @listDiv = @div.find(".appointment-list")
-
-      @div.delegate('.single_item_done_button', 'click', @doneClick)
 
       @div.delegate('.view_calendar_link', 'click', @viewCalendarLinkClick)
       @listDiv.delegate('.edit_link', 'click', @editLinkClick)
@@ -79,22 +78,21 @@ define [
           $('#right-side-wrapper').hide()
       else
         $('#right-side-wrapper').show()
-        $('#right-side .rs-section').not("#undated-events, #calendar-feed").show()
+        $('#right-side .rs-section').not("#undated-events-section, #calendar-feed").show()
         # we have to .detach() because of the css that puts lines under each .rs-section except the last,
         # if we just .hide() it would still be there so the :last-child selector would apply to it,
         # not the last _visible_ element
         @rightSideAdminSection?.detach()
 
     show: =>
-      $("#undated-events, #calendar-feed").hide()
+      $("#undated-events-section, #calendar-feed").hide()
       @active = true
       @div.show()
       @loadData()
       @toggleListMode(true)
-      $.publish "Calendar/saveVisibleContextListAndClear"
 
     hide: =>
-      $("#undated-events, #calendar-feed").show()
+      $("#undated-events-section, #calendar-feed").show()
       @active = false
       @div.hide()
       @toggleListMode(false)
@@ -126,21 +124,8 @@ define [
       if @groups
         groups = []
         for id, group of @groups
-          # set an array of times that the student is signed up for
-          group.signed_up_times = null
-          if group.appointmentEvents
-            for appointmentEvent in group.appointmentEvents when appointmentEvent.object.reserved
-              for childEvent in appointmentEvent.childEvents when childEvent.object.own_reservation
-                group.signed_up_times ?= []
-                group.signed_up_times.push
-                  id: childEvent.id
-                  formatted_time: childEvent.displayTimeString()
-
-          # count how many people have signed up
-          group.signed_up = 0
-          if group.appointmentEvents
-            for appointmentEvent in group.appointmentEvents
-              group.signed_up += appointmentEvent.childEvents.length if appointmentEvent.childEvents
+          for timeId, time of group.reserved_times
+            time.formatted_time = semanticDateRange(time.start_at, time.end_at)
 
           # look up the context names for the group
           group.contexts = _.filter(@contexts, (c) -> c.asset_string in group.context_codes)
@@ -200,11 +185,9 @@ define [
       @loadingDeferred.done =>
         @div.addClass('showing-single')
 
-        @calendar.calendar.show()
-        @calendar.calendar.fullCalendar('changeView', 'agendaWeek')
-
+        @calendar.showSchedulerSingle();
         if @viewingGroup.start_at
-          @calendar.gotoDate($.parseFromISO(@viewingGroup.start_at).time)
+          @calendar.gotoDate($.fudgeDateForProfileTimezone(@viewingGroup.start_at))
         else
           @calendar.gotoDate(new Date())
 
@@ -213,7 +196,7 @@ define [
         @redraw()
 
     doneClick: (jsEvent) =>
-      jsEvent.preventDefault()
+      jsEvent?.preventDefault()
       @toggleListMode(true)
 
     showList: =>
@@ -228,8 +211,12 @@ define [
       group = @groups?[$(jsEvent.target).closest(".appointment-group-item").data('appointment-group-id')]
       return unless group
 
-      @createDialog = new EditAppointmentGroupDialog(group, @appointmentGroupContexts, @dialogCloseCB)
-      @createDialog.show()
+      @calendar.dataSource.getEventsForAppointmentGroup group, (events) =>
+        @loadData()
+        @loadingDeferred.done =>
+          group = @groups[group.id]
+          @createDialog = new EditAppointmentGroupDialog(group, @appointmentGroupContexts, @dialogCloseCB)
+          @createDialog.show()
 
     deleteLinkClick: (jsEvent) =>
       jsEvent.preventDefault()

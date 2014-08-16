@@ -19,9 +19,9 @@
 class ContentExportsController < ApplicationController
   before_filter :require_context, :except => :xml_schema
   before_filter { |c| c.active_tab = "settings" }
-  
+
   def index
-    return render_unauthorized_action unless @context.grants_rights?(@current_user, nil, :read, :read_as_admin).values.all?
+    return render_unauthorized_action unless @context.grants_all_rights?(@current_user, :read, :read_as_admin)
 
     @exports = @context.content_exports.active.not_for_copy
     @current_export_id = nil
@@ -29,19 +29,19 @@ class ContentExportsController < ApplicationController
       @current_export_id = export.id
     end
   end
-  
+
   def show
-    return render_unauthorized_action unless @context.grants_rights?(@current_user, nil, :read, :read_as_admin).values.all?
+    return render_unauthorized_action unless @context.grants_all_rights?(@current_user, :read, :read_as_admin)
 
     if params[:id].present? && export = @context.content_exports.find_by_id(params[:id])
       render_export(export)
     else
-      render :json => {:errors => {:base => t('errors.not_found', "Export does not exist")}}.to_json, :status => :bad_request
+      render :json => {:errors => {:base => t('errors.not_found', "Export does not exist")}}, :status => :bad_request
     end
   end
-  
+
   def create
-    return render_unauthorized_action unless @context.grants_rights?(@current_user, nil, :read, :read_as_admin).values.all?
+    return render_unauthorized_action unless @context.grants_all_rights?(@current_user, :read, :read_as_admin)
 
     if @context.content_exports.running.count == 0
       export = ContentExport.new
@@ -60,7 +60,7 @@ class ContentExportsController < ApplicationController
         export.export_course
         render_export(export)
       else
-        render :json => {:error_message => t('errors.couldnt_create', "Couldn't create course export.")}.to_json
+        render :json => {:error_message => t('errors.couldnt_create', "Couldn't create course export.")}
       end
     else
       # an export is already running, just return it
@@ -68,27 +68,22 @@ class ContentExportsController < ApplicationController
       render_export(export)
     end
   end
-  
+
   def destroy
-    return render_unauthorized_action unless @context.grants_rights?(@current_user, nil, :read, :read_as_admin).values.all?
+    return render_unauthorized_action unless @context.grants_all_rights?(@current_user, :read, :read_as_admin)
 
     if params[:id].present? && export = @context.content_exports.find_by_id(params[:id])
       export.destroy
-      render :json => {:success=>'true'}.to_json
+      render :json => {:success=>'true'}
     else
-      render :json => {:errors => {:base => t('errors.not_found', "Export does not exist")}}.to_json, :status => :bad_request
+      render :json => {:errors => {:base => t('errors.not_found', "Export does not exist")}}, :status => :bad_request
     end
   end
-  
+
   def xml_schema
-    file = nil
-    if params[:version]
-      file = Rails.root + "lib/cc/xsd/#{params[:version]}.xsd"
-    end
-    
-    if File.exists?(file)
+    if filename = CC::Schema.for_version(params[:version])
       cancel_cache_buster
-      send_file(file, :type => 'text/xml', :disposition => 'inline')
+      send_file(filename, :type => 'text/xml', :disposition => 'inline')
     else
       render :template => 'shared/errors/404_message', :status => :bad_request
     end

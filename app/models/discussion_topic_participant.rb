@@ -20,14 +20,29 @@ class DiscussionTopicParticipant < ActiveRecord::Base
   include Workflow
 
   # Be more restrictive if this is ever updatable from user params
-  attr_accessible :discussion_topic, :user, :workflow_state, :unread_entry_count
+  attr_accessible :discussion_topic, :user, :workflow_state, :unread_entry_count, :subscribed
 
   belongs_to :discussion_topic
   belongs_to :user
+
+  EXPORTABLE_ATTRIBUTES = [:id, :discussion_topic_id, :user_id, :unread_entry_count, :workflow_state, :subscribed]
+  EXPORTABLE_ASSOCIATIONS = [:discussion_topic, :user]
+
+  before_save :check_unread_count
+
+  validates_presence_of :discussion_topic_id, :user_id, :workflow_state, :unread_entry_count
 
   # keeps track of the read state for the initial discussion topic text
   workflow do
     state :unread
     state :read
+  end
+
+  private
+  # Internal: Ensure unread count never drops below 0.
+  #
+  # Returns nothing.
+  def check_unread_count
+    self.unread_entry_count = 0 if unread_entry_count <= 0
   end
 end

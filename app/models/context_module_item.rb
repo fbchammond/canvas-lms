@@ -24,14 +24,14 @@
 module ContextModuleItem
   # set up the association for the AR class that included this module
   def self.included(klass)
-    klass.has_many :context_module_tags, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND content_tags.workflow_state != ?', 'context_module', 'deleted'], :include => {:context_module => [:context_module_progressions, :content_tags]}
+    klass.has_many :context_module_tags, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND content_tags.workflow_state != ?', 'context_module', 'deleted'], :include => {:context_module => [:content_tags]}
   end
 
   # Check if this item is locked for the given user.
   # If we are locked, this will return the module item (ContentTag) that is
   # locking the item for the given user
   def locked_by_module_item?(user, deep_check)
-    if self.context_module_tags.present? && self.context_module_tags.all? { |tag| tag.locked_for?(user, deep_check) }
+    if self.context_module_tags.present? && self.context_module_tags.all? { |tag| tag.locked_for?(user, :deep_check_if_needed => deep_check) }
       item = self.context_module_tags.first
     end
     item || false
@@ -44,9 +44,10 @@ module ContextModuleItem
   # If no preferred is found, but more than one tag exists for the same obj, we
   # return nothing, since we can't know which tag is appropriate to return.
   def self.find_tag_with_preferred(objs_to_search, preferred_id)
+    preferred_id = preferred_id[Api::ID_REGEX] if preferred_id.is_a?(String)
     objs_to_search.each do |obj|
       next unless obj.present?
-      tag = obj.context_module_tags.find_by_id(preferred_id)
+      tag = obj.context_module_tags.where(:id => preferred_id).first
       return tag if tag
     end
     objs_to_search.each do |obj|

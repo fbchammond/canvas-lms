@@ -1,7 +1,7 @@
 require File.expand_path(File.dirname(__FILE__) + '/common')
 
 describe "eportfolios" do
-  it_should_behave_like "in-process server selenium tests"
+  include_examples "in-process server selenium tests"
 
   def create_eportfolio(is_public = false)
     get "/dashboard/eportfolios"
@@ -20,7 +20,7 @@ describe "eportfolios" do
     @eportfolio.eportfolio_entries.count > 0
     entry= @eportfolio.eportfolio_entries.first
     if opts[:section_type]
-      entry.content.first[:section_type].should eql(opts[:section_type])
+      entry.content.first[:section_type].should == opts[:section_type]
     end
 
     if opts[:content]
@@ -45,10 +45,10 @@ describe "eportfolios" do
       eportfolio_model({:user => @user, :name => "student content"})
     end
 
-    it "Should start the download of ePortfolio contents" do
+    it "should start the download of ePortfolio contents" do
       get "/eportfolios/#{@eportfolio.id}"
       f(".download_eportfolio_link").click
-      f("#export_progress").should be_displayed
+      keep_trying_until { f("#export_progress").should be_displayed }
     end
 
     it "should display and hide eportfolio wizard" do
@@ -67,7 +67,7 @@ describe "eportfolios" do
       f("#section_list_manage .add_section_link").click
       f("#section_list input").send_keys("test section name", :return)
       wait_for_ajax_requests
-      find_with_jquery("#section_list li:last-child .name").text.should eql "test section name"
+      fj("#section_list li:last-child .name").text.should == "test section name"
     end
 
     it "should edit ePortfolio settings" do
@@ -78,24 +78,33 @@ describe "eportfolios" do
       submit_form('#edit_eportfolio_form')
       wait_for_ajax_requests
       @eportfolio.reload
-      @eportfolio.name.should eql "new ePortfolio name"
+      @eportfolio.name.should == "new ePortfolio name"
     end
 
     it "should have a working flickr search dialog" do
-      skip_if_ie("Out of memory / stack overflow")
       get "/eportfolios/#{@eportfolio.id}"
-      edit_link = keep_trying_until do
-        f("#page_list a.page_url").click
-        f("#page_sidebar .edit_content_link")
-      end
-      edit_link.click
+      f("#page_list a.page_url").click
+      keep_trying_until {
+        f("#page_list a.page_url").should be_displayed
+      }
+      f("#page_sidebar .edit_content_link").click
+      keep_trying_until {
+        f('.add_content_link.add_rich_content_link').should be_displayed
+      }
       f('.add_content_link.add_rich_content_link').click
       wait_for_tiny(f('textarea.edit_section'))
-      f("img[alt='Embed Image']").click
-      f(".flickr_search_link").click
-      f("#instructure_image_search").should be_displayed
+      keep_trying_until {
+        f('a.mce_instructure_image').should be_displayed
+      }
+      f('a.mce_instructure_image').click
+      keep_trying_until {
+        f('a[href="#tabFlickr"]').should be_displayed
+      }
+      f('a[href="#tabFlickr"]').click
+      keep_trying_until {
+        f('form.FindFlickrImageView').should be_displayed
+      }
     end
-
 
     it "should not have new section option when adding submission" do
       @assignment = @course.assignments.create!(:title => "hardest assignment ever", :submission_types => "online_url,online_upload")
@@ -105,7 +114,7 @@ describe "eportfolios" do
       get "/eportfolios/#{@eportfolio.id}"
       f(".submission").click
       f("#add_submission_form").should be_displayed
-      ff(:css, '#category_select option').map(&:text).should_not include("New Section")
+      ff('#category_select option').map(&:text).should_not include("New Section")
     end
 
 
@@ -114,24 +123,27 @@ describe "eportfolios" do
       wait_for_ajax_requests
       f(".delete_eportfolio_link").click
       submit_form("#delete_eportfolio_form")
-      f("#wrapper-container .eportfolios").click
-      f("#whats_an_eportfolio .add_eportfolio_link").should be_displayed
-      fj("#portfolio_#{@eportfolio.id}").should be_nil
-      Eportfolio.first.workflow_state.should eql 'deleted'
+      fj("#wrapper-container .eportfolios").click
+      keep_trying_until {
+        f("#whats_an_eportfolio .add_eportfolio_link").should be_displayed
+        f("#portfolio_#{@eportfolio.id}").should be_nil
+      }
+      Eportfolio.first.workflow_state.should == 'deleted'
     end
 
     describe "add content box" do
       before(:each) do
         @assignment = @course.assignments.create(:name => 'new assignment')
         @assignment.submit_homework(@student)
+        attachment_model(:context => @student)
         get "/eportfolios/#{@eportfolio.id}"
-        expect_new_page_load { f(".forward").click }
+        expect_new_page_load { f(".icon-arrow-right").click }
         f(".edit_content_link").click
       end
 
       it "should click on the How Do I..? button" do
         f(".wizard_popup_link").click
-        f("#wizard_box .wizard_options_list").should be_displayed
+        keep_trying_until { f("#wizard_box .wizard_options_list").should be_displayed }
       end
 
       it "should add rich text content" do
@@ -143,17 +155,40 @@ describe "eportfolios" do
         f("#page_content .section_content").should include_text("hello student")
       end
 
+      it "should add a user file" do
+        f('.add_file_link').click
+        wait_for_ajaximations
+        fj('.file_list:visible .sign:visible').click
+        wait_for_ajaximations# my files
+        file = fj('li.file .text:visible')
+        file.should include_text @attachment.filename
+        wait_for_ajaximations
+        file.click
+        f('.upload_file_button').click
+        wait_for_ajaximations
+        download = fj('.eportfolio_download:visible')
+        download.should be_present
+        download.should include_text @attachment.filename
+        submit_form('.form_content')
+        wait_for_ajaximations
+        f('.section.read_only').should include_text @attachment.filename
+        refresh_page
+        f('.section.read_only').should include_text @attachment.filename
+      end
+
       context "adding html content" do
         before(:each) do
           @html_content="<b>student</b>"
           f(".add_html_link").click
+          wait_for_ajaximations
           f("#edit_page_section_1").send_keys(@html_content)
         end
 
         def add_html
           submit_form(".form_content")
-          wait_for_ajax_requests
-          f(".section_content b").text.should eql "student"
+          #driver.execute_script("$('.form_content .btn-primary').click()")
+          wait_for_ajaximations
+          f(".section_content b").text.should == "student"
           entry_verifier ({:section_type => "html", :content => @html_content})
         end
 
@@ -165,14 +200,15 @@ describe "eportfolios" do
           f(comment_public).click
           is_checked(comment_public).should be_true
           submit_form(".form_content")
-          f(".section_content b").text.should eql "student"
+          wait_for_ajaximations
+          f(".section_content b").text.should == "student"
           entry_verifier ({:section_type => "html", :content => @html_content})
           refresh_page
           f("#page_comment_message").send_keys("hi student")
           submit_form("#add_page_comment_form")
           wait_for_ajax_requests
           f("#page_comments .message").should include_text("hi student")
-          @eportfolio_entry.page_comments[0].message.should eql "hi student"
+          @eportfolio_entry.page_comments[0].message.should == "hi student"
         end
 
         it "should verify that the html is there" do
@@ -183,16 +219,15 @@ describe "eportfolios" do
           put_comment_in_html
         end
 
-
         it "should delete the html content" do
           add_html
           f(".edit_content_link").click
           hover_and_click("#page_section_1 .delete_page_section_link")
-          driver.switch_to.alert.accept
+          try_to_close_modal
           wait_for_ajaximations
           submit_form(".form_content")
           wait_for_ajaximations
-          @eportfolio.eportfolio_entries.first.content[0].should eql "No Content Added Yet"
+          @eportfolio.eportfolio_entries.first.content[0].should == "No Content Added Yet"
           f("#edit_page_section_1").should be_nil
         end
 
@@ -203,13 +238,14 @@ describe "eportfolios" do
           driver.switch_to.alert.accept
           wait_for_ajaximations
           f("#page_comments .message").should be_nil
-          PageComment.count.should eql 0
+          PageComment.count.should == 0
         end
       end
 
       it "should add a course submission" do
         f(".add_submission_link").click
-        f(".submission_list").should include_text(@assignment.title)
+        wait_for_ajaximations
+        keep_trying_until { f(".submission_list").should include_text(@assignment.title) }
         f(".select_submission_button").click
         submit_form(".form_content")
       end
@@ -231,11 +267,17 @@ describe "eportfolios" do
         f('.wizard_details .details').text.should include_text text
       end
     end
+
+    it "should be viewable with a shared link" do
+      destroy_session false
+      get "/eportfolios/#{@eportfolio.id}?verifier=#{@eportfolio.uuid}"
+      f('#content h2').text.should == "page"
+    end
   end
 end
 
 describe "eportfolios file upload" do
-  it_should_behave_like "forked server selenium tests"
+  include_examples "in-process server selenium tests"
 
   before (:each) do
     @password = "asdfasdf"
@@ -250,12 +292,13 @@ describe "eportfolios file upload" do
   end
 
   it "should upload a file" do
-    login_as(@student.email, @password)
+    create_session(@student.pseudonym, false)
     get "/eportfolios/#{@eportfolio.id}"
     filename, fullpath, data = get_file("testfile5.zip")
-    expect_new_page_load { f(".forward").click }
+    expect_new_page_load { f(".icon-arrow-right").click }
     f(".edit_content_link").click
-    f(".add_file_link").click
+    wait_for_ajaximations
+    driver.execute_script "$('.add_file_link').click()"
     fj(".file_upload:visible").send_keys(fullpath)
     fj(".upload_file_button").click
     wait_for_ajaximations

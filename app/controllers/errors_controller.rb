@@ -26,23 +26,28 @@ class ErrorsController < ApplicationController
 
   def index
     params[:page] = params[:page].to_i > 0 ? params[:page].to_i : 1
-    @reports = ErrorReport
+    @reports = ErrorReport.includes(:user)
 
     @message = params[:message]
-    if @message.present?
-      @reports = @reports.scoped(:conditions => ["message LIKE ?", '%' + @message + '%'])
+    if error_search_enabled? && @message.present?
+      @reports = @reports.where("message LIKE ?", '%' + @message + '%')
     elsif params[:category].blank?
-      @reports = @reports.scoped(:conditions => "category != '404'")
+      @reports = @reports.where("category<>'404'")
     end
     if params[:category].present?
-      @reports = @reports.scoped(:conditions => { :category => params[:category] })
+      @reports = @reports.where(:category => params[:category])
     end
 
-    @reports = @reports.paginate(:per_page => PER_PAGE, :page => params[:page], :order => 'id DESC', :without_count => true)
+    @reports = @reports.order('created_at DESC').paginate(:per_page => PER_PAGE, :page => params[:page], :total_entries => nil)
   end
 
   def show
     @reports = [ErrorReport.find(params[:id])]
     render :action => 'index'
   end
+
+  def error_search_enabled?
+    Setting.get("error_search_enabled", "true") == "true"
+  end
+  helper_method :error_search_enabled?
 end

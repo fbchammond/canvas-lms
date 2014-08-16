@@ -1,4 +1,4 @@
-require File.dirname(__FILE__) + '/../../qti_helper'
+require File.expand_path(File.dirname(__FILE__) + '/../../qti_helper')
 if Qti.migration_executable
   describe "QTI 1.2 zip with id prepender value" do
     before(:all) do
@@ -17,11 +17,11 @@ if Qti.migration_executable
 
       @migration.migration_settings[:migration_ids_to_import] = {:copy=>{}}
       @migration.migration_settings[:files_import_root_path] = @course_data[:files_import_root_path]
-      @course.import_from_migration(@course_data, nil, @migration)
+      Importers::CourseContentImporter.import_content(@course, @course_data, nil, @migration)
     end
 
     after(:all) do
-      ALL_MODELS.each { |m| truncate_table(m) }
+      truncate_all_tables
       @converter.delete_unzipped_archive
       if File.exists?(@dir)
         FileUtils::rm_rf(@dir)
@@ -39,6 +39,13 @@ if Qti.migration_executable
     it "should convert the questions" do
       @course_data[:assessment_questions][:assessment_questions].length.should == 10
       @course.assessment_questions.count.should == 10
+    end
+
+    it "should create an assessment question bank for the quiz" do
+      @course.assessment_question_banks.count.should == 1
+      bank = @course.assessment_question_banks.first
+      bank.title.should == 'Quiz'
+      bank.assessment_questions.count.should == 10
     end
 
     it "should have file paths" do
@@ -94,7 +101,7 @@ if Qti.migration_executable
       course_data['all_files_export']['file_path'] = course_data['all_files_zip']
       migration.migration_settings[:migration_ids_to_import] = {:copy=>{}}
       migration.migration_settings[:files_import_root_path] = course_data[:files_import_root_path]
-      @course.import_from_migration(course_data, nil, migration)
+      Importers::CourseContentImporter.import_content(@course, course_data, nil, migration)
       
       # Check the first import
       aq = @course.assessment_questions.find_by_migration_id("prepend_test_QUE_1003")
@@ -129,5 +136,5 @@ if Qti.migration_executable
                     :question_count=>10,
                     :quiz_type=>nil,
                     :quiz_name=>"Quiz",
-                    :title=>"Quiz"}]}
+                    :title=>"Quiz"}]}.with_indifferent_access
 end

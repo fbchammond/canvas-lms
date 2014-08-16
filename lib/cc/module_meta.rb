@@ -18,7 +18,7 @@
 module CC
   module ModuleMeta
     def create_module_meta(document=nil)
-      return nil unless @course.context_modules.active.count > 0
+      return nil unless @course.context_modules.not_deleted.count > 0
       
       if document
         meta_file = nil
@@ -36,7 +36,7 @@ module CC
               "xmlns:xsi"=>"http://www.w3.org/2001/XMLSchema-instance",
               "xsi:schemaLocation"=> "#{CCHelper::CANVAS_NAMESPACE} #{CCHelper::XSD_URI}"
       ) do |mods_node|
-        @course.context_modules.active.each do |cm|
+        @course.context_modules.not_deleted.each do |cm|
           next unless export_object?(cm)
           mod_migration_id = CCHelper.create_key(cm)
           # context modules are in order and a pre-req can only reference
@@ -45,6 +45,7 @@ module CC
           
           mods_node.module(:identifier=>mod_migration_id) do |m_node|
             m_node.title cm.name
+            m_node.workflow_state cm.workflow_state
             m_node.position cm.position
             m_node.unlock_at CCHelper::ims_datetime(cm.unlock_at) if cm.unlock_at
             m_node.start_at CCHelper::ims_datetime(cm.start_at) if cm.start_at
@@ -64,7 +65,7 @@ module CC
             
             ct_id_map = {}
             m_node.items do |items_node|
-              cm.content_tags.active.each do |ct|
+              cm.content_tags.not_deleted.each do |ct|
                 ct_migration_id = CCHelper.create_key(ct)
                 ct_id_map[ct.id] = ct_migration_id
                 items_node.item(:identifier=>ct_migration_id) do |item_node|
@@ -72,9 +73,16 @@ module CC
                     add_item_to_export(ct.content)
                   end
                   item_node.content_type ct.content_type
+                  item_node.workflow_state ct.workflow_state
                   item_node.title ct.title
                   item_node.identifierref CCHelper.create_key(ct.content_or_self) unless ct.content_type == 'ContextModuleSubHeader'
-                  item_node.url ct.url if ["ContextExternalTool", 'ExternalUrl'].member? ct.content_type
+                  if ct.content_type == "ContextExternalTool"
+                    item_node.url ct.url
+                    if ct.content && ct.content.context != @course
+                      item_node.global_identifierref ct.content.id
+                    end
+                  end
+                  item_node.url ct.url if ct.content_type == 'ExternalUrl'
                   item_node.position ct.position
                   item_node.new_tab ct.new_tab
                   item_node.indent ct.indent

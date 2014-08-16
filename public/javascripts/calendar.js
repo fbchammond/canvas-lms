@@ -20,11 +20,13 @@ define([
   'INST' /* INST */,
   'i18n!calendars',
   'jquery' /* $ */,
+  'underscore',
+  'timezone',
   'compiled/userSettings',
   'calendar_move' /* calendarMonths */,
   'jqueryui/draggable' /* /\.draggable/ */,
   'jquery.ajaxJSON' /* ajaxJSON */,
-  'jquery.instructure_date_and_time' /* parseDateTime, formatDateTime, parseFromISO, dateString, datepicker, date_field, time_field, datetime_field, /\$\.datetime/ */,
+  'jquery.instructure_date_and_time' /* parseDateTime, formatDateTime, timeString, dateString, datepicker, date_field, time_field, datetime_field, /\$\.datetime/ */,
   'jquery.instructure_forms' /* formSubmit, fillFormData, getFormData, hideErrors */,
   'jqueryui/dialog',
   'jquery.instructure_misc_helpers' /* encodeToHex, decodeFromHex, replaceTags */,
@@ -38,9 +40,10 @@ define([
   'jqueryui/resizable' /* /\.resizable/ */,
   'jqueryui/sortable' /* /\.sortable/ */,
   'jqueryui/tabs' /* /\.tabs/ */
-], function(INST, I18n, $, userSettings, calendarMonths) {
+], function(INST, I18n, $, _, tz, userSettings, calendarMonths) {
 
   window.calendar = {
+    activateEventId: ENV.CALENDAR.ACTIVE_EVENT,
     viewItem: function(context_string, item_id, item_type) {
     },
     showingUndatedEvents: false,
@@ -484,24 +487,46 @@ define([
       }
     }
   }
+
   var calendar_event_url = $("#event_details").find('.calendar_event_url').attr('href');
   var assignment_url = $("#event_details").find('.assignment_url').attr('href');
   var $event_blank = $("#event_blank");
   var $undated_count = $(".show_undated_link .undated_count");
+
+  // Internal: Pad a number with zeroes until it is max length.
+  //
+  // n - The number to pad.
+  // max - The desired length.
+  //
+  // Returns a zero-padded string.
+  function pad(n, max) {
+    var result = n.toString();
+
+    if (n < 0) throw new Error('n cannot be negative');
+
+    while (result.length < max) {
+      result = '0' + result;
+    }
+
+    return result;
+  }
+
   function updateEvent(data, $event, batch) {
     var event = $.extend({}, data.assignment);
     var id = null;
     var details_url = null;
     if(data.calendar_event) {
       event = $.extend({}, data.calendar_event);
-      var start_date_data = $.parseFromISO(event.start_at);
-      var end_date_data = $.parseFromISO(event.end_at);
-      event.start_time_string = start_date_data.time_string;
-      event.end_time_string = end_date_data.time_string;
-      event.start_time_formatted = start_date_data.time_formatted;
-      event.start_date_string = start_date_data.date_formatted;
-      event.end_time_formatted = end_date_data.time_formatted;
-      event.time_sortable = start_date_data.time_sortable;
+
+      var start_at = tz.parse(event.start_at);
+      var end_at = tz.parse(event.end_at);
+      event.datetime = tz.format(start_at, '%Y_%m_%d');
+      event.start_time_string = $.timeString(start_at);
+      event.end_time_string = $.timeString(end_at);
+      event.start_time_formatted = $.timeString(start_at);
+      event.start_date_string = $.dateString(start_at);
+      event.end_time_formatted = $.timeString(end_at);
+      event.time_sortable = tz.format(start_at, '%R');
       event.event_type = "calendar_event";
       id = "calendar_event_" + event.id;
       updateEvent.details_urls = updateEvent.details_urls || {};
@@ -514,13 +539,14 @@ define([
       }
       details_url = updateEvent.details_urls[key];
     } else {
-      var date_data = $.parseFromISO(event.due_at, 'due_date');
-      event.start_time_string = date_data.time_string;
-      event.end_time_string = date_data.time_string;
-      event.start_time_formatted = date_data.time_formatted;
-      event.start_date_string = date_data.date_formatted;
-      event.end_time_formatted = date_data.time_formatted;
-      event.time_sortable = date_data.time_sortable;
+      var due_at = tz.parse(event.due_at);
+      event.datetime = tz.format(due_at, '%Y_%m_%d');
+      event.start_time_string = $.timeString(due_at);
+      event.end_time_string = $.timeString(due_at);
+      event.start_time_formatted = $.timeString(due_at);
+      event.start_date_string = $.dateString(due_at);
+      event.end_time_formatted = $.timeString(due_at);
+      event.time_sortable = tz.format(due_at, '%R');
       event.start_at = event.due_at;
       event.event_type = "assignment";
       id = "assignment_" + event.id;
@@ -553,23 +579,21 @@ define([
       }
     }
     $event = $("#event_" + id);
-    var all_day_date = $.parseFromISO(event.all_day_date);
-    if(all_day_date.date_timestamp && false) {
-      event.start_at = event.all_day_date.substring(0, 10);
-      event.all_day_date = all_day_date.date_formatted;
-    } else {
-      event.all_day_date = '';
-    }
     if(event.all_day) {
-      event.start_at = event.all_day_date.substring(0, 10);
-      if(all_day_date.date_timestamp) {
-        event.all_day_date = all_day_date.date_formatted;
-        event.start_at = all_day_date.date_sortable.substring(0, 10);
+      var all_day_date = tz.parse(event.all_day_date);
+      if (_.isDate(all_day_date)) {
+        event.all_day_date = $.dateString(all_day_date);
+        event.start_at = tz.format(all_day_date, '%F');
+      } else {
+        event.all_day_date = '';
+        event.start_at = '';
       }
       event.start_time_formatted = '';
       event.end_time_formatted = '';
+    } else {
+      event.all_day_date = '';
     }
-    var isManagementContext = managementContexts && $.inArray(event.context_code, managementContexts) != -1;
+    var isManagementContext = ENV.calendarManagementContexts && $.inArray(event.context_code, ENV.calendarManagementContexts) != -1;
     if(event.permissions || isManagementContext) {
       event.can_edit = isManagementContext || (event.permissions && event.permissions.update);
       event.can_delete = isManagementContext || (event.permissions && event.permissions['delete']);
@@ -601,12 +625,15 @@ define([
     $event.toggleClass('draggable', event.can_edit);
     $event.data('description', event.description);
     var classes = $event.attr('class') || "";
-    var groupId = 'group_' + event.context_type.toLowerCase() + "_" + event.context_id;
+    var groupId = 'group_' + event.context_code;
     $event.addClass(groupId);
+    // Set the calendar name the event belongs to in the screenreader
+    // accessible span with class calendar-name-text.
+    $event.find('.calendar-name-text').text($('.' + groupId).find('label').text());
     $event.addClass('event_' + id);
     var $day = $(".calendar_undated");
-    if(event.start_at != null) {
-      $day = $("#day_" + event.start_at.substring(0, 10).replace(/-/g, '_'));
+    if(event.datetime) {
+      $day = $('#day_' + event.datetime);
     }
     if(!$event.hasClass('event_pending')) {
       addEventToDay($event, $day, batch);
@@ -624,6 +651,15 @@ define([
     if($("#" + groupId).length > 0) {
       $event.showIf($("#" + groupId).attr('checked'));
     }
+
+    // After loading the data, if have an event to activate and the event was just updated, show it.
+    if (event.id == calendar.activateEventId && calendar.activateEventId) {
+      $day = $event.parents(".calendar_day");
+      // Remove the ID from being automatically activated on the next data refresh
+      calendar.activateEventId = null;
+      showEvent($event, $day);
+    }
+
     return id;
   }
   function refreshCalendarData(cache) {
@@ -632,7 +668,8 @@ define([
     })
   }
   function showEvent($event, $day) {
-    var $box = $("#event_details");
+    var $box = $("#event_details"),
+        $editEvent = $('#edit_event');
     var data = $.extend({}, $event.getTemplateData({
       textValues: ['id', 'start_time_string', 'end_time_string', 'start_date_string', 'title', 'event_type', 'can_edit', 'can_delete', 'context_id', 'context_type', 'all_day'],
       htmlValues: ['description']
@@ -652,10 +689,10 @@ define([
       }
     }
     if(data.all_day == 'true') {
-      date = Date.parse(date_string);
+      date = tz.parse(date_string);
       data.time_string = $.dateString(date);
     } else if(data.start_time_string) {
-      date = Date.parse(date_string);
+      date = tz.parse(date_string);
       data.time_string = $.dateString(date);
     } else {
       data.time_string = "No Date Set";
@@ -695,11 +732,10 @@ define([
     if (data.lock_info) {
       $box.find(".lock_explanation").html(INST.lockExplanation(data.lock_info, 'assignment'));
     }
-    $("#edit_event").dialog('close');
-    $("#event_details").dialog('close');
-    $("#event_details").find(".description").css("max-height", Math.max($(window).height() - 200, 150));
+    if ($editEvent.data('dialog')) $editEvent.dialog('close');
+    $box.find(".description").css("max-height", Math.max($(window).height() - 200, 150));
     var title = type_name == "Event" ? I18n.t('event_details', "Event Details") : I18n.t('assignment_details', "Assignment Details");
-    $("#event_details").show().dialog({
+    $box.dialog({
       title: title,
       width: (data.description.length > 2000 ? Math.max($(window).width() - 300, 450) : 450),
       resizable: true,
@@ -710,9 +746,8 @@ define([
       },
       open: function() {
         $(document).triggerHandler('event_dialog', $(this));
-      },
-      autoOpen: false
-    }).dialog('open').dialog('option', 'title', title);
+      }
+    });
     $event.addClass('selected');
     selectDateForEvent($day.parents(".calendar_day_holder"));
   }
@@ -762,8 +797,8 @@ define([
     }
   }
   function editEvent($event, $day) {
-    var $box = $("#edit_event");
-    $("#edit_event_tabs").show();
+    var $box = $("#edit_event"),
+        $eventDetails = $('#event_details');
     var data = $.extend({}, $event.data('event_data'), $event.getTemplateData({ textValues: [ 'title' ] }));
     data.description = $event.data('description');
     data.context_type = data.context_type || "";
@@ -803,11 +838,11 @@ define([
       data.event_type == "calendar_event";
     }
     var selectedTabIndex = 0;
-    var $assignmentForm = $box.find("#edit_assignment_form").show();
+    var $assignmentForm = $box.find("#edit_assignment_form");
     $assignmentForm.find("select.context_id").val(context);
     setFormURLs($assignmentForm, context, data.id);
     
-    var $eventForm = $box.find("#edit_calendar_event_form").show();
+    var $eventForm = $box.find("#edit_calendar_event_form");
     $eventForm.find("select.context_id").val(context);
     setFormURLs($eventForm, context, data.id);
 
@@ -824,8 +859,7 @@ define([
     $("#edit_calendar_event_form").data('current_event', $event);
     $("#edit_assignment_form").fillFormData(data, {object_name: 'assignment'});
     $("#edit_calendar_event_form").fillFormData(data, {object_name: 'calendar_event'});
-    $("#event_details").dialog('close');
-    $("#edit_event").dialog('close');
+    if ($eventDetails.data('dialog')) $eventDetails.dialog('close');
     selectDateForEvent($day.parents(".calendar_day_holder"));
     var title;
     if (isNew) {
@@ -833,7 +867,7 @@ define([
     } else {
       title = type_name == "Event" ? I18n.t('titles.edit_event', "Edit Event") : I18n.t('titles.edit_assignment', "Edit Assignment");
     }
-    $("#edit_event").show().dialog({
+    $box.dialog({
       title: title,
       width: 400,
       open: function() {
@@ -930,10 +964,9 @@ define([
         }
         $form.find("input[name='date']").datepicker('hide');
       },
-      autoOpen: false,
       resizable: false,
       modal: true
-    }).dialog('open').dialog('option', 'title', title);
+    });
     
     // if we know the context that the event is being edited for, color the box that contex's color
     if (data.context_id && data.context_type) {
@@ -1100,11 +1133,10 @@ define([
       event.preventDefault();
       $("#calendar_feed_box").find(".calendar_feed_url").val($(this).attr('href')).end()
         .find(".show_calendar_feed_link").attr('href', $(this).attr('href'));
-      $("#calendar_feed_box").dialog('close').dialog({
+      $("#calendar_feed_box").dialog({
         title: I18n.t('feed_dialog_title', "Calendar Feed"),
-        width: 375,
-        autoOpen: false
-      }).dialog('open');
+        width: 375
+      });
     });
     $("#calendar_feed_box .calendar_feed_url").focus(function() {
       $(this).select();
@@ -1281,7 +1313,7 @@ define([
       }
       event.preventDefault();
       event.stopPropagation();
-      if(canCreateEvent) {
+      if(ENV.canCreateEvent) {
         editEvent($("#event_blank"), $(this));
         var context_code = ($(".group_reference_checkbox:checked:first").attr('id') || "").replace(/^group_/, '');
         if(!context_code) {

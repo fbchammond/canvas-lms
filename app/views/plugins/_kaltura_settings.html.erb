@@ -1,4 +1,4 @@
-<% fields_for :settings, OpenObject.new(settings) do |f| %>
+<%= fields_for :settings, OpenObject.new(settings) do |f| %>
   <table style="width: 500px;" class="formtable">
     <tr>
       <td colspan="2"><%= mt(:description, <<-TEXT, :kaltura_url => 'http://www.kaltura.com', :notification_url => 'http://your_canvas_domain/media_objects/kaltura_notifications')
@@ -81,6 +81,52 @@ TEXT
     <tr>
       <td><%= f.blabel :upload_ui_conf, :en => "Uploader UI Conf ID" %></td>
       <td><%= f.text_field :upload_ui_conf %></td>
+    </tr>
+    <tr>
+      <td colspan="2" class="sub">
+        <h3><%= t('headers.canvas_settings', "Canvas Settings") %></h3>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <%= f.blabel :cache_play_list_seconds, :en => "Seconds to cache playlist URL" %>
+        <p style="font-size: 0.8em;"><%= t(:cache_explanation, "Empty means cache indefinitely, 0 means don't cache.") %></p>
+      </td>
+      <td><%= f.text_field :cache_play_list_seconds %></td>
+    </tr>
+    <tr>
+      <td colspan="2" class="sub">
+        <h3><%= t('headers.misc_settings', "Misc. Settings") %></h3>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <%= f.blabel :kaltura_sis, :en => "Write SIS data to Kaltura" %>
+        <p style="font-size: 0.8em;"><%= t(:kaltura_sis_explanation, "If checked user and course SIS data will be provided to Kaltura.") %></p>
+      </td>
+      <td><%= f.check_box :kaltura_sis %></td>
+    </tr>
+    <tr>
+      <td><%= f.label :do_analytics, :en => "Send analytics events" %></td>
+      <td><%= f.check_box :do_analytics, {}, 'yes', 'no' %></td>
+    </tr>
+    <tr>
+      <td colspan="2" style="font-size: 0.8em;"><%= t(:kaltura_path_example, "e.g.")%><code>(#{domain}/api_v3/index.php?service=stats&action=collect&...)</code></td>
+    </tr>
+    <tr>
+      <td><%= f.label :hide_rte_button, :en => "Hide the video icon in Rich Content Editor." %></td>
+      <td><%= f.check_box :hide_rte_button, {}, 'yes', 'no' %></td>
+    </tr>
+    <tr>
+      <td colspan="2" style="font-size: 0.8em;"><%= t(:hide_rte_button_note, "(still there for conversations/SpeedGrader/Media Recordings homework submissions)")%></td>
+    </tr>
+    <tr>
+      <td><%= f.label :use_alt_record_widget, :en => "Use alternative flash recording widget" %></td>
+      <td><%= f.check_box :use_alt_record_widget, {}, 'yes', 'no' %></td>
+    </tr>
+    <tr>
+      <td><%= f.label :js_uploader, :en => "Use html5 (accessible) uploader" %></td>
+      <td><%= f.check_box :js_uploader, {}, 'yes', 'no' %></td>
     </tr>
   </table>
 <% end %>

@@ -1,15 +1,16 @@
 define [
   'jquery'
+  'underscore'
   'compiled/calendar/commonEventFactory'
   'jquery.ajaxJSON'
   'vendor/jquery.ba-tinypubsub'
-], ($, commonEventFactory) ->
+], ($, _, commonEventFactory) ->
 
   class
     constructor: (contexts) ->
       @contexts = contexts
       @clearCache()
-      @inFlightRequest = false
+      @inFlightRequest = {}
       @pendingRequests = []
 
       # The cache will store all the events we've fetched so far, and looks like this:
@@ -115,17 +116,17 @@ define [
 
       events = []
       for id, event of contextInfo.events
-        if !event.start && !start || event.start >= start && event.start <= end
+        if !event.originalStart && !start || event.originalStart >= start && event.originalStart <= end
           events.push event
 
       events
 
-    processNextRequest: () =>
-      request = @pendingRequests.shift()
-      if request
-        method = request[0]
-        args = request[1]
-        method args...
+    processNextRequest: (inFlightCheckKey='default') =>
+      for id, [method, args, key] of @pendingRequests
+        if key == inFlightCheckKey
+          @pendingRequests.splice(id, 1)
+          method args...
+          return
 
     getEventsFromCache: (start, end, contexts) =>
       events = []
@@ -137,13 +138,13 @@ define [
       (group for id, group of @cache.appointmentGroups)
 
     getAppointmentGroups: (fetchManageable, cb) =>
-      if @inFlightRequest
-        @pendingRequests.push([@getAppointmentGroups, arguments])
+      if @inFlightRequest['appointmentGroups']
+        @pendingRequests.push([@getAppointmentGroups, arguments, 'appointmentGroups'])
         return
 
       if @cache.fetchedAppointmentGroups && @cache.fetchedAppointmentGroups.manageable == fetchManageable
         cb @getAppointmentGroupsFromCache()
-        @processNextRequest()
+        @processNextRequest('appointmentGroups')
         return
 
       @cache.fetchedAppointmentGroups = { manageable: fetchManageable }
@@ -160,15 +161,19 @@ define [
 
       doneCB = () => cb @getAppointmentGroupsFromCache()
 
-      fetchJobs = [[ '/api/v1/appointment_groups', { include: [ 'appointments', 'child_events' ] } ]]
+      fetchJobs = [[ '/api/v1/appointment_groups', { include: [ 'reserved_times', 'participant_count' ] } ]]
 
       if fetchManageable
-        fetchJobs.push [ '/api/v1/appointment_groups', { scope: 'manageable', include: [ 'appointments', 'child_events' ] } ]
+        fetchJobs.push [ '/api/v1/appointment_groups', { scope: 'manageable', include: [ 'reserved_times', 'participant_count' ], include_past_appointments: true } ]
 
-      @startFetch fetchJobs, dataCB, doneCB
+      @startFetch fetchJobs, dataCB, doneCB, {inFlightCheckKey: 'appointmentGroups'}
 
     processAppointmentData: (group) =>
       id = group.id
+      if @cache.appointmentGroups[id]?.is_manageable
+        group.is_manageable = true
+      else
+        group.is_scheduleable = true
       @cache.appointmentGroups[id] = group
 
       if group.appointments
@@ -184,28 +189,29 @@ define [
               for childEventData in eventData.child_events
                 childEvent = commonEventFactory(childEventData, @contexts)
                 @addEventToCache event
-                event.childEvents.push childEvent
+                if childEvent
+                  event.childEvents.push childEvent
 
     getEventsForAppointmentGroup: (group, cb) =>
-      if @inFlightRequest
-        @pendingRequests.push([@getEventsForAppointmentGroup, arguments])
+      if @inFlightRequest['default']
+        @pendingRequests.push([@getEventsForAppointmentGroup, arguments, 'default'])
         return
 
-      # appointment group events are cached on the appointment group itself
-      if group.appointmentEvents
-        cb group.appointmentEvents
+      cachedEvents = @cache.appointmentGroups[group.id]?.appointmentEvents
+      if cachedEvents
+        cb cachedEvents
         @processNextRequest()
         return
 
       dataCB = (data) =>
         @processAppointmentData data if data
 
-      params = { include: [ 'appointments', 'child_events' ]}
-      @startFetch [[ group.url, params ]], dataCB, (() => cb group.appointmentEvents)
+      params = { include: [ 'reserved_times', 'participant_count', 'appointments', 'child_events' ]}
+      @startFetch [[ group.url, params ]], dataCB, (() => cb @cache.appointmentGroups[group.id].appointmentEvents)
 
-    getEvents: (start, end, contexts, cb) =>
-      if @inFlightRequest
-        @pendingRequests.push([@getEvents, arguments])
+    getEvents: (start, end, contexts, cb, options = {}) =>
+      if @inFlightRequest['default']
+        @pendingRequests.push([@getEvents, arguments, 'default'])
         return
 
       paramsForDatedEvents = (start, end, contexts) =>
@@ -216,8 +222,8 @@ define [
 
         {
           context_codes: contexts
-          start_date: $.dateToISO8601UTC(startDay)
-          end_date: $.dateToISO8601UTC(endDay)
+          start_date: $.unfudgeDateForProfileTimezone(startDay).toISOString()
+          end_date: $.unfudgeDateForProfileTimezone(endDay).toISOString()
         }
 
       paramsForUndatedEvents = (contexts) =>
@@ -236,36 +242,69 @@ define [
 
       if !params
         # Yay, this request can be satisfied by the cache
-        cb @getEventsFromCache(start, end, contexts)
+        list = @getEventsFromCache(start, end, contexts)
+        list.requestID = options.requestID
+        cb list
         @processNextRequest()
         return
 
-      for context in contexts
-        contextInfo = @cache.contexts[context]
-        if contextInfo
-          if start
-            contextInfo.fetchedRanges.push([start, end])
-          else
-            contextInfo.fetchedUndated = true
+      requestResults = {}
+      dataCB = (data, url, params) =>
+        return unless data
+        key = 'type_'+params.type
+        requestResult = requestResults[key] or {events: []}
+        requestResult.next = data.next
+        for e in data
+          event = commonEventFactory(e, @contexts)
+          if event && event.object.workflow_state != 'deleted'
+            requestResult.events.push(event)
+        requestResult.maxDate = _.max(requestResult.events, (e) -> e.originalStart).originalStart
+        requestResults[key] = requestResult
 
       doneCB = () =>
-        cb @getEventsFromCache(start, end, contexts)
+        # If any request had a next page, the combined results are valid
+        # only through the earliest page end date.
+        incomplete = false
+        for key, requestResult of requestResults
+          if requestResult.next
+            incomplete = true
 
-      dataCB = (data) =>
-        if data
-          for e in data
-            event = commonEventFactory(e, @contexts)
-            if event && event.object.workflow_state != 'deleted'
+        nextPageDate = end
+        if incomplete
+          for key, requestResult of requestResults
+            if requestResult.next && requestResult.maxDate < nextPageDate
+              nextPageDate = requestResult.maxDate
+        nextPageDate.setHours(0, 0, 0) if nextPageDate
+
+        lastKnownDate = start
+        for key, requestResult of requestResults
+          for event in requestResult.events
+            if !incomplete || event.originalStart < nextPageDate
               @addEventToCache event
+              lastKnownDate = event.originalStart if event.originalStart > lastKnownDate
+        lastKnownDate = end if !incomplete
+
+        for context in contexts
+          contextInfo = @cache.contexts[context]
+          if contextInfo
+            if start
+              contextInfo.fetchedRanges.push([start, lastKnownDate])
+            else
+              contextInfo.fetchedUndated = true
+
+        list = @getEventsFromCache(start, lastKnownDate, contexts)
+        list.nextPageDate = if incomplete then nextPageDate else null
+        list.requestID = options.requestID
+        cb list
 
       @startFetch [
         [ '/api/v1/calendar_events', params ]
         [ '/api/v1/calendar_events', $.extend({type: 'assignment'}, params) ]
-      ], dataCB, doneCB
+      ], dataCB, doneCB, options
 
     getParticipants: (appointmentGroup, registrationStatus, cb) =>
-      if @inFlightRequest
-        @pendingRequests.push([@getParticipants, arguments])
+      if @inFlightRequest['default']
+        @pendingRequests.push([@getParticipants, arguments, 'default'])
         return
 
       key = "#{appointmentGroup.id}_#{registrationStatus}"
@@ -292,10 +331,11 @@ define [
     # situations where you need to do paginated fetches of data from N different endpoints
     # a little simpler. dataCB(data, url, params) is called on every request with the data,
     # and completionCB is called when all fetches have completed.
-    startFetch: (urlAndParamsArray, dataCB, doneCB) =>
+    startFetch: (urlAndParamsArray, dataCB, doneCB, options = {}) =>
       numCompleted = 0
 
-      @inFlightRequest = true
+      inFlightCheckKey = options.inFlightCheckKey || 'default'
+      @inFlightRequest[inFlightCheckKey] = true
 
       wrapperCB = (data, isDone, url, params) =>
         dataCB(data, url, params)
@@ -304,17 +344,17 @@ define [
           numCompleted += 1
           if numCompleted >= urlAndParamsArray.length
             doneCB()
-            @inFlightRequest = false
-            @processNextRequest()
+            @inFlightRequest[inFlightCheckKey] = false
+            @processNextRequest(inFlightCheckKey)
 
       for urlAndParams in urlAndParamsArray
         do (urlAndParams) =>
-          @fetchNextBatch urlAndParams[0], urlAndParams[1], (data, isDone) -> wrapperCB(data, isDone, urlAndParams[0], urlAndParams[1])
+          @fetchNextBatch urlAndParams[0], urlAndParams[1], ((data, isDone) -> wrapperCB(data, isDone, urlAndParams[0], urlAndParams[1])), options
 
     # Will fetch the URL with the given params, and if the response includes a Link
     # header, will fetch that link too (with the same params). At the end of every
     # request it will call cb(data, isDone). isDone will be true on the last request.
-    fetchNextBatch: (url, params, cb) =>
+    fetchNextBatch: (url, params, cb, options = {}) =>
       parseLinkHeader = (header) ->
         # TODO: Write a real Link header parser. This will only work with what we output,
         # and might be fragile.
@@ -329,16 +369,19 @@ define [
 
       $.publish "EventDataSource/ajaxStarted"
 
-      params.per_page = 50
+      unless url.match(/per_page=/) or params.per_page?
+        params.per_page = 50
+
       $.ajaxJSON url, 'GET', params, (data, xhr) =>
         $.publish "EventDataSource/ajaxEnded"
 
         linkHeader = xhr.getResponseHeader?('Link')
         rels = parseLinkHeader(linkHeader)
+        data.next = rels?.next
 
-        if rels?.next
+        if rels?.next && !options.singlePage
           cb(data, false)
-          @fetchNextBatch rels.next, params, cb
+          @fetchNextBatch rels.next, {}, cb
           return
 
         cb(data, true)

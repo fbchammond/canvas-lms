@@ -40,15 +40,15 @@ $(document).ready(function() {
   $(".add_email_link,.add_contact_link").click(function(event) {
     event.preventDefault();
     var view = "email";
-    $("#communication_channels").show().dialog('close').dialog({
+    $("#communication_channels").show().dialog({
       title:  I18n.t('titles.register_communication', "Register Communication") ,
-      width: 430,
+      width: 600,
       resizable: false,
       modal: true,
       open: function() {
         $("#communication_channels").triggerHandler('tabsshow');
       }
-    }).dialog('open');
+    });
     if($(this).hasClass('add_contact_link')) {
       $("#communication_channels").tabs('select', '#register_sms_number');
       view = "sms";
@@ -68,6 +68,8 @@ $(document).ready(function() {
   });
 
   $("#register_sms_number,#register_email_address").formSubmit({
+    object_name: 'communication_channel',
+    required: ['address'],
     beforeSubmit: function(data) {
       var $list = $(".email_channels");
       var data = $(this).getFormData({object_name: 'communication_channel'});
@@ -176,14 +178,13 @@ $(document).ready(function() {
       $box.find(".re_send_confirmation_link").attr('href', url)
         .text( I18n.t('links.resend_confirmation', "Re-Send Confirmation") );
       $box.fillFormData(data);
-      $box.show().dialog('close').dialog({
-        autoOpen: false,
+      $box.show().dialog({
         title: confirm_title,
         width: 350,
         open: function() {
-          $(this).find(":text:first").focus().select();
+          $(this).closest('.ui-dialog').focus()
         }
-      }).dialog('open');
+      });
     }
   });
   $("#confirm_communication_channel").formSubmit({

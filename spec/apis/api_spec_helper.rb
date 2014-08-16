@@ -18,6 +18,14 @@
 
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
+unless CANVAS_RAILS2
+  RSpec::configure do |c|
+    c.include RSpec::Rails::RequestExampleGroup, :type => :request, :example_group => {
+        :file_path => c.escaped_path(%w[spec apis])
+    }
+  end
+end
+
 class HashWithDupCheck < Hash
   def []=(k,v)
     if self.key?(k)
@@ -36,14 +44,25 @@ end
 def api_call(method, path, params, body_params = {}, headers = {}, opts = {})
   raw_api_call(method, path, params, body_params, headers, opts)
   if opts[:expected_status]
-    response.status.to_i.should == opts[:expected_status]
+    assert_status(opts[:expected_status])
   else
     response.should be_success, response.body
+  end
+
+  if response.headers['Link']
+    # make sure that the link header is properly formed
+    Api.parse_pagination_links(response.headers['Link'])
+  end
+
+  if jsonapi_call?(headers) && method == :delete
+    assert_status(204)
+    return
   end
 
   case params[:format]
   when 'json'
     response.header['content-type'].should == 'application/json; charset=utf-8'
+
     body = response.body
     if body.respond_to?(:call)
       StringIO.new.tap { |sio| body.call(nil, sio); body = sio.string }
@@ -60,25 +79,44 @@ def api_call(method, path, params, body_params = {}, headers = {}, opts = {})
   end
 end
 
+def jsonapi_call?(headers)
+  headers['Accept'] == 'application/vnd.api+json'
+end
+
 # like api_call, but performed by the specified user instead of @user
 def api_call_as_user(user, method, path, params, body_params = {}, headers = {}, opts = {})
-  token = user.access_tokens.first || user.access_tokens.create!(:purpose => 'test')
-  headers['Authorization'] = "Bearer #{token.token}"
-  user.pseudonyms.create!(:unique_id => "#{user.id}@example.com", :account => opts[:domain_root_account]) unless user.pseudonym(true)
+  token = access_token_for_user(user)
+  headers['Authorization'] = "Bearer #{token}"
+  account = opts[:domain_root_account] || Account.default
+  user.pseudonyms.reload
+  account.pseudonyms.create!(:unique_id => "#{user.id}@example.com", :user => user) unless user.find_pseudonym_for_account(account, true)
+  Pseudonym.any_instance.stubs(:works_for_account?).returns(true)
   api_call(method, path, params, body_params, headers, opts)
+end
+
+$spec_api_tokens = {}
+
+def access_token_for_user(user)
+  token = $spec_api_tokens[user]
+  unless token
+    token = $spec_api_tokens[user] = user.access_tokens.create!(:purpose => "test").full_token
+  end
+  token
 end
 
 # like api_call, but don't assume success and a json response.
 def raw_api_call(method, path, params, body_params = {}, headers = {}, opts = {})
   path = path.sub(%r{\Ahttps?://[^/]+}, '') # remove protocol+host
   enable_forgery_protection do
-    params_from_with_nesting(method, path).should == params
+    params_from_with_nesting(method, path).each{|k, v| params[k].to_s.should == v.to_s}
 
-    if !params.key?(:api_key) && !params.key?(:access_token) && !headers.key?('Authorization') && @user
-      token = @user.access_tokens.first
-      token ||= @user.access_tokens.create!(:purpose => 'test')
-      headers['Authorization'] = "Bearer #{token.token}"
-      @user.pseudonyms.create!(:unique_id => "#{@user.id}@example.com", :account => opts[:domain_root_account]) unless @user.pseudonym(true)
+    headers['HTTP_AUTHORIZATION'] = headers['Authorization'] if headers.key?('Authorization')
+    if !params.key?(:api_key) && !params.key?(:access_token) && !headers.key?('HTTP_AUTHORIZATION') && @user
+      token = access_token_for_user(@user)
+      headers['HTTP_AUTHORIZATION'] = "Bearer #{token}"
+      account = opts[:domain_root_account] || Account.default
+      Pseudonym.any_instance.stubs(:works_for_account?).returns(true)
+      account.pseudonyms.create!(:unique_id => "#{@user.id}@example.com", :user => @user) unless @user.all_active_pseudonyms(:reload) && @user.find_pseudonym_for_account(account, true)
     end
 
     LoadAccount.stubs(:default_domain_root_account).returns(opts[:domain_root_account]) if opts.has_key?(:domain_root_account)
@@ -87,9 +125,19 @@ def raw_api_call(method, path, params, body_params = {}, headers = {}, opts = {}
   end
 end
 
+def follow_pagination_link(rel, params={})
+  links = Api.parse_pagination_links(response.headers['Link'])
+  link = links.find{ |l| l[:rel] == rel }
+  link.delete(:rel)
+  uri = link.delete(:uri).to_s
+  link.each{ |key,value| params[key.to_sym] = value }
+  api_call(:get, uri, params)
+end
+
 def params_from_with_nesting(method, path)
   path, querystring = path.split('?')
-  params = ActionController::Routing::Routes.recognize_path(path, :method => method)
+  params = CANVAS_RAILS2 ? ActionController::Routing::Routes.recognize_path(path, :method => method) :
+    CanvasRails::Application.routes.recognize_path(path, :method => method)
   querystring.blank? ? params : params.merge(Rack::Utils.parse_nested_query(querystring).symbolize_keys!)
 end
 
@@ -104,18 +152,102 @@ def should_translate_user_content(course)
   content = %{
     <p>
       Hello, students.<br>
-      This will explain everything: <img src="/courses/#{course.id}/files/#{attachment.id}/preview" alt="important">
+      This will explain everything: <img id="1" src="/courses/#{course.id}/files/#{attachment.id}/preview" alt="important">
+      This won't explain anything:  <img id="2" src="/courses/#{course.id}/files/#{attachment.id}/download" alt="important">
       Also, watch this awesome video: <a href="/media_objects/qwerty" class="instructure_inline_media_comment video_comment" id="media_comment_qwerty"><img></a>
+      And refer to this <a href="/courses/#{course.id}/wiki/awesome-page">awesome wiki page</a>.
     </p>
   }
   html = yield content
   doc = Nokogiri::HTML::DocumentFragment.parse(html)
-  img = doc.at_css('img')
-  img.should be_present
-  img['src'].should == "http://www.example.com/files/#{attachment.id}/download?verifier=#{attachment.uuid}"
+  img1 = doc.at_css('img#1')
+  img1.should be_present
+  img1['src'].should == "http://www.example.com/courses/#{course.id}/files/#{attachment.id}/preview?verifier=#{attachment.uuid}"
+  img2 = doc.at_css('img#2')
+  img2.should be_present
+  img2['src'].should == "http://www.example.com/courses/#{course.id}/files/#{attachment.id}/download?verifier=#{attachment.uuid}"
   video = doc.at_css('video')
   video.should be_present
   video['poster'].should match(%r{http://www.example.com/media_objects/qwerty/thumbnail})
   video['src'].should match(%r{http://www.example.com/courses/#{course.id}/media_download})
-    video['src'].should match(%r{entryId=qwerty})
+  video['src'].should match(%r{entryId=qwerty})
+  doc.css('a').last['data-api-endpoint'].should match(%r{http://www.example.com/api/v1/courses/#{course.id}/pages/awesome-page})
+  doc.css('a').last['data-api-returntype'].should == 'Page'
+end
+
+def should_process_incoming_user_content(context)
+  attachment_model(:context => context)
+  incoming_content = "<p>content blahblahblah <a href=\"/files/#{@attachment.id}/download?a=1&amp;verifier=2&amp;b=3\">haha</a></p>"
+
+  saved_content = yield incoming_content
+  saved_content.should == "<p>content blahblahblah <a href=\"/#{context.class.to_s.underscore.pluralize}/#{context.id}/files/#{@attachment.id}/download?a=1&amp;b=3\">haha</a></p>"
+end
+
+def verify_json_error(error, field, code, message = nil)
+  error["field"].should == field
+  error["code"].should == code
+  error["message"].should == message if message
+end
+
+
+# Assert the provided JSON hash complies with the JSON-API format specification.
+#
+# The following tests will be carried out:
+#
+#   - all resource entries must be wrapped inside arrays, even if the set
+#     includes only a single resource entry
+#   - when associations are present, a "meta" entry should be present and
+#     it should indicate the primary set in the "primaryCollection" key
+#
+# @param [Hash] json
+#   The JSON construct to test.
+#
+# @param [String] primary_set
+#   Name of the primary resource the construct represents, i.e, the model
+#   the API endpoint represents, like 'quiz', 'assignment', or 'submission'.
+#
+# @param [Array<String>] associations
+#   An optional set of associated resources that should be included with
+#   the primary resource (e.g, a user, an assignment, a submission, etc.).
+#
+# @example Testing a Quiz API model:
+#   test_jsonapi_compliance!(json, 'quiz')
+#
+# @example Testing a Quiz API model with its assignment included:
+#   test_jsonapi_compliance!(json, 'quiz', [ 'assignment' ])
+#
+# @example A complying construct of a Quiz Submission with its Assignment:
+#
+#     {
+#       "quiz_submissions": [{
+#         "id": 10,
+#         "assignment_id": 5
+#       }],
+#       "assignments": [{
+#         "id": 5
+#       }],
+#       "meta": {
+#         "primaryCollection": "quiz_submissions"
+#       }
+#     }
+#
+def assert_jsonapi_compliance(json, primary_set, associations = [])
+  required_keys =  [ primary_set ]
+
+  if associations.any?
+    required_keys.concat associations.map { |s| s.pluralize }
+    required_keys << 'meta'
+  end
+
+  # test key values instead of nr. of keys so we get meaningful failures
+  json.keys.sort.should == required_keys.sort
+
+  required_keys.each do |key|
+    json.should be_has_key(key)
+    json[key].is_a?(Array).should be_true unless key == 'meta'
+  end
+
+  if associations.any?
+    json['meta']['primaryCollection'].should == primary_set
+  end
 end

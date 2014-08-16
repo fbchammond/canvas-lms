@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -21,14 +21,16 @@ module SIS
 
     def process
       start = Time.now
-      importer = Work.new(@batch_id, @root_account, @logger)
+      importer = Work.new(@batch, @root_account, @logger)
       Course.skip_updating_account_associations do
         CourseSection.process_as_sis(@sis_options) do
           yield importer
         end
       end
       Course.update_account_associations(importer.course_ids_to_update_associations.to_a) unless importer.course_ids_to_update_associations.empty?
-      CourseSection.update_all({:sis_batch_id => @batch_id}, {:id => importer.sections_to_update_sis_batch_ids}) if @batch_id && !importer.sections_to_update_sis_batch_ids.empty?
+      importer.sections_to_update_sis_batch_ids.in_groups_of(1000, false) do |batch|
+        CourseSection.where(:id => batch).update_all(:sis_batch_id => @batch)
+      end if @batch
       @logger.debug("Sections took #{Time.now - start} seconds")
       return importer.success_count
     end
@@ -37,8 +39,8 @@ module SIS
     class Work
       attr_accessor :success_count, :sections_to_update_sis_batch_ids, :course_ids_to_update_associations
 
-      def initialize(batch_id, root_account, logger)
-        @batch_id = batch_id
+      def initialize(batch, root_account, logger)
+        @batch = batch
         @root_account = root_account
         @logger = logger
         @success_count = 0
@@ -46,8 +48,8 @@ module SIS
         @course_ids_to_update_associations = [].to_set
       end
 
-      def add_section(section_id, course_id, name, status, start_date=nil, end_date=nil, account_id=nil)
-        @logger.debug("Processing Section #{[section_id, course_id, name, status, start_date, end_date, account_id].inspect}")
+      def add_section(section_id, course_id, name, status, start_date=nil, end_date=nil, integration_id=nil)
+        @logger.debug("Processing Section #{[section_id, course_id, name, status, start_date, end_date].inspect}")
 
         raise ImportError, "No section_id given for a section in course #{course_id}" if section_id.blank?
         raise ImportError, "No course_id given for a section #{section_id}" if course_id.blank?
@@ -63,9 +65,6 @@ module SIS
         section.root_account = @root_account
         # this is an easy way to load up the cache with data we already have
         section.course = course if course.id == section.course_id
-
-        section.account = account_id.present? ? Account.find_by_root_account_id_and_sis_source_id(@root_account.id, account_id) : nil
-        @course_ids_to_update_associations.add section.course_id if section.account_id_changed?
 
         # only update the name on new records, and ones that haven't been changed since the last sis import
         section.name = name if section.new_record? || !section.stuck_sis_fields.include?(:name)
@@ -86,10 +85,12 @@ module SIS
             @course_ids_to_update_associations.merge [section.course_id, course.id]
             section.move_to_course(course, :run_jobs_immediately)
           end
-
-          @course_ids_to_update_associations.add section.course_id
+        end
+        if section.course_id_changed?
+          @course_ids_to_update_associations.merge [section.course_id, section.course_id_was].compact
         end
 
+        section.integration_id = integration_id
         section.sis_source_id = section_id
         if status =~ /active/i
           section.workflow_state = 'active'
@@ -104,9 +105,16 @@ module SIS
         section.restrict_enrollments_to_section_dates = (section.start_at.present? || section.end_at.present?) unless section.stuck_sis_fields.include?(:restrict_enrollments_to_section_dates)
 
         if section.changed?
-          section.sis_batch_id = @batch_id if @batch_id
-          section.save
-        elsif @batch_id
+          section.sis_batch_id = @batch.id if @batch
+          if section.valid?
+            section.save
+          else
+            msg = "A section did not pass validation "
+            msg += "(" + "section: #{section_id} / #{name}, course: #{course_id}, error: "
+            msg += section.errors.full_messages.join(", ") + ")"
+            raise ImportError, msg
+          end
+        elsif @batch
           @sections_to_update_sis_batch_ids << section.id
         end
 

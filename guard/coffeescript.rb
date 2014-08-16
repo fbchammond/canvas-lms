@@ -47,7 +47,9 @@ module Guard
 
         def run(files, watchers, options = { })
           notify_start(files, options)
-          changed_files, errors = compile_files(files, watchers, options)
+          changed_files, errors = partition_by_plugin(files) do |prefix, plugin_files|
+            compile_files(plugin_files, watchers, options.merge(:output => "#{prefix}#{options[:output]}"))
+          end
           notify_result(changed_files, errors, options)
 
           [changed_files, errors.empty?]
@@ -57,6 +59,20 @@ module Guard
         end
 
         private
+
+        def partition_by_plugin(files, &block)
+          groupings = files.inject({}) { |hash, file|
+            prefix = file =~ %r{\Avendor/plugins/.*?/} ? $& : ''
+            hash[prefix] ||= []
+            hash[prefix] << file
+            hash
+          }
+          groupings.map(&block).inject([[], []]) { |ary, ret|
+            ary[0].concat ret[0]
+            ary[1].concat ret[1]
+            ary
+          }
+        end
 
         def notify_start(files, options)
           message = options[:message] || (options[:noop] ? 'Verify ' : 'Compile ') + files.join(', ')
@@ -73,7 +89,7 @@ module Guard
           if Canvas::CoffeeScript.coffee_script_binary_is_available?
             Parallel.each(directories.map, :in_threads => Parallel.processor_count) do |(directory, scripts)|
               FileUtils.mkdir_p(File.expand_path(directory)) if !File.directory?(directory) && !options[:noop]
-              system('coffee', '-c', '-o', directory, *scripts)
+              system('coffee', '-m', '-c', '-o', directory, *scripts)
               if $?.exitstatus != 0
                 Formatter.error("Unable to compile coffeescripts in #{directory}")
               else
@@ -167,7 +183,7 @@ module Guard
 
       if options[:input]
         defaults.merge!({ :output => options[:input] })
-        watchers << ::Guard::Watcher.new(%r{^#{ options.delete(:input) }/(.+\.coffee)$})
+        watchers << ::Guard::Watcher.new(%r{\A(?:vendor/plugins/.*?/)?#{ Regexp.escape(options.delete(:input)) }/(.+\.coffee)\z})
       end
 
       super(watchers, defaults.merge(options))

@@ -1,9 +1,16 @@
 @import environment.sass
 
+#editor_tabs_3
+  [aria-selected="true"]
+    border: 1px dashed black
+
 #editor_tabs
+  [role=treeitem][aria-selected="true"]
+    border: 1px dashed black
+
   :font-size 11px
 
-  > h4
+  > .wiki-sidebar-header
     font-size: 1.3em
     margin-bottom: 0.3em
 

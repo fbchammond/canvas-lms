@@ -49,6 +49,9 @@ module CC::Importer::Canvas
         topic['migration_id'] = get_node_val(meta_doc, 'topic_id')
         topic['title'] = get_node_val(meta_doc, 'title')
         topic['type'] = get_node_val(meta_doc, 'type')
+        topic['discussion_type'] = get_node_val(meta_doc, 'discussion_type')
+        topic['pinned'] = get_bool_val(meta_doc, 'pinned')
+        topic['require_initial_post'] = get_bool_val(meta_doc, 'require_initial_post')
         topic['external_feed_migration_id'] = get_node_val(meta_doc, 'external_feed_identifierref')
         topic['attachment_migration_id'] = get_node_val(meta_doc, 'attachment_identifierref')
         topic['posted_at'] = get_time_val(meta_doc, 'posted_at')
@@ -56,7 +59,7 @@ module CC::Importer::Canvas
         topic['position'] = get_int_val(meta_doc, 'position')
 
         if asmnt_node = meta_doc.at_css('assignment')
-          topic['assignment'] = convert_assignment(asmnt_node)
+          topic['assignment'] = parse_canvas_assignment_data(asmnt_node)
         end
       end
 

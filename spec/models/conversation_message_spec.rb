@@ -20,7 +20,7 @@ require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 
 describe ConversationMessage do
   context "notifications" do
-    before(:each) do
+    before :once do
       Notification.create(:name => "Conversation Message", :category => "TestImmediately")
       Notification.create(:name => "Added To Conversation", :category => "TestImmediately")
 
@@ -36,16 +36,30 @@ describe ConversationMessage do
         channel.confirm
       end
 
-      @conversation = @teacher.initiate_conversation(@initial_students.map(&:id))
+      @conversation = @teacher.initiate_conversation(@initial_students)
+      user = User.find(@conversation.user_id)
+      @account = Account.find(user.account)
       add_message # need initial message for add_participants to not barf
     end
 
-    def add_message
-      @conversation.add_message("message")
+    def add_message(options = {})
+      @conversation.add_message("message", options.merge(:root_account_id => @account.id))
     end
 
     def add_last_student
-      @conversation.add_participants([@last_student.id])
+      @conversation.add_participants([@last_student])
+    end
+
+    it "should format an author line with shared contexts" do
+      message = add_message
+      message.author_short_name_with_shared_contexts(@first_student).should == "#{message.author.short_name} (#{@course.name})"
+    end
+
+    it "should format an author line without shared contexts" do
+      user
+      @conversation = @teacher.initiate_conversation([@user])
+      message = add_message
+      message.author_short_name_with_shared_contexts(@user).should == "#{message.author.short_name}"
     end
 
     it "should create appropriate notifications on new message" do
@@ -82,6 +96,16 @@ describe ConversationMessage do
       message.messages_sent["Conversation Message"].map(&:user_id).should be_include(@first_student.id)
     end
 
+    it "should limit notifications to message recipients, still excluding the author" do
+      message = add_message(only_users: [@teacher, @students.first])
+      message_user_ids = message.messages_sent["Conversation Message"].map(&:user_id)
+      message_user_ids.should_not include(@teacher.id)
+      message_user_ids.should include(@students.first.id)
+      @students[1..-1].each do |student|
+        message_user_ids.should_not include(student.id)
+      end
+    end
+
     it "should notify new participants" do
       event = add_last_student
       event.messages_sent["Added To Conversation"].map(&:user_id).should be_include(@last_student.id)
@@ -110,46 +134,35 @@ describe ConversationMessage do
   context "generate_user_note" do
     it "should add a user note under nominal circumstances" do
       Account.default.update_attribute :enable_user_notes, true
-      course_with_teacher
-      @teacher.associated_accounts << Account.default
-      student = student_in_course.user
-      student.associated_accounts << Account.default
-      conversation = @teacher.initiate_conversation([student.id])
-      message = conversation.add_message("reprimanded!")
-      message.created_at = Time.at(0) # Jan 1, 1970 00:00:00 UTC
-      note = message.generate_user_note
+      course_with_teacher(active_all: true)
+      student = student_in_course(active_all: true).user
+      conversation = @teacher.initiate_conversation([student])
+      conversation.add_message("reprimanded!", :generate_user_note => true)
       student.user_notes.size.should be(1)
-      student.user_notes.first.should eql(note)
+      note = student.user_notes.first
       note.creator.should eql(@teacher)
-      note.title.should eql("Private message, Jan 1, 1970")
+      note.title.should eql("Private message")
       note.note.should eql("reprimanded!")
     end
 
     it "should fail if notes are disabled on the account" do
       Account.default.update_attribute :enable_user_notes, false
-      course_with_teacher
-      @teacher.associated_accounts << Account.default
-      student = student_in_course.user
-      student.associated_accounts << Account.default
-      conversation = @teacher.initiate_conversation([student.id])
-      message = conversation.add_message("reprimanded!")
-      message.generate_user_note.should be_nil
+      course_with_teacher(active_all: true)
+      student = student_in_course(active_all: true).user
+      conversation = @teacher.initiate_conversation([student])
+      conversation.add_message("reprimanded!", :generate_user_note => true)
       student.user_notes.size.should be(0)
     end
 
-    it "should fail if there's more than one recipient" do
+    it "should allow user notes on more than one recipient" do
       Account.default.update_attribute :enable_user_notes, true
-      course_with_teacher
-      @teacher.associated_accounts << Account.default
-      student1 = student_in_course.user
-      student1.associated_accounts << Account.default
-      student2 = student_in_course.user
-      student2.associated_accounts << Account.default
-      conversation = @teacher.initiate_conversation([student1.id, student2.id])
-      message = conversation.add_message("message")
-      message.generate_user_note.should be_nil
-      student1.user_notes.size.should be(0)
-      student2.user_notes.size.should be(0)
+      course_with_teacher(active_all: true)
+      student1 = student_in_course(active_all: true).user
+      student2 = student_in_course(active_all: true).user
+      conversation = @teacher.initiate_conversation([student1, student2])
+      conversation.add_message("reprimanded!", :generate_user_note => true)
+      student1.user_notes.size.should be(1)
+      student2.user_notes.size.should be(1)
     end
   end
 
@@ -159,12 +172,12 @@ describe ConversationMessage do
 
       course_with_teacher
       student_in_course
-      conversation = @teacher.initiate_conversation([@user.id])
+      conversation = @teacher.initiate_conversation([@user])
       message = conversation.add_message("initial message")
 
       StreamItem.count.should eql(old_count + 1)
       stream_item = StreamItem.last
-      stream_item.item_asset_string.should eql(message.conversation.asset_string)
+      stream_item.asset.should == message.conversation
     end
 
     it "should not create a conversation stream item for a submission comment" do
@@ -186,7 +199,7 @@ describe ConversationMessage do
 
       course_with_teacher
       student_in_course
-      conversation = @teacher.initiate_conversation([@user.id])
+      conversation = @teacher.initiate_conversation([@user])
       conversation.add_message("first message")
       stream_item = StreamItem.last
       conversation.add_message("second message")
@@ -201,7 +214,7 @@ describe ConversationMessage do
 
       course_with_teacher
       student_in_course
-      conversation = @teacher.initiate_conversation([@user.id])
+      conversation = @teacher.initiate_conversation([@user])
       conversation.add_message("initial message")
       message = conversation.add_message("second message")
 
@@ -215,14 +228,14 @@ describe ConversationMessage do
   end
 
   context "infer_defaults" do
-    before do
+    before :once do
       course_with_teacher(:active_all => true)
       student_in_course(:active_all => true)
     end
 
     it "should set has_attachments if there are attachments" do
       a = attachment_model(:context => @teacher, :folder => @teacher.conversation_attachments_folder)
-      m = @teacher.initiate_conversation([@student.id]).add_message("ohai", :attachment_ids => [a.id])
+      m = @teacher.initiate_conversation([@student]).add_message("ohai", :attachment_ids => [a.id])
       m.read_attribute(:has_attachments).should be_true
       m.conversation.reload.has_attachments.should be_true
       m.conversation.conversation_participants.all?(&:has_attachments?).should be_true
@@ -230,8 +243,8 @@ describe ConversationMessage do
 
     it "should set has_attachments if there are forwareded attachments" do
       a = attachment_model(:context => @teacher, :folder => @teacher.conversation_attachments_folder)
-      m1 = @teacher.initiate_conversation([user.id]).add_message("ohai", :attachment_ids => [a.id])
-      m2 = @teacher.initiate_conversation([@student.id]).add_message("lulz", :forwarded_message_ids => [m1.id])
+      m1 = @teacher.initiate_conversation([user]).add_message("ohai", :attachment_ids => [a.id])
+      m2 = @teacher.initiate_conversation([@student]).add_message("lulz", :forwarded_message_ids => [m1.id])
       m2.read_attribute(:has_attachments).should be_true
       m2.conversation.reload.has_attachments.should be_true
       m2.conversation.conversation_participants.all?(&:has_attachments?).should be_true
@@ -243,7 +256,7 @@ describe ConversationMessage do
       mc.media_id = 'asdf'
       mc.context = mc.user = @teacher
       mc.save
-      m = @teacher.initiate_conversation([@student.id]).add_message("ohai", :media_comment => mc)
+      m = @teacher.initiate_conversation([@student]).add_message("ohai", :media_comment => mc)
       m.read_attribute(:has_media_objects).should be_true
       m.conversation.reload.has_media_objects.should be_true
       m.conversation.conversation_participants.all?(&:has_media_objects?).should be_true
@@ -255,11 +268,68 @@ describe ConversationMessage do
       mc.media_id = 'asdf'
       mc.context = mc.user = @teacher
       mc.save
-      m1 = @teacher.initiate_conversation([user.id]).add_message("ohai", :media_comment => mc)
-      m2 = @teacher.initiate_conversation([@student.id]).add_message("lulz", :forwarded_message_ids => [m1.id])
+      m1 = @teacher.initiate_conversation([user]).add_message("ohai", :media_comment => mc)
+      m2 = @teacher.initiate_conversation([@student]).add_message("lulz", :forwarded_message_ids => [m1.id])
       m2.read_attribute(:has_media_objects).should be_true
       m2.conversation.reload.has_media_objects.should be_true
       m2.conversation.conversation_participants.all?(&:has_media_objects?).should be_true
+    end
+  end
+
+  describe "reply_from" do
+    it "should ignore replies on deleted accounts" do
+      course_with_teacher
+      student_in_course
+      conversation = @teacher.initiate_conversation([@user])
+      cm = conversation.add_message("initial message", :root_account_id => Account.default.id)
+
+      Account.default.destroy
+      cm.reload
+
+      lambda { cm.reply_from({
+        :purpose => 'general',
+        :user => @teacher,
+        :subject => "an email reply",
+        :html => "body",
+        :text => "body"
+      }) }.should raise_error(IncomingMail::Errors::UnknownAddress)
+    end
+
+    it "should reply only to the message author on conversations2 conversations" do
+      course_with_teacher
+      users = 3.times.map{ course_with_student(course: @course).user }
+      conversation = Conversation.initiate(users, false, :context_type => 'Course', :context_id => @course.id)
+      cm1 = conversation.add_message(users[0], "initial message", :root_account_id => Account.default.id)
+      cm2 = conversation.add_message(users[1], "subsequent message", :root_account_id => Account.default.id)
+      cm2.conversation_message_participants.size.should == 3
+      cm3 = cm2.reply_from({
+        :purpose => 'general',
+        :user => users[2],
+        :subject => "an email reply",
+        :html => "body",
+        :text => "body"
+      })
+      cm3.conversation_message_participants.size.should == 2
+      cm3.conversation_message_participants.map{|x| x.user_id}.sort.should == [users[1].id, users[2].id].sort
+    end
+
+    it "should mark conversations as read for the replying author" do
+      course_with_teacher
+      student_in_course
+      cp = @teacher.initiate_conversation([@user])
+      cm = cp.add_message("initial message", :root_account_id => Account.default.id)
+
+      cp2 = cp.conversation.conversation_participants.find_by_user_id(@user.id)
+      cp2.workflow_state.should == 'unread'
+      cm.reply_from({
+        :purpose => 'general',
+        :user => @user,
+        :subject => "an email reply",
+        :html => "body",
+        :text => "body"
+      })
+      cp2.reload
+      cp2.workflow_state.should == 'read'
     end
   end
 end

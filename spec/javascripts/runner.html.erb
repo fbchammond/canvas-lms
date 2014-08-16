@@ -4,6 +4,7 @@
   <meta http-equiv=Content-type content="text/html; charset=utf-8">
   <title>Tests</title>
   <link rel="stylesheet" href="support/qunit/qunit.css" type="text/css">
+  <link rel="stylesheet" href="../../public/stylesheets_compiled/legacy_normal_contrast/g_base.css" type="text/css">
   <style>
   body {
     font-family: 'Helvetica', 'Verdana';
@@ -34,8 +35,12 @@
   <div id="fixtures"></div>
 
   <script src="support/qunit/qunit.js"></script>
-  <script src="support/sinon/sinon-1.3.1.js"></script>
+  <script src="support/sinon/sinon-1.7.3.js"></script>
+  <script src="support/sinon/sinon-patch.js"></script>
   <script src="support/sinon/sinon-qunit-1.0.0.js"></script>
+  <script>
+    if (location.hash === '#testem') document.write('<script src="/testem.js"></'+'script>')
+  </script>
   <script>
     var require = {
       urlArgs: "bust=" +  (new Date()).getTime(),
@@ -54,7 +59,7 @@
         },
         {
           name: 'helpers',
-          location: '../../spec/javascripts/helpers',
+          location: '../../spec/javascripts/compiled/helpers',
           main: 'helpers',
           lib: './'
         },
@@ -68,16 +73,63 @@
           name: 'spec',
           location: '../../spec'
         },
-      ]
+      ].concat(<%= packages %>)
     };
   </script>
   <script src="../../public/javascripts/vendor/require.js"></script>
   <script>
-    // don't run specs until they are all loaded
-    stop();
-    require(<%= Dir["spec/javascripts/**/*Spec.js"].map{ |file| file.sub(/\.js$/, '') }.inspect %>, function() {
-      // run specs once they've all loaded
-      start();
+    // keep JSON.stingify from puking on dom nodes in testem
+    (function() {
+      var toString = Object.prototype.toString;
+      QUnit.log(function(result) {
+        if (result.actual instanceof HTMLElement) {
+          result.actual = result.actual.toString();
+          result.expected = result.expected.toString();
+        }
+        if (toString.call(result.actual) == '[object Array]') {
+          for (var i = 0; i < result.actual.length; i++) {
+            if (result.actual[i] instanceof HTMLElement) {
+              result.actual[i] = result.actual[i].toString();
+              result.expected[i] = result.expected[i].toString();
+            }
+          }
+        }
+      });
+    })();
+
+    // start loading specs now. if there's a callback by the time they finish
+    // loading, execute it.
+    var specsLoading = true;
+    var onSpecsLoaded = null;
+    require(<%=
+      Dir[
+        "public/javascripts/#{matcher}",
+        "spec/javascripts/compiled/#{matcher}",
+        "spec/plugins/*/javascripts/compiled/#{matcher}"
+      ].map{ |file| file.sub(/\.js$/, '').sub(/public\/javascripts\//, '') }.inspect
+    %>, function() {
+      specsLoading = false;
+      if (onSpecsLoaded) onSpecsLoaded();
+    });
+
+    // don't try and start right when QUnit.load finishes. we want to check
+    // spec loading status.
+    QUnit.config.autostart = false;
+
+    QUnit.begin(function() {
+      // callback executed at start of QUnit.load, but we need to let it finish
+      // first
+      setTimeout(function() {
+        // QUnit loaded and initialized. are the specs all loaded?
+        if (specsLoading) {
+          // if not, we need to wait for them before starting. fortunately, we
+          // have a nifty onSpecsLoaded callback just for that.
+          onSpecsLoaded = function() { QUnit.start(); };
+        } else {
+          // they are! get going
+          QUnit.start();
+        }
+      });
     });
   </script>
 

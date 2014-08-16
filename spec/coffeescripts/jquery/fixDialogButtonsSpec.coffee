@@ -2,6 +2,7 @@ require [
   'jquery'
   'compiled/jquery/fixDialogButtons'
   'jquery.disableWhileLoading'
+  'helpers/jquery.simulate'
 ], ($, elementToggler)->
 
   module 'fixDialogButtons',
@@ -19,12 +20,12 @@ require [
       <form style="display:none">
         when this gets turned into a dialog, it should
         turn the buttons in the markup into proper dialog buttons
-        <button class="button">Should NOT be converted</button>
+        <button class="btn">Should NOT be converted</button>
         <div class="button-container">
-          <button class="button" data-text-while-loading="while loading" type="submit">
+          <button class="btn" data-text-while-loading="while loading" type="submit">
             This will Submit the form
           </button>
-          <a class="button dialog_closer">
+          <a class="btn dialog_closer">
             This will cause the dialog to close
           </a>
         </div>
@@ -35,7 +36,7 @@ require [
     equal $dialog.dialog('option', 'buttons').length, 2, 'converts both buttons in .button-pane only'
 
     msg = "hides the original .buttons in the .button-container only"
-    $dialog.find('.button').each ->
+    $dialog.find('.btn').each ->
       equal $(this).is(':hidden'), ($(this).text() isnt 'Should NOT be converted'), msg
 
     msg = "make sure clicking on converted ui-dialog-button causes submit handler to be called on form"
@@ -65,5 +66,32 @@ require [
     equal $dialog.dialog('isOpen'), false, msg
     
     $dialog.remove() #clean up
-    
 
+  test "enter key submits form", ->
+    $dialog = $("<form style='display:none'><input id='box' type='text'></input><div class='button-container'><button type='submit'></button></div></form>").appendTo('body').dialog()
+    $dialog.fixDialogButtons()
+
+    submitCount = 0
+    $dialog.submit (e) ->
+      e.preventDefault()
+      ++submitCount
+
+    $('#box').simulate("keyup", { keyCode: $.ui.keyCode.ENTER })
+    equal submitCount, 1
+
+    $dialog.remove()
+
+  test "enter key does not duplicate submissions if fixDialogButtons invoked more than once", ->
+    $dialog = $("<form style='display:none'><input id='box' type='text'></input><div class='button-container'><button type='submit'></button></div></form>").appendTo('body').dialog()
+    $dialog.fixDialogButtons()
+    $dialog.fixDialogButtons()
+
+    submitCount = 0
+    $dialog.submit (e) ->
+      e.preventDefault()
+      ++submitCount
+
+    $('#box').simulate("keyup", { keyCode: $.ui.keyCode.ENTER })
+    equal submitCount, 1
+
+    $dialog.remove()

@@ -1,24 +1,17 @@
 class IndexJobsOnLockedBy < ActiveRecord::Migration
   tag :predeploy
 
-  self.transactional = false
+  disable_ddl_transaction!
 
   def self.connection
     Delayed::Backend::ActiveRecord::Job.connection
   end
 
   def self.up
-    case connection.adapter_name
-    when 'PostgreSQL'
-      execute <<-SQL
-        CREATE INDEX CONCURRENTLY index_delayed_jobs_on_locked_by ON delayed_jobs (locked_by) WHERE locked_by IS NOT NULL;
-      SQL
-    else
-      add_index :delayed_jobs, :locked_by, :name => "index_delayed_jobs_on_locked_by"
-    end
+    add_index :delayed_jobs, :locked_by, :algorithm => :concurrently, :where => "locked_by IS NOT NULL"
   end
 
   def self.down
-    remove_index :delayed_jobs, :name => "index_delayed_jobs_on_locked_by"
+    remove_index :delayed_jobs, :locked_by
   end
 end

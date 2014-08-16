@@ -2,7 +2,7 @@ module UserContent
   def self.escape(str, current_host = nil)
     html = Nokogiri::HTML::DocumentFragment.parse(str)
     find_user_content(html) do |obj, uc|
-      uuid = UUIDSingleton.instance.generate
+      uuid = CanvasUUID.generate
       child = Nokogiri::XML::Node.new("iframe", html)
       child['class'] = 'user_content_iframe'
       child['name'] = uuid
@@ -72,11 +72,23 @@ module UserContent
     end
   end
 
+  # TODO: try and discover the motivation behind the "huhs"
   def self.css_size(val)
-    res = val.to_f
-    res = nil if res == 0
-    res = (res + 10).to_s + "px" if res && res.to_s == val
-    res
+    if !val || val.to_f == 0
+      # no value, non-numeric value, or 0 value (whether "0", "0px", "0%",
+      # etc.); ignore
+      nil
+    elsif val == "#{val.to_f.to_s}%" || val == "#{val.to_f.to_s}px"
+      # numeric percentage or specific px value; use as is
+      val
+    elsif val.to_f.to_s == val
+      # unadorned numeric value; make px (after adding 10... huh?)
+      (val.to_f + 10).to_s + "px"
+    else
+      # numeric value embedded, but has additional text we didn't recognize;
+      # just extract the numeric part (without a px... huh?)
+      val.to_f.to_s
+    end
   end
 
   class HtmlRewriter
@@ -88,9 +100,10 @@ module UserContent
       'collaborations' => Collaboration,
       'files' => Attachment,
       'conferences' => WebConference,
-      'quizzes' => Quiz,
+      'quizzes' => Quizzes::Quiz,
       'groups' => Group,
       'wiki' => WikiPage,
+      'pages' => WikiPage,
       'grades' => nil,
       'users' => nil,
       'external_tools' => nil,
@@ -106,7 +119,7 @@ module UserContent
       @user = user
       # capture group 1 is the object type, group 2 is the object id, if it's
       # there, and group 3 is the rest of the url, including any beginning '/'
-      @toplevel_regex = %r{/#{context.class.name.tableize}/#{context.id}/(\w+)(?:/(\d+))?(/[^\s"]*)?}
+      @toplevel_regex = %r{/#{context.class.name.tableize}/#{context.id}/(\w+)(?:/([^\s"<'\?\/]*)([^\s"<']*))?}
       @handlers = {}
       @default_handler = nil
       @unknown_handler = nil
@@ -141,7 +154,15 @@ module UserContent
       asset_types = AssetTypes.reject { |k,v| !@allowed_types.include?(k) }
 
       html.gsub(@toplevel_regex) do |relative_url|
-        type, obj_id, rest = [$1, $2.to_i, $3]
+        type, obj_id, rest = [$1, $2, $3]
+        if type != "wiki" && type != "pages"
+          if obj_id.to_i > 0
+            obj_id = obj_id.to_i
+          else
+            rest = "/#{obj_id}#{rest}" if obj_id.present? || rest.present?
+            obj_id = nil
+          end
+        end
 
         if module_item = rest.try(:match, %r{/items/(\d+)})
           type   = 'items'
@@ -149,7 +170,7 @@ module UserContent
         end
 
         if asset_types.key?(type)
-          match = UriMatch.new(relative_url, type, asset_types[type], (obj_id > 0 ? obj_id : nil), rest)
+          match = UriMatch.new(relative_url, type, asset_types[type], obj_id, rest)
           handler = @handlers[type] || @default_handler
           (handler && handler.call(match)) || relative_url
         else
@@ -161,6 +182,7 @@ module UserContent
 
     # if content is nil, it'll query the block for the content if needed (lazy content load)
     def user_can_view_content?(content = nil, &get_content)
+      return false if user.blank? && content.respond_to?(:locked?) && content.locked?
       return true unless user
       # if user given, check that the user is allowed to manage all
       # context content, or read that specific item (and it's not locked)

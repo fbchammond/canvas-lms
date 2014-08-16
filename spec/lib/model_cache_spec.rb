@@ -19,15 +19,17 @@ require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 require 'lib/model_cache'
 
 describe ModelCache do
-  before do
+  before(:all) do
     class TestModelCacheUser < ActiveRecord::Base
-      set_table_name :users # reuse exiting tables so AR doesn't asplode
+      self.table_name = :users # reuse exiting tables so AR doesn't asplode
       include ModelCache
       cacheable_by :id, :name
+
+      attr_protected
     end
 
     class TestModelCachePseudonym < ActiveRecord::Base
-      set_table_name :pseudonyms
+      self.table_name = :pseudonyms
       include ModelCache
 
       belongs_to :test_model_cache_user, :foreign_key => :user_id
@@ -35,18 +37,22 @@ describe ModelCache do
 
       belongs_to :test_model_cache_user_copy, :class_name => 'TestModelCacheUser', :foreign_key => :user_id
     end
-
-    user_with_pseudonym(:name => 'qwerty')
-    @user = TestModelCacheUser.find(:first, :conditions => {:id => @user.id})
-    @pseudonym = TestModelCachePseudonym.find(:first, :conditions => {:id => @pseudonym.id})
   end
 
-  after do
+  before do
+    user_with_pseudonym(:name => 'qwerty')
+    @user = TestModelCacheUser.where(:id => @user).first
+    @pseudonym = TestModelCachePseudonym.where(:id => @pseudonym).first
+  end
+
+  after(:all) do
     ModelCache.keys.delete('TestModelCacheUser')
     ModelCache.keys.delete('TestModelCachePseudonym')
-    subclasses = ActiveRecord::Base.send(:class_variable_get, :@@subclasses)[ActiveRecord::Base]
-    subclasses.delete(TestModelCacheUser)
-    subclasses.delete(TestModelCachePseudonym)
+    if CANVAS_RAILS2
+      subclasses = ActiveRecord::Base.send(:class_variable_get, :@@subclasses)[ActiveRecord::Base]
+      subclasses.delete(TestModelCacheUser)
+      subclasses.delete(TestModelCachePseudonym)
+    end
     Object.send(:remove_const, :TestModelCacheUser)
     Object.send(:remove_const, :TestModelCachePseudonym)
   end
@@ -81,7 +87,7 @@ describe ModelCache do
 
     it "should not cache any other lookups" do
       ModelCache.with_cache(:test_model_cache_users => [@user]) do
-        u1 = TestModelCacheUser.find(:first, :conditions => {:id => @user.id})
+        u1 = TestModelCacheUser.where(:id => @user.id).first
         u1.should eql(@user)
         u1.should_not equal(@user)
 
@@ -93,7 +99,7 @@ describe ModelCache do
 
     it "should add to the cache if records are created" do
       ModelCache.with_cache(:test_model_cache_users => [@user]) do
-        user = TestModelCacheUser.create
+        user = TestModelCacheUser.create(workflow_state: 'registered')
 
         u1 = TestModelCacheUser.find_by_id(user.id)
         u1.should equal(user)

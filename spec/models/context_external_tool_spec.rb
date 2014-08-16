@@ -44,7 +44,7 @@ describe ContextExternalTool do
     
     it "should validate with a canvas lti extension url setting" do
       @tool = @course.context_external_tools.new(:name => "a", :consumer_key => '12345', :shared_secret => 'secret')
-      @tool.settings[:editor_button] = {
+      @tool.editor_button = {
         "icon_url"=>"http://www.example.com/favicon.ico", 
         "text"=>"Example",
         "url"=>"http://www.example.com",
@@ -59,7 +59,7 @@ describe ContextExternalTool do
     def url_test(nav_url=nil)
       course_with_teacher(:active_all => true)
       @tool = @course.context_external_tools.new(:name => "a", :consumer_key => '12345', :shared_secret => 'secret', :url => "http://www.example.com")
-      [:course_navigation, :account_navigation, :user_navigation, :resource_selection, :editor_button].each do |type|
+      ContextExternalTool::EXTENSION_TYPES.each do |type|
         @tool.send "#{type}=", {
                 :url => nav_url,
                 :text => "Example",
@@ -67,14 +67,13 @@ describe ContextExternalTool do
                 :selection_width => 50,
                 :selection_height => 50
         }
-        @tool.save!
-        launch = @tool.create_launch(@course, @user, "http://test.com", type)
-        launch.resource_type.should == type
+
+        launch_url = @tool.extension_setting(type, :url)
 
         if nav_url
-          launch.url.should == nav_url
+          launch_url.should == nav_url
         else
-          launch.url.should == @tool.url
+          launch_url.should == @tool.url
         end
       end
     end
@@ -99,8 +98,14 @@ describe ContextExternalTool do
     it "should not validate with no domain or url setting" do
       @tool = @course.context_external_tools.create(:name => "a", :consumer_key => '12345', :shared_secret => 'secret')
       @tool.should be_new_record
-      @tool.errors['url'].should == "Either the url or domain should be set."
-      @tool.errors['domain'].should == "Either the url or domain should be set."
+      @tool.errors['url'].should == ["Either the url or domain should be set."]
+      @tool.errors['domain'].should == ["Either the url or domain should be set."]
+    end
+
+    it "should accept both a domain and a url" do
+      @tool = @course.context_external_tools.create(:name => "a", :domain => "google.com", :url => "http://google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      @tool.should_not be_new_record
+      @tool.errors.should be_empty
     end
   end
 
@@ -156,12 +161,40 @@ describe ContextExternalTool do
       @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness", Course.find(@course.id))
       @found_tool.should eql(@tool)
     end
-    
+
+    it "should match on url ignoring query parameters" do
+      @tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com/coolness", :consumer_key => '12345', :shared_secret => 'secret')
+      @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness?a=1", Course.find(@course.id))
+      @found_tool.should eql(@tool)
+      @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness?a=1&b=2", Course.find(@course.id))
+      @found_tool.should eql(@tool)
+    end
+
+    it "should match on url even when tool url contains query parameters" do
+      @tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com/coolness?a=1&b=2", :consumer_key => '12345', :shared_secret => 'secret')
+      @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness?b=2&a=1", Course.find(@course.id))
+      @found_tool.should eql(@tool)
+      @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness?c=3&b=2&d=4&a=1", Course.find(@course.id))
+      @found_tool.should eql(@tool)
+    end
+
+    it "should not match on url if the tool url contains query parameters that the search url doesn't" do
+      @tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com/coolness?a=1", :consumer_key => '12345', :shared_secret => 'secret')
+      @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness?a=2", Course.find(@course.id))
+      @found_tool.should be_nil
+    end
+
     it "should not match on url before matching on domain" do
       @tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com/coolness", :consumer_key => '12345', :shared_secret => 'secret')
       @tool2 = @course.context_external_tools.create!(:name => "a", :domain => "www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
       @found_tool = ContextExternalTool.find_external_tool("http://www.google.com/coolness", Course.find(@course.id))
       @found_tool.should eql(@tool)
+    end
+
+    it "should match on url or domain for a tool that has both" do
+      @tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com/coolness", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      ContextExternalTool.find_external_tool("http://google.com/is/cool", Course.find(@course.id)).should eql(@tool)
+      ContextExternalTool.find_external_tool("http://www.google.com/coolness", Course.find(@course.id)).should eql(@tool)
     end
     
     it "should find the context's tool matching on url first" do
@@ -233,17 +266,10 @@ describe ContextExternalTool do
       @found_tool.should eql(@tool2)
     end
     
-    it "should find the preferred tool even if there is a higher priority tool configured, provided the preferred tool has resource_selection set" do
+    it "should find the preferred tool even if there is a higher priority tool configured" do
       @tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
-      @course.context_external_tools.create!(:name => "b", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
-      @account.context_external_tools.create!(:name => "c", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
-      @account.context_external_tools.create!(:name => "d", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
-      @root_account.context_external_tools.create!(:name => "e", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
-      @preferred = @root_account.context_external_tools.create!(:name => "f", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
-      @found_tool = ContextExternalTool.find_external_tool("http://www.google.com", Course.find(@course.id), @preferred.id)
-      @found_tool.should eql(@tool)
-      @preferred.settings[:resource_selection] = {:url => "http://www.example.com", :selection_width => 400, :selection_height => 400}
-      @preferred.save!
+      @preferred = @root_account.context_external_tools.create!(:name => "f", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
+
       @found_tool = ContextExternalTool.find_external_tool("http://www.google.com", Course.find(@course.id), @preferred.id)
       @found_tool.should eql(@preferred)
     end
@@ -259,28 +285,42 @@ describe ContextExternalTool do
       @found_tool = ContextExternalTool.find_external_tool("http://www.google.com", Course.find(@course.id), @preferred.id)
       @found_tool.should eql(@tool)
     end
+
+    it "should not return preferred tool outside of context chain" do
+      preferred = @root_account.context_external_tools.create!(:name => "a", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      ContextExternalTool.find_external_tool("http://www.google.com", @course, preferred.id).should == preferred
+    end
+
+    it "should not return preferred tool if url doesn't match" do
+      c1 = @course
+      c2 = course_model
+      preferred = c1.context_external_tools.create!(:name => "a", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      ContextExternalTool.find_external_tool("http://example.com", c2, preferred.id).should be_nil
+    end
+
   end
   
   describe "custom fields" do
     it "should parse custom_fields_string from a text field" do
       tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret')
       tool.custom_fields_string=("a=1\nbT^@!#n_40=123\n\nc=")
-      tool.settings[:custom_fields].should_not be_nil
-      tool.settings[:custom_fields].keys.length.should == 2
-      tool.settings[:custom_fields]['a'].should == '1'
-      tool.settings[:custom_fields]['bT^@!#n_40'].should == '123'
-      tool.settings[:custom_fields]['c'].should == nil
+      tool.custom_fields.should_not be_nil
+      tool.custom_fields.keys.length.should == 2
+      tool.custom_fields['a'].should == '1'
+      tool.custom_fields['bT^@!#n_40'].should == '123'
+      tool.custom_fields['c'].should == nil
     end
     
     it "should return custom_fields_string as a text-formatted field" do
       tool = @course.context_external_tools.create!(:name => "a", :url => "http://www.google.com", :consumer_key => '12345', :shared_secret => 'secret', :custom_fields => {'a' => '123', 'b' => '456'})
-      tool.custom_fields_string.should == "a=123\nb=456"
+      fields_string = tool.custom_fields_string
+      fields_string.should == "a=123\nb=456"
     end
 
     it "should merge custom fields for extension launches" do
       course_with_teacher(:active_all => true)
       @tool = @course.context_external_tools.new(:name => "a", :consumer_key => '12345', :shared_secret => 'secret', :custom_fields => {'a' => "1", 'b' => "2"}, :url =>"http://www.example.com")
-      [:course_navigation, :account_navigation, :user_navigation, :resource_selection, :editor_button].each do |type|
+      ContextExternalTool::EXTENSION_TYPES.each do |type|
         @tool.send "#{type}=",  {
           :text =>"Example",
           :url =>"http://www.example.com",
@@ -291,14 +331,16 @@ describe ContextExternalTool do
         }
         @tool.save!
 
-        hash = @tool.create_launch(@course, @user, "http://test.com", type).generate
+        hash = {}
+        @tool.set_custom_fields(hash, type)
         hash["custom_a"].should == "1"
         hash["custom_b"].should == "5"
         hash["custom_c"].should == "3"
 
+        hash = {}
         @tool.settings[type.to_sym][:custom_fields] = nil
-        @tool.save!
-        hash = @tool.create_launch(@course, @user, "http://test.com", type).generate
+        @tool.set_custom_fields(hash, type)
+
         hash["custom_a"].should == "1"
         hash["custom_b"].should == "2"
         hash.has_key?("custom_c").should == false
@@ -318,6 +360,35 @@ describe ContextExternalTool do
       ContextExternalTool.all_tools_for(@course).should eql(@tools.sort_by(&:name))
     end
   end
+
+  describe "find_integration_for" do
+    it "should return nil if there are no matching integrations" do
+      at  = @account.context_external_tools.create!(name: 'at', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      ait = @account.context_external_tools.create!(name: 'ait', integration_type: 'other', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      ct  = @course.context_external_tools.create!(name: 'ct', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      cit = @course.context_external_tools.create!(name: 'cit', integration_type: 'other', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      integration = ContextExternalTool.find_integration_for(@course, 'testing')
+      integration.should be_nil
+    end
+
+    it "should find the integration in the specified context" do
+      at  = @account.context_external_tools.create!(name: 'at', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      ait = @account.context_external_tools.create!(name: 'ait', integration_type: 'testing', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      ct  = @course.context_external_tools.create!(name: 'ct', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      cit = @course.context_external_tools.create!(name: 'cit', integration_type: 'testing', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      integration = ContextExternalTool.find_integration_for(@course, 'testing')
+      integration.id.should == cit.id
+    end
+
+    it "should find the integration in the nearest context" do
+      at  = @account.context_external_tools.create!(name: 'at', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      ait = @account.context_external_tools.create!(name: 'ait', integration_type: 'testing', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      rt  = @root_account.context_external_tools.create!(name: 'rt', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      rit = @root_account.context_external_tools.create!(name: 'rit', integration_type: 'testing', url: 'http://example.com', consumer_key: '12345', shared_secret: 'secret')
+      integration = ContextExternalTool.find_integration_for(@course, 'testing')
+      integration.id.should == ait.id
+    end
+  end
   
   describe "infer_defaults" do
     def new_external_tool
@@ -328,56 +399,53 @@ describe ContextExternalTool do
       tool = new_external_tool
       tool.settings = {:user_navigation => {:bob => 'asfd'}}
       tool.save
-      tool.settings[:user_navigation].should be_nil
+      tool.user_navigation.should be_nil
       tool.settings = {:user_navigation => {:url => "http://www.example.com"}}
       tool.save
-      tool.settings[:user_navigation].should_not be_nil
+      tool.user_navigation.should_not be_nil
     end
     
     it "should require valid configuration for course navigation settings" do
       tool = new_external_tool
       tool.settings = {:course_navigation => {:bob => 'asfd'}}
       tool.save
-      tool.settings[:course_navigation].should be_nil
+      tool.course_navigation.should be_nil
       tool.settings = {:course_navigation => {:url => "http://www.example.com"}}
       tool.save
-      tool.settings[:course_navigation].should_not be_nil
+      tool.course_navigation.should_not be_nil
     end
     
     it "should require valid configuration for account navigation settings" do
       tool = new_external_tool
       tool.settings = {:account_navigation => {:bob => 'asfd'}}
       tool.save
-      tool.settings[:account_navigation].should be_nil
+      tool.account_navigation.should be_nil
       tool.settings = {:account_navigation => {:url => "http://www.example.com"}}
       tool.save
-      tool.settings[:account_navigation].should_not be_nil
+      tool.account_navigation.should_not be_nil
     end
     
     it "should require valid configuration for resource selection settings" do
       tool = new_external_tool
       tool.settings = {:resource_selection => {:bob => 'asfd'}}
       tool.save
-      tool.settings[:resource_selection].should be_nil
-      tool.settings = {:resource_selection => {:url => "http://www.example.com"}}
-      tool.save
-      tool.settings[:resource_selection].should be_nil
+      tool.resource_selection.should be_nil
       tool.settings = {:resource_selection => {:url => "http://www.example.com", :selection_width => 100, :selection_height => 100}}
       tool.save
-      tool.settings[:resource_selection].should_not be_nil
+      tool.resource_selection.should_not be_nil
     end
     
     it "should require valid configuration for editor button settings" do
       tool = new_external_tool
       tool.settings = {:editor_button => {:bob => 'asfd'}}
       tool.save
-      tool.settings[:editor_button].should be_nil
+      tool.editor_button.should be_nil
       tool.settings = {:editor_button => {:url => "http://www.example.com"}}
       tool.save
-      tool.settings[:editor_button].should be_nil
+      tool.editor_button.should be_nil
       tool.settings = {:editor_button => {:url => "http://www.example.com", :icon_url => "http://www.example.com", :selection_width => 100, :selection_height => 100}}
       tool.save
-      tool.settings[:editor_button].should_not be_nil
+      tool.editor_button.should_not be_nil
     end
     
     it "should set has_user_navigation if navigation configured" do
@@ -423,17 +491,123 @@ describe ContextExternalTool do
     it "should allow setting tool_id and icon_url" do
       tool = new_external_tool
       tool.tool_id = "new_tool"
-      tool.settings[:icon_url] = "http://www.example.com/favicon.ico"
+      tool.icon_url = "http://www.example.com/favicon.ico"
       tool.save
       tool.tool_id.should == "new_tool"
-      tool.settings[:icon_url].should == "http://www.example.com/favicon.ico"
+      tool.icon_url.should == "http://www.example.com/favicon.ico"
     end
-    
-    it "should use editor button's icon_url if none is set on the tool" do
-      tool = new_external_tool
-      tool.settings = {:editor_button => {:url => "http://www.example.com", :icon_url => "http://www.example.com/favicon.ico", :selection_width => 100, :selection_height => 100}}
+  end
+
+  describe "extension settings" do
+    let(:tool) do
+      tool = @root_account.context_external_tools.new({:name => "t", :consumer_key => '12345', :shared_secret => 'secret', :url => "http://google.com/launch_url"})
+      tool.settings = {:selection_width => 100, :selection_height => 100, :icon_url => "http://www.example.com/favicon.ico"}
       tool.save
-      tool.settings[:icon_url].should == "http://www.example.com/favicon.ico"
+      tool
+    end
+
+    it "should get the tools launch url if no extension urls are configured" do
+      tool.editor_button = {:enabled => true}
+      tool.save
+      tool.editor_button(:url).should == "http://google.com/launch_url"
+    end
+
+    it "should fall back to tool defaults" do
+      tool.editor_button = {:url => "http://www.example.com"}
+      tool.save
+      tool.editor_button.should_not == nil
+      tool.editor_button(:url).should == "http://www.example.com"
+      tool.editor_button(:icon_url).should == "http://www.example.com/favicon.ico"
+      tool.editor_button(:selection_width).should == 100
+    end
+
+    it "should return nil if the tool is not enabled" do
+      tool.resource_selection.should == nil
+      tool.resource_selection(:url).should == nil
+    end
+
+    it "should get properties for each tool extension" do
+      tool.course_navigation = {:enabled => true}
+      tool.account_navigation = {:enabled => true}
+      tool.user_navigation = {:enabled => true}
+      tool.resource_selection = {:enabled => true}
+      tool.editor_button = {:enabled => true}
+      tool.save
+      tool.course_navigation.should_not == nil
+      tool.account_navigation.should_not == nil
+      tool.user_navigation.should_not == nil
+      tool.resource_selection.should_not == nil
+      tool.editor_button.should_not == nil
+    end
+
+    describe "display_type" do
+      it "should be 'in_context' by default" do
+        tool.display_type(:course_navigation).should == 'in_context'
+        tool.course_navigation = {enabled: true}
+        tool.save!
+        tool.display_type(:course_navigation).should == 'in_context'
+      end
+
+      it "should be configurable by a property" do
+        tool.course_navigation = { enabled: true }
+        tool.settings[:display_type] = "custom_display_type"
+        tool.save!
+        tool.display_type(:course_navigation).should == 'custom_display_type'
+      end
+
+      it "should be configurable in extension" do
+        tool.course_navigation = {display_type: 'other_display_type'}
+        tool.save!
+        tool.display_type(:course_navigation).should == 'other_display_type'
+      end
+    end
+  end
+
+  describe "change_domain" do
+    let(:prod_base_url) {'http://www.example.com'}
+    let(:new_host) {'test.example.com'}
+
+    let(:tool) do
+      tool = @root_account.context_external_tools.new(:name => "bob", :consumer_key => "bob", :shared_secret => "bob", :domain => "www.example.com", :url => prod_base_url)
+      tool.settings = {:url => prod_base_url, :icon_url => "#{prod_base_url}/icon.ico"}
+      tool.account_navigation = {:url => "#{prod_base_url}/launch?my_var=1"}
+      tool.editor_button = {:url => "#{prod_base_url}/resource_selection", :icon_url => "#{prod_base_url}/resource_selection.ico"}
+      tool
+    end
+
+    it "should update the domain" do
+      tool.change_domain! new_host
+      tool.domain.should == new_host
+      URI.parse(tool.url).host.should == new_host
+      URI.parse(tool.settings[:url]).host.should == new_host
+      URI.parse(tool.icon_url).host.should == new_host
+      URI.parse(tool.account_navigation[:url]).host.should == new_host
+      URI.parse(tool.editor_button[:url]).host.should == new_host
+      URI.parse(tool.editor_button[:icon_url]).host.should == new_host
+    end
+
+    it "should ignore domain if it is nil" do
+      tool.domain = nil
+      tool.change_domain! new_host
+      tool.domain.should be_nil
+    end
+
+    it "should ignore launch url if it is nil" do
+      tool.url = nil
+      tool.change_domain! new_host
+      tool.url.should be_nil
+    end
+
+    it "should ignore custom fields" do
+      tool.custom_fields = {:url => 'http://www.google.com/'}
+      tool.change_domain! new_host
+      tool.custom_fields[:url].should == 'http://www.google.com/'
+    end
+
+    it "should ignore environments fields" do
+      tool.settings["environments"] = {:launch_url => 'http://www.google.com/'}
+      tool.change_domain! new_host
+      tool.settings["environments"].should == {:launch_url => 'http://www.google.com/'}
     end
   end
 
@@ -508,7 +682,7 @@ describe ContextExternalTool do
     it "should find the tool if it's attached to the course" do
       course_model
       tool = new_external_tool @course
-      tool.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
+      tool.course_navigation = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       ContextExternalTool.find_for(tool.id, @course, :course_navigation).should == tool
       (ContextExternalTool.find_for(tool.id, @course, :user_navigation) rescue nil).should be_nil
@@ -520,7 +694,7 @@ describe ContextExternalTool do
     it "should find the tool if it's attached to the course's account" do
       course_model
       tool = new_external_tool @course.account
-      tool.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
+      tool.course_navigation = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       ContextExternalTool.find_for(tool.id, @course, :course_navigation).should == tool
       (ContextExternalTool.find_for(tool.id, @course, :user_navigation) rescue nil).should be_nil
@@ -529,7 +703,7 @@ describe ContextExternalTool do
     it "should find the tool if it's attached to the course's root account" do
       course_model
       tool = new_external_tool @course.root_account
-      tool.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
+      tool.course_navigation = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       ContextExternalTool.find_for(tool.id, @course, :course_navigation).should == tool
       (ContextExternalTool.find_for(tool.id, @course, :user_navigation) rescue nil).should be_nil
@@ -539,7 +713,7 @@ describe ContextExternalTool do
       course_model
       @account = @course.account.sub_accounts.create!(:name => "sub-account")
       tool = new_external_tool @account
-      tool.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
+      tool.course_navigation = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       (ContextExternalTool.find_for(tool.id, @course, :course_navigation) rescue nil).should be_nil
     end
@@ -548,7 +722,7 @@ describe ContextExternalTool do
       @course2 = course_model
       @course = course_model
       tool = new_external_tool @course2
-      tool.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
+      tool.course_navigation = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       (ContextExternalTool.find_for(tool.id, @course, :course_navigation) rescue nil).should be_nil
     end
@@ -556,25 +730,33 @@ describe ContextExternalTool do
     it "should not find the tool if it's not enabled for the correct navigation type" do
       course_model
       tool = new_external_tool @course
-      tool.settings[:course_navigation] = {:url => "http://www.example.com", :text => "Example URL"}
+      tool.course_navigation = {:url => "http://www.example.com", :text => "Example URL"}
       tool.save!
       (ContextExternalTool.find_for(tool.id, @course, :user_navigation) rescue nil).should be_nil
     end
-  end
-  
-  describe "import_from_migration" do
-    it "should work for course-level tools" do
+
+    it "should raise RecordNotFound if the id is invalid" do
       course_model
-      tool = ContextExternalTool.import_from_migration({:title => 'tool', :url => 'http://example.com'}, @course)
-      tool.should_not be_nil
-      tool.context.should == @course
+      expect { ContextExternalTool.find_for("horseshoes", @course, :course_navigation) }.to raise_error(ActiveRecord::RecordNotFound)
     end
-    
-    it "should work for account-level tools" do
-      course_model
-      tool = ContextExternalTool.import_from_migration({:title => 'tool', :url => 'http://example.com'}, @course.account)
-      tool.should_not be_nil
-      tool.context.should == @course.account
+  end
+
+  describe "opaque_identifier_for" do
+    it "should create lti_context_id for asset" do
+      @course.lti_context_id.should == nil
+      @tool = @course.context_external_tools.create!(:name => "a", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      context_id = @tool.opaque_identifier_for(@course)
+      @course.reload
+      @course.lti_context_id.should == context_id
+    end
+
+    it "should not create new lti_context for asset if exists" do
+      @course.lti_context_id =  'dummy_context_id'
+      @course.save!
+      @tool = @course.context_external_tools.create!(:name => "a", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      context_id = @tool.opaque_identifier_for(@course)
+      @course.reload
+      @course.lti_context_id.should == 'dummy_context_id'
     end
   end
 end

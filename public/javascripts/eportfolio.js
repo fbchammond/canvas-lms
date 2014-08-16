@@ -32,6 +32,7 @@ define([
   'jquery.inst_tree' /* instTree */,
   'jquery.instructure_forms' /* formSubmit, getFormData, formErrors, errorBox */,
   'jqueryui/dialog',
+  'compiled/jquery/fixDialogButtons' /* fix dialog formatting */,
   'jquery.instructure_misc_helpers' /* replaceTags, scrollSidebar */,
   'jquery.instructure_misc_plugins' /* confirmDelete, showIf */,
   'jquery.loadingImg' /* loadingImage */,
@@ -42,6 +43,16 @@ define([
   'jqueryui/progressbar' /* /\.progressbar/ */,
   'jqueryui/sortable' /* /\.sortable/ */
 ], function(I18n, $) {
+
+  var ePortfolioValidations = {
+    object_name: 'eportfolio',
+    property_validations: {
+      'name': function(value){
+        if (!value || value.trim() == '') { return I18n.t("errors.name_required", "Name is required")}
+        if (value && value.length > 255) { return I18n.t("errors.name_too_long", "Name is too long")}
+      }
+    }
+  };
 
   function ePortfolioFormData() {
     var data = $("#edit_page_form").getFormData({
@@ -75,17 +86,35 @@ define([
   $(document).ready(function() {
     $(".portfolio_settings_link").click(function(event) {
       event.preventDefault();
-      $("#edit_eportfolio_form").dialog('close').dialog({
-        autoOpen: false,
+      $("#edit_eportfolio_form").dialog({
         width: "auto",
         title: I18n.t('eportfolio_settings', "ePortfolio Settings")
-      }).dialog('open');
+      }).fixDialogButtons();
     });
+    // Add ePortfolio related
+    $(".add_eportfolio_link").click(function(event) {
+      event.preventDefault();
+      $("#whats_an_eportfolio").slideToggle();
+      $("#add_eportfolio_form").slideToggle(function() {
+        $(this).find(":text:first").focus().select();
+      });
+    });
+    $("#add_eportfolio_form .cancel_button").click(function() {
+      $("#add_eportfolio_form").slideToggle();
+      $("#whats_an_eportfolio").slideToggle();
+    });
+    $('#add_eportfolio_form').submit(function(){
+      var $this = $(this);
+      var result = $this.validateForm(ePortfolioValidations);
+      if(!result) {
+        return false;
+      }
+    });
+    // Edit ePortfolio related
     $("#edit_eportfolio_form .cancel_button").click(function(event) {
       $("#edit_eportfolio_form").dialog('close');
     });
-    $("#edit_eportfolio_form").formSubmit({
-      object_name: 'eportfolio', 
+    $("#edit_eportfolio_form").formSubmit($.extend(ePortfolioValidations, {
       beforeSubmit: function(data) {
         $(this).loadingImage();
       },
@@ -93,7 +122,7 @@ define([
         $(this).loadingImage('remove');
         $(this).dialog('close');
       }
-    });
+    }));
     $(".edit_content_link").click(function(event) {
       event.preventDefault();
       $(".edit_content_link_holder").hide();
@@ -149,11 +178,11 @@ define([
       $("#edit_page_form,#page_content,#page_sidebar").removeClass('previewing');
       $("#page_content .preview_section").remove();
     }).end().find(".cancel_button").click(function() {
+      $('.edit_section').editorBox('destroy');
       $("#edit_page_form,#page_content,#page_sidebar").removeClass('editing');
       $("#page_content .section.unsaved").remove();
       $(".edit_content_link_holder").show();
       $("#edit_page_form .edit_section").each(function() {
-        $(this).editorBox('destroy');
         $(this).remove();
       });
       $("#page_content .section .form_content").remove();
@@ -179,15 +208,16 @@ define([
         return data;
       },
       beforeSubmit: function(data) {
+        $('.edit_section').editorBox('destroy');
         $("#edit_page_form,#page_content,#page_sidebar").removeClass('editing').removeClass('previewing');
-        $("#page_content .section.unsaved").remove();
+        $("#page_content .section.unsaved,#page_content .section .form_content").remove();
         $("#edit_page_form .edit_section").each(function() {
-          $(this).editorBox('destroy');
           $(this).remove();
         });
         $(this).loadingImage();
       },
       success: function(data) {
+        $(document).triggerHandler('page_updated', data);
         $(".edit_content_link_holder").show();
         if(data.eportfolio_entry.allow_comments) {
           $("#page_comments_holder").slideDown('fast');
@@ -198,6 +228,8 @@ define([
     $("#edit_page_form .switch_views_link").click(function(event) {
       event.preventDefault();
       $("#edit_page_content").editorBox('toggle');
+      //  todo: replace .andSelf with .addBack when JQuery is upgraded.
+      $(this).siblings(".switch_views_link").andSelf().toggle();
     });
     $("#edit_page_sidebar .add_content_link").click(function(event) {
       event.preventDefault();
@@ -302,7 +334,7 @@ define([
       });
       $(this).parents(".section").find(".section_content").empty().append($message.show());
       var $form = $("#upload_file_form").clone(true).attr('id', '');
-      $("body").append($form.hide());
+      $("body").append($form.css({position: 'absolute', zIndex: -1}));
       $form.data('section', $section);
       $form.find(".file_upload").remove().end()
         .append($upload)
@@ -311,6 +343,14 @@ define([
     });
     $("#upload_file_form").formSubmit({
       fileUpload: true,
+      fileUploadOptions: {
+        preparedFileUpload: true,
+        upload_only: true,
+        singleFile: true,
+        context_code: ENV.context_code,
+        folder_id: ENV.folder_id,
+        formDataTarget: 'uploadDataUrl'
+      },
       object_name: 'attachment',
       processData: function(data) {
         if(!data.uploaded_data) {
@@ -394,15 +434,14 @@ define([
         $("#add_submission_form .submission_description").val(
           I18n.t('default_description', "This is my %{assignment} submission for %{course}.",
             { 'assignment': assignment, 'course': context }));
-        $("#add_submission_form").dialog('close').dialog({
-          autoOpen: false,
+        $("#add_submission_form").dialog({
           title: I18n.t('titles.add_submission', 'Add Page for Submission'),
           width: 400,
           open: function() {
             $(this).find(":text:visible:first").val(assignment).focus().select();
             $(document).triggerHandler('submission_dialog_opened');
           }
-        }).dialog('open');
+        }).fixDialogButtons();
       }
     });
     $("#add_submission_form .cancel_button").click(function() {
@@ -505,7 +544,6 @@ define([
   function saveObject($obj, type) {
     var isSaving = $obj.data('event_pending');
     if(isSaving || $obj.length === 0) { return; }
-    $obj.data('event_pending', true);
     var method = "PUT";
     var url = $obj.find(".rename_" + type + "_url").attr('href');
     if($obj.attr('id') == type + '_new') {
@@ -530,6 +568,7 @@ define([
     if(method == "POST") {
       $obj.attr('id', type + '_saving');
     }
+    $obj.data('event_pending', true);
     $obj.addClass('event_pending');
     $.ajaxJSON(url, method, data, function(data) {
       $obj.removeClass('event_pending');
@@ -548,7 +587,27 @@ define([
       });
       $obj.data('event_pending', false);
       countObjects(type);
-    });
+    },
+    // error callback
+    function(data, xhr, textStatus, errorThrown){
+      $obj.removeClass('event_pending');
+      $obj.data('event_pending', false);
+      var name_message = I18n.t("errors.section_name_invalid", "Section name is not valid")
+      if (xhr['name'] && xhr['name'].length > 0 && xhr['name'][0]['message'] == 'too_long') {
+        name_message = I18n.t("errors.section_name_too_long", "Section name is too long");
+      }
+      if ($obj.hasClass('unsaved')) {
+        alert(name_message);
+        $obj.remove();
+      }
+      else {
+        // put back in "edit" mode
+        $obj.find('.edit_section_link').click();
+        $obj.find('#section_name').errorBox(name_message).css('z-index', 20)
+      }
+    },
+    // options
+    {skipDefaultError: true});
     return true;
   }
   function editObject($obj, type) {
@@ -597,6 +656,15 @@ define([
         id: 'page_' + entry.id,
         hrefValues: ['id', 'slug']
       });
+      // update links (unable to take advantage of fillTemplateData's hrefValues for updates)
+      if(event.type == "page_updated"){
+        var page_url = $("#page_blank .page_url").attr('href');
+        var rename_page_url = $("#page_blank .rename_page_url").attr('href');
+        page_url = $.replaceTags(page_url, 'slug', entry.slug);
+        rename_page_url = $.replaceTags(page_url, 'id', entry.id);
+        $page.find(".page_url").attr('href', page_url);
+        $page.find(".rename_page_url").attr('href', rename_page_url);
+      }
       var $entry = $("#structure_entry_" + entry.id);
       if($entry.length === 0) {
         $entry = $("#structure_entry_blank").clone(true).removeAttr('id');
@@ -606,6 +674,13 @@ define([
         id: 'structure_entry_' + entry.id,
         data: entry
       });
+      var $activePage = $("#eportfolio_entry_" + entry.id);
+      if($activePage.length) {
+        $activePage.fillTemplateData({
+          id: 'eportfolio_entry_' + entry.id,
+          data: entry
+        });
+      }
       countObjects('page');
     });
     $(".manage_pages_link,#section_pages .done_editing_button").click(function(event) {
@@ -629,7 +704,7 @@ define([
             var valid_ids = [];
             for(var idx in ids) {
               var id = ids[idx];
-              id = parseInt(id.substring(5));
+              id = id.substring(5);
               if(!isNaN(id)) { valid_ids.push(id); }
             }
             var order = valid_ids.join(",");
@@ -760,7 +835,7 @@ define([
             var valid_ids = [];
             for(var idx in ids) {
               var id = ids[idx];
-              id = parseInt(id.substring(8));
+              id = id.substring(8);
               if(!isNaN(id)) { valid_ids.push(id); }
             }
             var order = valid_ids.join(",");
@@ -869,10 +944,9 @@ define([
       check(true);
     });
     $(".download_eportfolio_link").click(function(event) {
-      $("#downloading_eportfolio_dialog").dialog('close').dialog({
-        autoOpen: false,
+      $("#downloading_eportfolio_dialog").dialog({
         title: I18n.t('titles.download_eportfolio', "Download ePortfolio")
-      }).dialog('open');
+      });
     });
   });
 });

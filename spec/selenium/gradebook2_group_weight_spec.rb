@@ -1,6 +1,25 @@
 require File.expand_path(File.dirname(__FILE__) + '/helpers/gradebook2_common')
 describe "group weights" do
-  it_should_behave_like "gradebook2 selenium tests"
+  include_examples "in-process server selenium tests"
+
+  ASSIGNMENT_1_POINTS = "10"
+  ASSIGNMENT_2_POINTS = "5"
+  ASSIGNMENT_3_POINTS = "50"
+  ATTENDANCE_POINTS = "15"
+
+  STUDENT_NAME_1 = "student 1"
+  STUDENT_NAME_2 = "student 2"
+  STUDENT_NAME_3 = "student 3"
+  STUDENT_SORTABLE_NAME_1 = "1, student"
+  STUDENT_SORTABLE_NAME_2 = "2, student"
+  STUDENT_SORTABLE_NAME_3 = "3, student"
+  STUDENT_1_TOTAL_IGNORING_UNGRADED = "100%"
+  STUDENT_2_TOTAL_IGNORING_UNGRADED = "66.7%"
+  STUDENT_3_TOTAL_IGNORING_UNGRADED = "66.7%"
+  STUDENT_1_TOTAL_TREATING_UNGRADED_AS_ZEROS = "18.8%"
+  STUDENT_2_TOTAL_TREATING_UNGRADED_AS_ZEROS = "12.5%"
+  STUDENT_3_TOTAL_TREATING_UNGRADED_AS_ZEROS = "12.5%"
+  DEFAULT_PASSWORD = "qwerty"
 
   def get_group_points
     group_points_holder = keep_trying_until do
@@ -18,7 +37,7 @@ describe "group weights" do
 
   def set_group_weight(assignment_group, weight_number)
     f('#gradebook_settings').click
-    wait_for_animations
+    wait_for_ajaximations
     f('[aria-controls="assignment_group_weights_dialog"]').click
 
     dialog = f('#assignment_group_weights_dialog')
@@ -30,16 +49,16 @@ describe "group weights" do
       is_checked('#group_weighting_scheme').should be_true
     end
     group_weight_input = f("#assignment_group_#{assignment_group.id}_weight")
+    set_value(group_weight_input, "")
     set_value(group_weight_input, weight_number)
-    save_button = find_with_jquery('.ui-dialog-buttonset .ui-button:contains("Save")')
-    save_button.click
+    fj('.ui-button:contains("Save")').click
     wait_for_ajaximations
     @course.reload.group_weighting_scheme.should == 'percent'
   end
 
   def validate_group_weight_text(assignment_groups, weight_numbers)
     assignment_groups.each_with_index do |ag, i|
-      heading = find_with_jquery(".slick-column-name:contains('#{ag.name}') .assignment-points-possible")
+      heading = fj(".slick-column-name:contains('#{ag.name}') .assignment-points-possible")
       heading.should include_text("#{weight_numbers[i]}% of grade")
     end
   end
@@ -74,7 +93,7 @@ describe "group weights" do
   end
 
   it "should validate setting group weights" do
-    weight_numbers = [26.0, 73.5]
+    weight_numbers = [26.1, 73.5]
 
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
@@ -86,7 +105,7 @@ describe "group weights" do
     set_group_weight(group_1, weight_numbers[0])
     validate_group_weight(group_1, weight_numbers[0])
 
-    #set and check the group weight of the first assignment group
+    #set and check the group weight of the second assignment group
     set_group_weight(group_2, weight_numbers[1])
     validate_group_weight(group_2, weight_numbers[1])
 
@@ -97,7 +116,16 @@ describe "group weights" do
   it "should display group weights correctly when set on assignment groups" do
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
-    check_group_points('50%')
+    check_group_points('50.00%')
+  end
+
+  it "should display group weights with fractional value" do
+    @group1.group_weight = 70.5; @group1.save!
+    @group2.group_weight = 29.5; @group2.save!
+
+    get "/courses/#{@course.id}/gradebook2"
+    wait_for_ajaximations
+    validate_group_weight_text([@group1, @group2], ['70.50', '29.50'])
   end
 
   it "should display group weights correctly when unsetting group weights through assignments page" do

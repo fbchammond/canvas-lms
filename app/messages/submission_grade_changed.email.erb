@@ -1,5 +1,7 @@
+<% # evizitei: this template is used for submissions AND quiz_submissions, make sure methods used are available on both models %>
+
 <% define_content :link do %>
-  http://<%= HostUrl.context_host(asset.assignment.context) %>/<%= asset.assignment.context.class.to_s.downcase.pluralize %>/<%= asset.assignment.context_id %>/assignments/<%= asset.assignment_id %>/submissions/<%= asset.user_id %>
+  <%= HostUrl.protocol %>://<%= HostUrl.context_host(asset.assignment.context) %>/<%= asset.assignment.context.class.to_s.downcase.pluralize %>/<%= asset.assignment.context_id %>/assignments/<%= asset.assignment_id %>/submissions/<%= asset.user_id %>
 <% end %>
 
 <% define_content :subject do %>

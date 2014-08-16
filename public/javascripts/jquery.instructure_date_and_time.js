@@ -18,13 +18,30 @@
 define([
   'i18n!instructure',
   'jquery' /* jQuery, $ */,
+  'timezone',
   'str/htmlEscape',
   'jquery.keycodes' /* keycodes */,
   'vendor/date' /* Date.parse, Date.UTC, Date.today */,
   'jqueryui/datepicker' /* /\.datepicker/ */,
   'jqueryui/sortable' /* /\.sortable/ */,
   'jqueryui/widget' /* /\.widget/ */
-], function(I18n, $, htmlEscape) {
+], function(I18n, $, tz, htmlEscape) {
+  // Create a function to pass to setTimeout
+var speakMessage = function ($this, message) {
+  if ($this.data('accessible-message-timeout')) {
+    // Clear any previously scheduled message from this field.
+    clearTimeout($this.data('accessible-message-timeout'));
+    $this.removeData('accessible-message-timeout');
+  }
+  if (!message) {
+    // No message? Do nothing when the timeout expires.
+    return function () {};
+  }
+  return function () {
+    $('#aria_alerts').text(message);
+    $this.removeData('accessible-message-timeout');
+  };
+};
 
   $.parseDateTime = function(date, time) {
     var date = $.datepicker.parseDate('mm/dd/yy', date);
@@ -48,7 +65,7 @@ define([
     date.date = date;
     return date;
   };
-  
+
   $.formatDateTime = function(date, options) {
     var head = "", tail = "";
     if(date) {
@@ -76,163 +93,88 @@ define([
       result[head + "(5i)" + tail] = "";
     }
     return result;
-  };  
-  
-  $.parseFromISO = function(iso, datetime_type) {
-    var user_offset = parseInt($("#time_zone_offset").text(), 10) / -60;
-    var today = new Date();
-    datetime_type = datetime_type || 'event';
-    try {
-      var result = {};
-      if(!iso) {
-        return $.parseFromISO.defaults;
-      }
-      var year = iso.substring(0, 4);
-      var month = iso.substring(5, 7);
-      var day = iso.substring(8, 10);
-      var date_offset = parseInt(iso.substring(19), 10) || 0;
-      result.date = new Date(year, month - 1, day);
-      if(result.date.getTimezoneOffset() != today.getTimezoneOffset()) {
-        user_offset = user_offset - ((result.date.getTimezoneOffset() - today.getTimezoneOffset()) / 60);
-      }
-      var hour_shift = user_offset - date_offset;
-      // NOTE: This value is a literal parsing of the date
-      // passed in and may technically be incorrect if there
-      // is shifting due to time zones.
-      // result.date = $.datepicker.parseDate("yy-mm-dd", iso.substring(0, 10));
-      result.date_sortable = iso.substring(0, 10);
-      result.date_string = month + "/" + day + "/" + year;
-      result.date_formatted = $.dateString(result.date);
-      var hour_string = iso.substring(11, 13);
-      var minute_string = iso.substring(14, 16);
-      var second_string = iso.substring(17, 19);
-      var hours = (parseInt(hour_string, 10)) * 1000.0 * 3600;
-      if(hour_shift && !isNaN(hour_shift)) {
-        hours = hours + (hour_shift * 1000.0 * 3600);
-      }
-      var minutes = parseInt(minute_string, 10) * 1000.0 * 60;
-      var seconds = parseInt(second_string, 10) * 1000.0;
-      var time_timestamp = (hours + minutes + seconds) || 0;
-      var date_timestamp = (Date.UTC(year, month - 1, day)) || 0;
-      result.time_timestamp = time_timestamp / 1000;
-      result.date_timestamp = date_timestamp / 1000;
-      var tz_offset = result.date.getTimezoneOffset() * 60000;
-      var time = new Date(date_timestamp + time_timestamp + tz_offset);
-      var ampm = "am";
-      hours = time.getHours();
-      if(hours > 12) {
-        hours -= 12;
-        ampm = "pm";
-      } else if(hours == 12) {
-        ampm = "pm";
-      } else if(hours === 0) {
-        hours = 12;
-      }
-      var time_formatted = hours;
-      var time_tail = ":";
-      if(time.getMinutes() < 10) {
-        time_tail += "0";
-      }
-      time_tail += time.getMinutes();
-      if(time.getMinutes() !== 0) {
-        time_formatted += time_tail;
-      }
-      var by_at = datetime_type == 'due_date' ? 'by' : 'at';
-      var time_for_date_formatted = ' ' + by_at + ' ' + time_formatted + ampm;
-      result.show_time = true;
-      var sortable_hour = time.getHours();
-      if(sortable_hour < 10) {
-        sortable_hour = "0" + sortable_hour;
-      }
-      result.time_sortable = sortable_hour + time_tail;
-      time_formatted += ampm;
-      result.time_formatted = time_formatted;
-      result.time_string = hours + time_tail + ampm;
-      result.time = time;
-      result.datetime = time;
-      result.date_formatted = $.dateString(result.datetime);
-      result.datetime_formatted = result.date_formatted + time_for_date_formatted;
-      result.timestamp = (time_timestamp + date_timestamp) / 1000;
-      result.minute_timestamp = result.timestamp - (result.timestamp % 60);
-      return result;
-    } catch(e) {
-      return $.parseFromISO.defaults;
-    }
   };
+
   // fudgeDateForProfileTimezone is used to apply an offset to the date which represents the
   // difference between the user's configured timezone in their profile, and the timezone
   // of the browser. We want to display times in the timezone of their profile. Use
   // unfudgeDateForProfileTimezone to remove the correction before sending dates back to the server.
-  $.fudgeDateForProfileTimezone = function(date, unfudge) {
-    var today = new Date();
-    var user_offset = parseInt($("#time_zone_offset").text(), 10) * -1; // in minutes
-    if (date.getTimezoneOffset() != today.getTimezoneOffset()) {
-      user_offset = user_offset - (date.getTimezoneOffset() - today.getTimezoneOffset());
-    }
-    var minutes_shift = user_offset + date.getTimezoneOffset();
-
-    if (minutes_shift == 0) {
-      return date;
-    }
-
-    time = date.getTime(); // in ms
-    time += minutes_shift * 60 * 1000 * (unfudge === true ? -1 : 1);
-    var newDate = new Date();
-    newDate.setTime(time);
-    return newDate;
+  $.fudgeDateForProfileTimezone = function(date) {
+    date = tz.parse(date);
+    if (!date) return null;
+    // format true date into profile timezone without tz-info, then parse in
+    // browser timezone. then, as desired:
+    // output.toString('yyyy-MM-dd hh:mm:ss') == tz.format(input, '%Y-%m-%d %H:%M:%S')
+    return Date.parse(tz.format(date, '%F %T'));
   }
+
   $.unfudgeDateForProfileTimezone = function(date) {
-    return $.fudgeDateForProfileTimezone(date, true);
+    date = tz.parse(date);
+    if (!date) return null;
+    // format fudged date into browser timezone without tz-info, then parse in
+    // profile timezone. then, as desired:
+    // tz.format(output, '%Y-%m-%d %H:%M:%S') == input.toString('yyyy-MM-dd hh:mm:ss')
+    return tz.parse(date.toString('yyyy-MM-dd HH:mm:ss'));
   }
-  
-  // The following method is simply a helper to use the logic from $.parseFromISO on
-  // an existing Date() object. This is not the right solution and should be replaced.
-  $.parseFromDateUTC = function(date, datetime_type) {
-    return $.parseFromISO($.dateToISO8601UTC(date), datetime_type)
+
+  // this batch of methods assumes *real* dates passed in (or, really, anything
+  // tz.parse() can recognize. so timestamps are cool, too. but not fudged dates).
+  // use accordingly
+  $.sameYear = function(d1, d2) {
+    return tz.format(d1, '%Y') == tz.format(d2, '%Y');
   };
-  $.parseFromISO.ref_date = new Date();
-  $.parseFromISO.offset = $.parseFromISO.ref_date.getTimezoneOffset() * 60000;
-  $.parseFromISO.defaults = {
-      date: new Date($.parseFromISO.offset),
-      date_sortable: "0000-00-00",
-      date_string: "",
-      date_formatted: "",
-      time_timestamp: 0,
-      date_timestamp: 0,
-      timestamp: 0,
-      time: new Date($.parseFromISO.offset),
-      time_formatted: "",
-      time_string: ""
+  $.sameDate = function(d1, d2) {
+    return tz.format(d1, '%F') == tz.format(d2, '%F');
   };
-  $.dateToISO8601UTC = function(date) {
-    var padZero = function(n) { return n < 10 ? '0' + n : n; }
-    return date.getUTCFullYear() + '-' +
-      padZero(date.getUTCMonth() + 1) + '-' +
-      padZero(date.getUTCDate()) + 'T' +
-      padZero(date.getUTCHours()) + ':' +
-      padZero(date.getUTCMinutes()) + ':' +
-      padZero(date.getUTCSeconds()) + 'Z'
-  }
-  $.dateToISO8601 = function(date) {
-    var padZero = function(n) { n < 10 ? '0' + n : n }
-    return date.getFullYear() + '-' +
-      padZero(date.getMonth() + 1) + '-' +
-      padZero(date.getDate()) + 'T' +
-      padZero(date.getHours()) + ':' +
-      padZero(date.getMinutes()) + ':' +
-      padZero(date.getSeconds()) + 'Z'
-  }
-  
-  var today = new Date();
-  $.thisYear = function(date) {
-    return date && (date.getFullYear() == today.getFullYear());
+  $.midnight = function(date) {
+    return date != null && tz.format(date, '%R') == '00:00';
   };
-  $.dateString = function(date) {
-    return (date && (date.toString($.thisYear(date) ? 'MMM d' : 'MMM d, yyyy'))) || "";
+  $.dateString = function(date, otherZone) {
+    if (date == null) return "";
+    var format = $.sameYear(date, new Date()) ? '%b %-d' : '%b %-d, %Y';
+    if(arguments.length > 1) return tz.format(date, format, otherZone) || '';
+    return tz.format(date, format) || '';
   };
-  $.timeString = function(date) {
-    return (date && date.toString('h:mmtt').toLowerCase()) || "";
+  $.timeString = function(date, otherZone) {
+    if (date == null) return "";
+    if(arguments.length > 1) return tz.format(date, '%l:%M%P', otherZone) || '';
+    return tz.format(date, '%l:%M%P') || '';
   };
+  $.datetimeString = function(datetime, options) {
+    var localized = options && options.localized;
+    var timezone = options && options.timezone;
+    datetime = tz.parse(datetime);
+    if (datetime == null) return "";
+    if (localized == false) {
+      // temporary unlocalized (which means avoiding tz.format)
+      // expansion of the other branch. intent of being able to call
+      // this with localized false, triggering this code, is if it's
+      // called to fill the value attribute of a datetime picker field,
+      // since the field will complain about localized dates. the real
+      // solution is to teach the datetime picker about parsing
+      // localized date strings (by using tz.parse).
+      //
+      // TODO: implement that real solution and remove this
+      var fudged = $.fudgeDateForProfileTimezone(datetime);
+      datePart = $.sameYear(datetime, new Date()) ? fudged.toString("MMM d") : fudged.toString("MMM d, yyyy");
+      timePart = fudged.toString("h:mmtt").toLowerCase();
+      return datePart + " at " + timePart;
+    }
+    else {
+      var dateValue = null;
+      var timeValue = null;
+      if(typeof timezone == 'string' || timezone instanceof String){
+        dateValue = $.dateString(datetime, timezone);
+        timeValue = $.timeString(datetime, timezone);
+      }else{
+        dateValue = $.dateString(datetime);
+        timeValue = $.timeString(datetime);
+      }
+      return I18n.t('#time.event', '%{date} at %{time}', { date: dateValue, time: timeValue });
+    }
+  };
+  // end batch
+
   $.friendlyDatetime = function(datetime, perspective) {
     var today = Date.today();
     if (Date.equals(datetime.clone().clearTime(), today)) {
@@ -260,12 +202,41 @@ define([
     }
     return I18n.l('#date.formats.medium', date);
   };
-  $.fn.parseFromISO = $.parseFromISO;
-  
-  
+
+  $.datetime = {};
+  $.datetime.shortFormat = "MMM d, yyyy";
+  $.datetime.defaultFormat = "MMM d, yyyy h:mmtt";
+  $.datetime.sortableFormat = "yyyy-MM-ddTHH:mm:ss";
+  $.datetime.parse = function(text, /* optional */ intermediate_format) {
+    return Date.parse((text || "").toString(intermediate_format).replace(/ (at|by)/, ""))
+  }
+  $.datetime.clean = function(text) {
+    var date = $.datetime.parse(text, $.datetime.sortableFormat) || text;
+    var result = "";
+    if(date) {
+      if(date.getHours() || date.getMinutes()) {
+        result = date.toString($.datetime.defaultFormat);
+      } else {
+        result = date.toString($.datetime.shortFormat);
+      }
+    }
+    return result;
+  };
+  $.datetime.process = function(text) {
+    var date = text;
+    if(typeof(text) == "string") {
+      date = $.datetime.parse(text);
+    }
+    var result = "";
+    if(date) {
+      result = date.toString($.datetime.sortableFormat);
+    }
+    return result;
+  };
+
   $.datepicker.oldParseDate = $.datepicker.parseDate;
   $.datepicker.parseDate = function(format, value, settings) {
-    return Date.parse((value || "").toString().replace(/ (at|by)/, "")) || $.datepicker.oldParseDate(format, value, settings);
+    return $.datetime.parse(value) || $.datepicker.oldParseDate(format, value, settings);
   };
   $.datepicker._generateDatepickerHTML = $.datepicker._generateHTML;
   $.datepicker._generateHTML = function(inst) {
@@ -278,7 +249,7 @@ define([
       var ampm = inst.input.data('time-ampm') || "";
       var selectedAM = (ampm == "am") ? "selected" : "";
       var selectedPM = (ampm == "pm") ? "selected" : "";
-      html += "<div class='ui-datepicker-time ui-corner-bottom'><label for='ui-datepicker-time-hour'>" + htmlEscape(I18n.beforeLabel('datepicker.time', "Time")) + "</label> <input id='ui-datepicker-time-hour' type='text' value='" + hr + "' title='hr' class='ui-datepicker-time-hour' style='width: 20px;'/>:<input type='text' value='" + min + "' title='min' class='ui-datepicker-time-minute' style='width: 20px;'/> <select class='ui-datepicker-time-ampm' title='" + htmlEscape(I18n.t('datepicker.titles.am_pm', "am/pm")) + "'><option value=''>&nbsp;</option><option value='am' " + selectedAM + ">" + htmlEscape(I18n.t('#time.am', "am")) + "</option><option value='pm' " + selectedPM + ">" + htmlEscape(I18n.t('#time.pm', "pm")) + "</option></select>&nbsp;&nbsp;&nbsp;<button type='button' class='button btn-mini ui-datepicker-ok'>" + htmlEscape(I18n.t('#buttons.done', "Done")) + "</button></div>";
+      html += "<div class='ui-datepicker-time ui-corner-bottom'><label for='ui-datepicker-time-hour'>" + htmlEscape(I18n.beforeLabel('datepicker.time', "Time")) + "</label> <input id='ui-datepicker-time-hour' type='text' value='" + hr + "' title='hr' class='ui-datepicker-time-hour' style='width: 20px;'/>:<input type='text' value='" + min + "' title='min' class='ui-datepicker-time-minute' style='width: 20px;'/> <select class='ui-datepicker-time-ampm un-bootrstrapify' title='" + htmlEscape(I18n.t('datepicker.titles.am_pm', "am/pm")) + "'><option value=''>&nbsp;</option><option value='am' " + selectedAM + ">" + htmlEscape(I18n.t('#time.am', "am")) + "</option><option value='pm' " + selectedPM + ">" + htmlEscape(I18n.t('#time.pm', "pm")) + "</option></select>&nbsp;&nbsp;&nbsp;<button type='button' class='btn btn-mini ui-datepicker-ok'>" + htmlEscape(I18n.t('#buttons.done', "Done")) + "</button></div>";
     }
     return html;
   };
@@ -391,89 +362,117 @@ define([
     this.datetime_field(options);
     return this;
   };
+
+  // add bootstrap's .btn class to the button that opens a datepicker
+  $.datepicker._triggerClass = $.datepicker._triggerClass + ' btn';
+
   $.fn.datetime_field = function(options) {
     options = $.extend({}, options);
     this.each(function() {
-      var $field = $(this);
-      if($field.hasClass('datetime_field_enabled')) { return; }
+      var $field = $(this),
+          $thingToPutSuggestAfter = $field;
+      if ($field.hasClass('datetime_field_enabled')) return;
+
       $field.addClass('datetime_field_enabled');
-      if(!options.timeOnly) {
-        $field.datepicker({
+      if (!options.timeOnly) {
+        $field.wrap('<div class="input-append" />');
+        $thingToPutSuggestAfter = $field.parent('.input-append');
+
+        var datepickerOptions = {
           timePicker: (!options.dateOnly),
           constrainInput: false,
           dateFormat: 'M d, yy',
           showOn: 'button',
-          buttonImage: '/images/datepicker.gif?1234',
-          buttonImageOnly: true
-        });
+          buttonText: '<i class="icon-calendar-month"></i>',
+          buttonImageOnly: false
+        };
+        $field.datepicker($.extend(datepickerOptions, options.datepicker));
       }
-      var $after = $(this);
-      if($field.next(".ui-datepicker-trigger").length > 0) { $after = $field.next(); }
-      var $div = $(document.createElement('div')).addClass('datetime_suggest');
-      $after.after($div);
-      $div = $after.next();
+
+      var $suggest = $('<div class="datetime_suggest" />').insertAfter($thingToPutSuggestAfter);
+      if (ENV && ENV.CONTEXT_TIMEZONE && (ENV.TIMEZONE != ENV.CONTEXT_TIMEZONE)){
+        var $suggest2 = $('<div class="datetime_suggest" />').insertAfter($suggest);
+      }
+
+      if (options.addHiddenInput) {
+        var $hiddenInput = $('<input type="hidden">').insertAfter($field);
+        $hiddenInput.attr('name', $field.attr('name'));
+        $hiddenInput.val($field.val());
+        $field.removeAttr('name');
+        $field.data('hiddenInput', $hiddenInput);
+      }
+
       $field.bind("change focus blur keyup", function() {
-        var val = $(this).val();
-        if(options.timeOnly && val && parseInt(val, 10) == val) {
-          if(val < 8) {
-            val += "pm";
-          } else {
-            val += "am";
-          }
+        var $this = $(this),
+            val = $this.val();
+        if (options.timeOnly && val && parseInt(val, 10) == val) {
+          val += (val < 8) ? "pm" : "am";
         }
-        var d = Date.parse((val || "").toString().replace(/ (at|by)/, ""));
-        var parse_error_message = I18n.t('errors.not_a_date', "That's not a date!"); 
+        var fudged_d = $.datetime.parse(val);
+        var d = $.unfudgeDateForProfileTimezone(fudged_d);
+        var parse_error_message = I18n.t('errors.not_a_date', "That's not a date!");
         var text = parse_error_message;
-        if(!$(this).val()) { text = ""; }
-        if(d) {
-          $(this).data('date', d);
-          if(!options.timeOnly && !options.dateOnly && (d.getHours() || d.getMinutes() || options.alwaysShowTime)) {
-            text = d.toString('ddd MMM d, yyyy h:mmtt');
-            $(this).data('time-hour', d.toString('h'))
-              .data('time-minute', d.toString('mm'))
-              .data('time-ampm', d.toString('tt').toLowerCase());
+        var text2 = ""
+        if (!$this.val()) { text = ""; }
+        if (d != null) {
+          $this.data('date', fudged_d);
+          if ($this.data('hiddenInput')) {
+            $this.data('hiddenInput').val(fudged_d);
+          }
+          if(!options.timeOnly && !options.dateOnly && (!$.midnight(d) || options.alwaysShowTime)) {
+            text = tz.format(d, "%a %b %-d, %Y %-l:%M%P");
+            if($suggest2) {
+              text2 = tz.format(d,"%a %b %-d, %Y %-l:%M%P", ENV.CONTEXT_TIMEZONE);
+            }
+            $this
+              .data('time-hour', tz.format(d, "%-l"))
+              .data('time-minute', tz.format(d, "%M"))
+              .data('time-ampm', tz.format(d, "%P"));
           } else if(!options.timeOnly) {
-            text = d.toString('ddd MMM d, yyyy');
+            text = tz.format(d, "%a %b %-d, %Y");
           } else {
-            text = d.toString('h:mmtt').toLowerCase();
+            text = tz.format(d, "%-l:%M%P");
+            if($suggest2) {
+              text2 = tz.format(d,"%-l:%M%P", ENV.CONTEXT_TIMEZONE);
+            }
+          }
+
+          if($suggest2) {
+            if(text2.length > 0){
+              text2 = I18n.t('#helpers.course', 'Course') + ": " + text2;
+              $suggest2.text(text2);
+            } else {
+              $suggest2.text("");
+            }
           }
         }
-        var $suggest = $(this).parent().children('.datetime_suggest');
-        if($suggest) {
-          $suggest.toggleClass('invalid_datetime', text == parse_error_message);
-          $suggest.text(text);
+
+        if(text.length > 0 && $suggest2) {
+          text = I18n.t('#helpers.local', 'Local') + ": " + text;
+        }
+
+        $suggest
+          .toggleClass('invalid_datetime', text == parse_error_message)
+          .text(text);
+
+        if (text == parse_error_message ) {
+          $this.data(
+            'accessible-message-timeout',
+            setTimeout(speakMessage($this, text), 2000)
+          );
+        } else if ($this.data('accessible-message-timeout')) {
+          // Error resolved, cancel the alert.
+          clearTimeout($this.data('accessible-message-timeout'));
+          $this.removeData('accessible-message-timeout');
         }
       }).triggerHandler('change');
+      // TEMPORARY FIX: Hide from aria screenreader until the jQuery UI datepicker is updated for accessibility.
+      $field.next().attr('aria-hidden', 'true');
+      $field.next().attr('tabindex', '-1');
     });
     return this;
   };
-  $.datetime = {};
-  $.datetime.shortFormat = "MMM d, yyyy";
-  $.datetime.defaultFormat = "MMM d, yyyy h:mmtt";
-  $.datetime.sortableFormat = "yyyy-MM-ddTHH:mm:ss";
-  $.datetime.clean = function(text) {
-    var date = Date.parse((text || "").toString("yyyy-MM-ddTHH:mm:ss").replace(/ (at|by)/, "")) || text;
-    var result = "";
-    if(date) {
-      if(date.getHours() || date.getMinutes()) {
-        result = date.toString($.datetime.defaultFormat);
-      } else {
-        result = date.toString($.datetime.shortFormat);
-      }
-    }
-    return result;
-  };
-  $.datetime.process = function(text) {
-    var date = text;
-    if(typeof(text) == "string") {
-      date = Date.parse((text || "").toString().replace(/ (at|by)/, ""));
-    }
-    var result = "";
-    if(date) {
-      result = date.toString($.datetime.sortableFormat);
-    }
-    return result;
-  };
+
     /* Based loosely on:
     jQuery ui.timepickr - 0.6.5
     http://code.google.com/p/jquery-utils/
@@ -655,5 +654,5 @@ define([
     });
     return $picker;
   };
-  
+
 });

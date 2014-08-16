@@ -16,7 +16,7 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper')
 
 describe ContextController do
   describe "GET 'roster'" do
@@ -25,82 +25,61 @@ describe ContextController do
       get 'roster', :course_id => @course.id
       assert_unauthorized
     end
-    
-    it "should assign variables" do
-      course_with_student_logged_in(:active_all => true)
-      get 'roster', :course_id => @course.id
-      assigns[:students].should_not be_nil
-      assigns[:teachers].should_not be_nil
-    end
-    
-    it "should retrieve students and teachers" do
-      course_with_student_logged_in(:active_all => true)
-      @student = @user
-      @teacher = user(:active_all => true)
-      @teacher = @course.enroll_teacher(@teacher)
-      @teacher.accept!
-      @teacher = @teacher.user
-      get 'roster', :course_id => @course.id
-      assigns[:students].should_not be_nil
-      assigns[:students].should_not be_empty
-      assigns[:students].should be_include(@student) #[0].should eql(@user)
-      assigns[:teachers].should_not be_nil
-      assigns[:teachers].should_not be_empty
-      assigns[:teachers].should be_include(@teacher) #[0].should eql(@teacher)
-    end
 
-    it "should not include designers as teachers" do
+    it "should work when the context is a group in a course" do
       course_with_student_logged_in(:active_all => true)
-      @designer = user(:active_all => true)
-      @course.enroll_designer(@designer).accept!
-      get 'roster', :course_id => @course.id
-      assigns[:teachers].should_not be_include(@designer)
+      @group = @course.groups.create!
+      @group.add_user(@student, 'accepted')
+      get 'roster', :group_id => @group.id
+      assigns[:primary_users].each_value.first.collect(&:id).should == [@student.id]
+      assigns[:secondary_users].each_value.first.collect(&:id).should == [@teacher.id]
     end
   end
-  
+
   describe "GET 'roster_user'" do
     it "should require authorization" do
       course_with_teacher(:active_all => true)
       get 'roster_user', :course_id => @course.id, :id => @user.id
       assert_unauthorized
     end
-    
+
     it "should assign variables" do
       course_with_student_logged_in(:active_all => true)
       @enrollment = @course.enroll_student(user(:active_all => true))
       @enrollment.accept!
       @student = @enrollment.user
       get 'roster_user', :course_id => @course.id, :id => @student.id
-      assigns[:enrollment].should_not be_nil
-      assigns[:enrollment].should eql(@enrollment)
+      assigns[:membership].should_not be_nil
+      assigns[:membership].should eql(@enrollment)
       assigns[:user].should_not be_nil
       assigns[:user].should eql(@student)
       assigns[:topics].should_not be_nil
       assigns[:entries].should_not be_nil
     end
-  end
 
-  describe "GET 'chat'" do
-    it "should redirect if no chats enabled" do
-      course_with_teacher(:active_all => true)
-      get 'chat', :course_id => @course.id, :id => @user.id
-      response.should be_redirect
-    end
-    
-    it "should require authorization" do
-      PluginSetting.create!(:name => "tinychat", :settings => {})
-      course_with_teacher(:active_all => true)
-      get 'chat', :course_id => @course.id, :id => @user.id
-      assert_unauthorized
-    end
-    
-    it "should redirect 'disabled', if disabled by the teacher" do
-      PluginSetting.create!(:name => "tinychat", :settings => {})
-      course_with_student_logged_in(:active_all => true)
-      @course.update_attribute(:tab_configuration, [{'id'=>9,'hidden'=>true}])
-      get 'chat', :course_id => @course.id
-      response.should be_redirect
-      flash[:notice].should match(/That page has been disabled/)
+    describe 'across shards' do
+      specs_require_sharding
+
+      it 'allows merged users from other shards to be referenced' do
+        user1 = user_model
+        course1 = course(:active_all => 1)
+        course1.enroll_user(user1)
+
+        @shard2.activate do
+          @user2 = user_model
+          @course2 = course(:active_all => 1)
+          @course2.enroll_user(@user2)
+        end
+
+        UserMerge.from(user1).into(@user2)
+
+        admin = user_model
+        Account.site_admin.account_users.create!(user: admin)
+        user_session(admin)
+
+        get 'roster_user', :course_id => course1.id, :id => @user2.id
+        response.should be_success
+      end
     end
   end
 
@@ -114,7 +93,7 @@ describe ContextController do
 
     it "should require a valid HMAC" do
       post 'object_snippet', :object_data => @data, :s => 'DENIED'
-      response.status.should == '400 Bad Request'
+      assert_status(400)
     end
 
     it "should render given a correct HMAC" do
@@ -126,8 +105,8 @@ describe ContextController do
 
   describe "GET '/media_objects/:id/thumbnail" do
     it "should redirect to kaltura even if the MediaObject does not exist" do
-      Kaltura::ClientV3.stubs(:config).returns({})
-      Kaltura::ClientV3.any_instance.expects(:thumbnail_url).returns("http://example.com/thumbnail_redirect")
+      CanvasKaltura::ClientV3.stubs(:config).returns({})
+      CanvasKaltura::ClientV3.any_instance.expects(:thumbnail_url).returns("http://example.com/thumbnail_redirect")
       get :media_object_thumbnail,
         :id => '0_notexist',
         :width => 100,
@@ -184,6 +163,32 @@ describe ContextController do
       @media_object.media_id.should == "new_object"
       @media_object.media_type.should == "audio"
       @media_object.title.should == "title"
+    end
+
+    it "should truncate the title and user_entered_title" do
+      post :create_media_object,
+        :context_code => "user_#{@user.id}",
+        :id => "new_object",
+        :type => "audio",
+        :title => 'x' * 300,
+        :user_entered_title => 'y' * 300
+      @media_object = @user.reload.media_objects.last
+      @media_object.title.size.should <= 255
+      @media_object.user_entered_title.size.should <= 255
+    end
+  end
+
+  describe "GET 'prior_users" do
+    before do
+      course_with_teacher_logged_in(:active_all => true)
+      100.times { student_in_course(:active_all => true).conclude }
+      @user = @teacher
+    end
+
+    it "should paginate" do
+      get :prior_users, :course_id => @course.id
+      response.should be_success
+      assigns[:prior_users].size.should eql 20
     end
   end
 end

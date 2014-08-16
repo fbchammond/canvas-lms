@@ -3,7 +3,7 @@ define [
   'underscore'
   'i18n!discussions.reply'
   'jquery'
-  'compiled/discussions/Entry'
+  'compiled/models/Entry'
   'str/htmlEscape'
   'jst/discussions/_reply_attachment'
   'compiled/fn/preventDefault'
@@ -15,13 +15,22 @@ define [
     ##
     # Creates a new reply to an Entry
     #
-    # @param {Entry} entry
+    # @param {view} an EntryView instance
     constructor: (@view, @options={}) ->
-      @el = @view.$ '.discussion-reply-label:first'
-      @showWhileEditing = @el.next()
-      @textarea = @showWhileEditing.find('.reply-textarea')
-      @form = @el.closest('form').submit preventDefault @submit
+      @el = @view.$ '.discussion-reply-action:first'
+      # works for threaded discussion topic and entries
+      @discussionEntry = @el.closest '.discussion_entry'
+      # required for non-threaded reply area at bottom of an entry block
+      @discussionEntry = @el.closest '.entry' if @discussionEntry.length == 0
+      @form = @discussionEntry.find('form.discussion-reply-form:first').submit preventDefault @submit
+      @textArea = @getEditingElement()
       @form.find('.cancel_button').click @hide
+      @form.on 'click', '.toggle-wrapper a', (e) =>
+        e.preventDefault()
+        @textArea.editorBox('toggle')
+        # hide the clicked link, and show the other toggle link.
+        # todo: replace .andSelf with .addBack when JQuery is upgraded.
+        $(e.currentTarget).siblings('a').andSelf().toggle()
       @form.delegate '.alert .close', 'click', preventDefault @hideNotification
       @editing = false
 
@@ -41,12 +50,8 @@ define [
     # @api public
     edit: ->
       @form.addClass 'replying'
-      @textarea.editorBox()
-      @el.hide()
-      # sometimes it doesn't focus, not sure why yet, but using a setTimeout
-      # makes it focus every time (chrome/safari anyway...)
-      setTimeout =>
-        @textarea.editorBox 'focus'
+      @discussionEntry.addClass 'replying'
+      @textArea.editorBox focus: true, tinyOptions: width: '100%'
       @editing = true
       @trigger 'edit', this
 
@@ -55,13 +60,14 @@ define [
     #
     # @api public
     hide: =>
-      @content = @textarea._justGetCode()
-      @textarea._removeEditor()
+      @content = @textArea._justGetCode()
+      @textArea._removeEditor()
       @form.removeClass 'replying'
-      @textarea.val @content
-      @el.show()
+      @discussionEntry.removeClass 'replying'
+      @textArea.val @content
       @editing = false
       @trigger 'hide', this
+      @discussionEntry.find('.discussion-reply-action').focus()
 
     hideNotification: =>
       @view.model.set 'notification', ''
@@ -73,16 +79,23 @@ define [
     # @api private
     submit: =>
       @hide()
-      @textarea._setContentCode ''
+      @textArea._setContentCode ''
       @view.model.set 'notification', "<div class='alert alert-info'>#{I18n.t 'saving_reply', 'Saving reply...'}</div>"
       entry = new Entry @getModelAttributes()
       entry.save null,
         success: @onPostReplySuccess
         error: @onPostReplyError
         multipart: entry.get('attachment')
+        proxyAttachment: true
       @hide()
       @removeAttachments()
-      @el.hide()
+
+    ##
+    # Get the jQueryEl element on the discussion entry to edit.
+    #
+    # @api private
+    getEditingElement: ->
+      @view.$('.reply-textarea:first')
 
     ##
     # Computes the model's attributes before saving it to the server
@@ -94,26 +107,20 @@ define [
       # work is required
       summary: $('<div/>').html(@content).text()
       message: @content
-      parent_cid: if @options.topLevel then null else @view.model.cid
       parent_id: if @options.topLevel then null else @view.model.get 'id'
       user_id: ENV.current_user_id
       created_at: now
       updated_at: now
-      collapsedView: false
       attachment: @form.find('input[type=file]')[0]
+      new: true
 
     ##
     # Callback when the model is succesfully saved
     #
     # @api private
     onPostReplySuccess: (entry) =>
-      @view.collection.add entry unless @options.added?()
-      if @view.model.get('allowsSideComments')
-        text = ''
-      else
-        text = "<div class='alert alert-success'><a class='close' data-dismiss='alert'>×</a>#{I18n.t 'reply_saved', "Reply saved, *go to your reply*", wrapper: "<a href='##{entry.cid}' data-event='goToReply'>$1</a>"}</div>"
-      @view.model.set 'notification', text
-      @el.show()
+      @view.model.set 'notification', ''
+      @trigger 'save', entry
 
     ##
     # Callback when the model fails to save
@@ -121,7 +128,7 @@ define [
     # @api private
     onPostReplyError: (entry) =>
       @view.model.set 'notification', "<div class='alert alert-info'>#{I18n.t 'error_saving_reply', "*An error occured*, please post your reply again later", wrapper: '<strong>$1</strong>'}</div>"
-      @textarea.val entry.get('message')
+      @textArea.val entry.get('message')
       @edit()
 
     ##
@@ -140,6 +147,7 @@ define [
     # Removes all attachments
     removeAttachments: ->
       @form.find('ul.discussion-reply-attachments').empty()
+      @form.find('a.discussion-reply-add-attachment').show()
 
   _.extend Reply.prototype, Backbone.Events
 

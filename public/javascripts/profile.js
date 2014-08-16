@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2011 Instructure, Inc.
+ * Copyright (C) 2011-2013 Instructure, Inc.
  *
  * This file is part of Canvas.
  *
@@ -19,55 +19,37 @@ define([
   'INST' /* INST */,
   'i18n!profile',
   'jquery' /* $ */,
-  'compiled/util/BackoffPoller',
+  'compiled/models/Pseudonym',
+  'compiled/util/AvatarWidget',
   'jquery.ajaxJSON' /* ajaxJSON */,
-  'jquery.instructure_date_and_time' /* parseFromISO, time_field, datetime_field */,
+  'jquery.instructure_date_and_time' /* datetimeString, time_field, datetime_field */,
   'jquery.instructure_forms' /* formSubmit, formErrors, errorBox */,
   'jqueryui/dialog',
+  'compiled/jquery/fixDialogButtons' /* fix dialog formatting */,
   'jquery.instructure_misc_plugins' /* confirmDelete, fragmentChange, showIf */,
   'jquery.loadingImg' /* loadingImage */,
   'jquery.templateData' /* fillTemplateData */,
-  'jqueryui/sortable' /* /\.sortable/ */
-], function(INST, I18n, $, BackoffPoller) {
+  'jqueryui/sortable' /* /\.sortable/ */,
+  'compiled/jquery.rails_flash_notifications'
+], function(INST, I18n, $, Pseudonym, AvatarWidget) {
+
+  var $edit_settings_link = $(".edit_settings_link");
 
   var $profile_table = $(".profile_table"),
       $update_profile_form = $("#update_profile_form"),
       $default_email_id = $("#default_email_id"),
       profile_pics_url = '/api/v1/users/self/avatars';
 
-  var thumbnailPoller = new BackoffPoller(profile_pics_url, function(data) {
-    var loadedImages = {},
-        $images = $('img.pending'),
-        image,
-        $image,
-        associatedUrl,
-        count = 0;
-    for (var i = 0, l = data.length; i < l; i++) {
-      image = data[i];
-      if (!image.pending) loadedImages[image.token] = image.url;
-    }
-    $images.each(function() {
-      $image = $(this);
-      associatedUrl = loadedImages[$image.data('token')]
-      if (associatedUrl != null) {
-        $image.removeClass('pending');
-        $image.attr('src', associatedUrl);
-        count++;
-      }
-    });
-    if (count === $images.length) return 'stop';
-    if (count > 0) return 'reset';
-    return 'continue';
-  });
-  
-  $(".edit_profile_link").click(function(event) {
+  $edit_settings_link.click(function(event) {
+    $(this).hide();
     $profile_table.addClass('editing')
       .find(".edit_data_row").show().end()
       .find(":text:first").focus().select();
-    return false;
+  return false;
   });
   
   $profile_table.find(".cancel_button").click(function(event) {
+    $edit_settings_link.show();
     $profile_table
       .removeClass('editing')
       .find(".change_password_row,.edit_data_row,.more_options_row").hide().end()
@@ -76,19 +58,12 @@ define([
   });
   
   $profile_table.find("#change_password_checkbox")
-    .click(function(){
-      //this is a hack because in ie it did not fire the "change" event untill you click away from the checkbox.
-      if (INST.browser.ie) {
-        $(this).triggerHandler('change');
-      }
-    })
     .change(function(event) {
-      event.preventDefault();
       if(!$(this).attr('checked')) {
         $profile_table.find(".change_password_row").hide().find(":password").val("");
       } else {
         $(this).addClass('showing');
-        $profile_table.find(".change_password_row").show().find(":password:first").focus().select();
+        $profile_table.find(".change_password_row").show().find("#old_password").focus().select();
       }
     })
     .attr('checked', false)
@@ -97,27 +72,13 @@ define([
   $update_profile_form
     .attr('method', 'PUT')
     .formSubmit({
+      formErrors: false,
       required: ($update_profile_form.find('#user_name').length ? ['name'] : []),
       object_name: 'user',
       property_validations: {
         '=default_email_id': function(val, data) {
           if($("#default_email_id").length && (!val || val == "new")) {
             return I18n.t('please_select_an_option', "Please select an option");
-          }
-        },
-        'birthdate(1i)': function(val, data) {
-          if (!val && (data['birthdate(2i)'] || data['birthdate(3i)'])) {
-            return I18n.t('please_select_a_year', "Please select a year");
-          }
-        },
-        'birthdate(2i)': function(val, data) {
-          if (!val && (data['birthdate(1i)'] || data['birthdate(3i)'])) {
-            return I18n.t('please_select_a_month', "Please select a month");
-          }
-        },
-        'birthdate(3i)': function(val, data) {
-          if (!val && (data['birthdate(1i)'] || data['birthdate(2i)'])) {
-            return I18n.t('please_select_a_day', "Please select a day");
           }
         }
       },
@@ -131,7 +92,6 @@ define([
           full_name: user.name,
           sortable_name: user.sortable_name,
           time_zone: user.time_zone,
-          birthdate: (user.birthdate ? $.parseFromISO(user.birthdate).date_formatted : '-'),
           locale: $("#user_locale option[value='" + user.locale + "']").text()
         };
         if (templateData.locale != $update_profile_form.find('.locale').text()) {
@@ -149,9 +109,13 @@ define([
           data: templateData
         }).find(".cancel_button").click();
       },
-      error: function(data) {
-        $update_profile_form.loadingImage('remove').formErrors(data.errors || data);
-        $(".edit_profile_link").click();
+      error: function(errors) {
+        if (errors.password) {
+          var pseudonymId = $(this).find("#profile_pseudonym_id").val();
+          errors = Pseudonym.prototype.normalizeErrors(errors, ENV.PASSWORD_POLICIES[pseudonymId] || ENV.PASSWORD_POLICY);
+        }
+        $update_profile_form.loadingImage('remove').formErrors(errors);
+        $edit_settings_link.click();
       }
     })
     .find(".more_options_link").click(function() {
@@ -168,10 +132,9 @@ define([
   
   $("#unregistered_services li.service").click(function(event) {
     event.preventDefault();
-    $("#" + $(this).attr('id') + "_dialog").dialog('close').dialog({
-      width: 350,
-      autoOpen: false
-    }).dialog('open');
+    $("#" + $(this).attr('id') + "_dialog").dialog({
+      width: 350
+    });
   });
   $(".create_user_service_form").formSubmit({
     object_name: 'user_service',
@@ -240,7 +203,13 @@ define([
   });
   $("#access_token_form").formSubmit({
     object_name: 'access_token',
-    required: ['purpose'],
+    property_validations: {
+      'purpose': function(value){
+        if (!value || value == ''){
+          return I18n.t('purpose_required', "Purpose is required");
+        }
+      }
+    },
     beforeSubmit: function() {
       $(this).find("button").attr('disabled', true).filter(".submit_button").text(I18n.t('buttons.generating_token', "Generating Token..."));
     },
@@ -250,8 +219,8 @@ define([
       $("#no_approved_integrations").hide()
       $("#access_tokens_holder").show();
       var $token = $(".access_token.blank:first").clone(true).removeClass('blank');
-      data.created = $.parseFromISO(data.created_at).datetime_formatted || "--";
-      data.expires = $.parseFromISO(data.expires_at).datetime_formatted || I18n.t('token_never_expires', "never");
+      data.created = $.datetimeString(data.created_at) || "--";
+      data.expires = $.datetimeString(data.expires_at) || I18n.t('token_never_expires', "never");
       data.used = "--";
       $token.fillTemplateData({
         data: data,
@@ -275,9 +244,9 @@ define([
     var $button = $(this);
     $button.text(I18n.t('buttons.regenerating_token', "Regenerating token...")).attr('disabled', true);
     $.ajaxJSON(url, 'PUT', {'access_token[regenerate]': '1'}, function(data) {
-      data.created = $.parseFromISO(data.created_at).datetime_formatted || "--";
-      data.expires = $.parseFromISO(data.expires_at).datetime_formatted || I18n.t('token_never_expires', "never");
-      data.used = $.parseFromISO(data.last_used_at).datetime_formatted || "--";
+      data.created = $.datetimeString(data.created_at) || "--";
+      data.expires = $.datetimeString(data.expires_at) || I18n.t('token_never_expires', "never");
+      data.used = $.datetimeString(data.last_used_at) || "--";
       data.visible_token = data.visible_token || "protected";
       $dialog.fillTemplateData({data: data})
         .find(".full_token_warning").showIf(data.visible_token.length > 10);
@@ -291,10 +260,9 @@ define([
     event.preventDefault();
     var $dialog = $("#token_details_dialog");
     var url = $(this).attr('rel');
-    $dialog.dialog('close').dialog({
-      autoOpen: false,
+    $dialog.dialog({
       width: 600
-    }).dialog('open');
+    });
     var $token = $(this).parents(".access_token");
     $dialog.data('token', $token);
     $dialog.find(".loading_message").show().end()
@@ -313,9 +281,9 @@ define([
       tokenLoaded(token);
     } else {
       $.ajaxJSON(url, 'GET', {}, function(data) {
-        data.created = $.parseFromISO(data.created_at).datetime_formatted || "--";
-        data.expires = $.parseFromISO(data.expires_at).datetime_formatted || I18n.t('token_never_expires', "never");
-        data.used = $.parseFromISO(data.last_used_at).datetime_formatted || "--";
+        data.created = $.datetimeString(data.created_at) || "--";
+        data.expires = $.datetimeString(data.expires_at) || I18n.t('token_never_expires', "never");
+        data.used = $.datetimeString(data.last_used_at) || "--";
         data.visible_token = data.visible_token || "protected";
         $token.data('token', data);
         tokenLoaded(data);
@@ -331,8 +299,11 @@ define([
     $("#access_token_form").find("button").attr('disabled', false).filter(".submit_button").text(I18n.t('buttons.generate_token', "Generate Token"));
     $("#add_access_token_dialog").find(":input").val("").end()
     .dialog({
-      width: 500
-    });
+      width: 500,
+      open: function() {
+        $(this).closest('.ui-dialog').focus()
+      }
+    }).fixDialogButtons();
   });
   $(document).fragmentChange(function(event, hash) {
     var type = hash.substring(1);
@@ -343,179 +314,15 @@ define([
       $("#unregistered_service_" + type + ":visible").click();
     }
   }).fragmentChange();
-  $("#profile_pic_dialog .add_pic_link").click(function(event) {
-    event.preventDefault();
-    $("#add_pic_form").slideToggle();
-  });
-  $("#profile_pic_dialog").delegate('img', 'click', function() {
-    if(!$(this).hasClass('pending')) {
-      $("#profile_pic_dialog .img.selected").removeClass('selected');
-      $(this).parent().addClass('selected');
-      $("#profile_pic_dialog .select_button").attr('disabled', false);
-    }
-  });
-  $("#add_pic_form").formSubmit({
-    fileUpload: true,
 
-    beforeSubmit: function() {
-      $(this).find("button").attr('disabled', true).text(I18n.t('buttons.adding_file', "Adding File..."));
-      var $span = $("<span class='img'><img/></span>");
-      var $img = $span.find("img");
-      $img.attr('src', '/images/ajax-loader.gif');
-      $img.addClass('pending');
-      $("#profile_pic_dialog .profile_pic_list div").before($span);
-      return $span;
-    },
+  new AvatarWidget('.profile_pic_link');
 
-    success: function(data, $span) {
-      var attachment = data.attachment,
-          avatar     = data.avatar,
-          addPicForm = $('#add_pic_form')
-
-      $(this).find('button')
-        .prop('disabled', false)
-        .text(I18n.t('buttons.add_file', 'Add File'));
-
-      addPicForm.slideToggle();
-
-      if ($span) {
-        var $img = $span.find('img');
-
-        $img
-          .data('type', 'attachment')
-          .data('token', data.avatar.token)
-          .attr('alt', attachment.display_name);
-
-        $img[0].onerror = function() {
-          $img.attr('src', '/images/dotted_pic.png');
-        }
-
-        thumbnailPoller.start().then(function() { $img.click(); });
-      }
-    },
-
-    error: function(data, $span) {
-      $(this).find("button").attr('disabled', false).text(I18n.t('errors.adding_file_failed', "Adding File Failed"));
-      if ($span) {
-        $span.remove();
-      }
-    }
-  });
-
-  $("#profile_pic_dialog .cancel_button").click(function() {
-    $("#profile_pic_dialog").dialog('close');
-  });
-
-  $("#profile_pic_dialog .select_button").click(function() {
-    var url = '/api/v1/users/self',
-        $dialog = $('#profile_pic_dialog'),
-        $buttons = $dialog.find('button'),
-        $img = $('#profile_pic_dialog .profile_pic_list .img.selected img'),
-        data = { 'user[avatar][token]': $img.data('token') }
-
-    $buttons
-      .prop('disabled', true)
-      .filter('.select_button')
-      .text(I18n.t('buttons.selecting_image', 'Selecting Image...'));
-
-    if ($img.length === 0) { return; }
-
-    $.ajaxJSON(url, 'PUT', data, function(user) {
-      // on success
-      var profilePicLink = $('.profile_pic_link img'),
-          newSrc = $('#profile_pic_dialog .img.selected img').attr('src');
-
-      $buttons
-        .prop('disabled', false)
-        .filter('.select_button')
-        .text(I18n.t('buttons.select_image', 'Select Image'));
-
-      if (user.avatar_url === '/images/no_pic.gif') {
-        user.avatar_url = '/images/dotted_pic.png';
-      }
-
-      profilePicLink.attr('src', newSrc);
-      $dialog.dialog('close');
-    }, function(response) {
-      // on error
-      $buttons
-        .prop('disabled', false)
-        .filter('.select_button')
-        .text(I18n.t('errors.selecting_image_failed', 'Selecting image failed, please try again'));
+  $("#disable_mfa_link").click(function(event) {
+    var $disable_mfa_link = $(this);
+    $.ajaxJSON($disable_mfa_link.attr('href'), 'DELETE', null, function() {
+      $.flashMessage(I18n.t('notices.mfa_disabled', "Multi-factor authentication disabled"));
+      $disable_mfa_link.remove();
     });
-  });
-
-  $(".profile_pic_link").click(function(event) {
     event.preventDefault();
-    var $dialog = $("#profile_pic_dialog");
-    $dialog.find(".img.selected").removeClass('selected');
-    $dialog.find(".select_button").prop('disabled', true);
-
-    if($(this).hasClass('locked')) {
-      alert(I18n.t('alerts.profile_picture_locked', "Your profile picture has been locked by an administrator, and cannot be changed."));
-      return;
-    }
-
-    if(!$dialog.hasClass('loaded')) {
-      $dialog.find(".profile_pic_list h3").text(I18n.t('headers.loading_images', "Loading Images..."));
-      $.ajaxJSON(profile_pics_url, 'GET', {}, function(data) {
-        if(data && data.length > 0) {
-          $dialog.addClass('loaded')
-          $dialog.find(".profile_pic_list h3").remove();
-          var pollThumbnails = false;
-          for(var idx in data) {
-            var image = data[idx],
-                $span = $('<span />', { 'class': 'img' }),
-                $img  = $('<img />').appendTo($span);
-
-            if (image.pending) {
-              $img
-                .addClass('pending')
-                .attr('src', '/images/ajax-loader.gif')
-                .data('token', image.token);
-              pollThumbnails = true;
-            } else {
-              $img
-                .attr('src', image.url)
-                .data('token', image.token);
-            }
-            $img
-              .data('token', image.token)
-              .attr('alt', image.display_name || image.type)
-              .attr('title', image.display_name || image.type)
-              .attr('data-type', image.type);
-
-            $img[0].onerror = function() {
-              $span.remove();
-            }
-            $dialog.find(".profile_pic_list div").before($span);
-          }
-          if (pollThumbnails) thumbnailPoller.start();
-        } else {
-          $dialog.find(".profile_pic_list h3").text(I18n.t('errors.loading_images_failed', "Loading Images Failed, please try again"));
-        }
-      }, function(data) {
-        $dialog.find(".profile_pic_list h3").text(I18n.t('errors.loading_images_failed', "Loading Images Failed, please try again"));
-      });
-    }
-    $("#profile_pic_dialog").dialog('close').dialog({
-      autoOpen: false,
-      title: I18n.t('titles.select_profile_pic', "Select Profile Pic"),
-      width: 500,
-      height: 300
-    }).dialog('open');
   });
-  var checkImage = function() {
-    var img = $(".profile_pic_link img")[0];
-    if(img) {
-      if(!img.complete) {
-        setTimeout(checkImage, 500);
-      } else {
-        if(img.width < 5) {
-          img.src = '/images/dotted_pic.png';
-        }
-      }
-    }
-  };
-  setTimeout(checkImage, 500);
 });

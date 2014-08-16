@@ -1,4 +1,5 @@
 @import environment.sass
+@import feature_flags
 
 .admins_list
   list-style-type: none
@@ -11,7 +12,7 @@
 
 .admins_list li:hover
   background-color: #eee
-  +border-radius(3px)
+  border-radius: 3px
 
 .admins_list .user_name
   font-weight: bold
@@ -67,3 +68,36 @@
     margin-top: 5px
     padding-top: 5px
     font-size: 11px
+
+#self_registration_type_radios
+  margin-left: 1.5em
+
+#account_settings, .account_settings
+  .unbreakable
+    white-space: nowrap
+  .formtable
+    input, select, td
+      vertical-align: baseline
+    p
+      line-height: 100%
+    select
+      width: 280px
+    input[type="checkbox"]
+      vertical-align: -3px
+  fieldset
+    select, input[type="text"]
+      vertical-align: baseline
+    .remove_domain_link img
+      vertical-align: -3px
+
+#account_settings_tabs
+  legend
+    font-size: 15px
+    font-weight: bold
+
+#survey_announcement_field
+  line-height: 30px
+  input#account_notification_months_in_display_cycle
+    width: 25px
+    padding: 0
+    margin-top: 6px

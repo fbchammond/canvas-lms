@@ -17,6 +17,7 @@
 #
 
 # This is used for the GradebookImporter
+require 'csv'
 require 'ostruct'
 
 class CSVParser
@@ -53,9 +54,9 @@ class CSVParser
       Array.new(num_rows) {blank_row(num_cols)}
     end
 
-    # Slurps up the contents and converts them with FasterCSV, returning an array of arrays.
+    # Slurps up the contents and converts them with CSV, returning an array of arrays.
     def raw_contents
-      @raw_contents ||= FasterCSV.parse( contents, :converters => :numeric )
+      @raw_contents ||= CSV.parse( contents, :converters => :numeric )
     end
 
     # Deletes the notes row

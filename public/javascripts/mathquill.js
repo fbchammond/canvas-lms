@@ -582,7 +582,7 @@ define([
 
     //some html_templates aren't very pretty/useful, so we override them.
     var html_template_overrides = {
-      binomial: '<span style="font-size: 0.5em"><span class="paren" style="font-size: 2.087912087912088em; ">(</span><span class="array"><span><var>n</var></span><span><var>m</var></span></span><span class="paren" style="font-size: 2.087912087912088em; ">)</span></span>',
+      binomial: '<span style="font-size: 0.48em"><span class="paren" style="font-size: 2.087912087912088em; ">(</span><span class="array"><span><var>n</var></span><span><var>m</var></span></span><span class="paren" style="font-size: 2.087912087912088em; ">)</span></span>',
       frac: '<span style="font-size: 0.55em; vertical-align: middle" class="fraction"><span class="numerator"><var>n</var></span><span class="denominator"><var>m</var></span><span style="width:0"></span></span>',
       sqrt: '<span class="block"><span class="sqrt-prefix">&radic;</span><span class="sqrt-stem">&nbsp;</span></span>',
       nthroot: '<span style="font-size: 0.7em"><sup class="nthroot"><var>n</var></sup><span class="block"><span class="sqrt-prefix">&radic;</span><span class="sqrt-stem">&nbsp;</span></span></span>',
@@ -594,29 +594,54 @@ define([
     var tabs = [];
     var panes = [];
     $.each(button_tabs, function(index, tab){
-      tabs.push('<li><a href="#' + tab.name + '_tab"><span class="mathquill-rendered-math">' + tab.example + '</span>' + tab.name + '</a></li>');
+      tabs.push(
+        '<li><a href="#' + tab.name + '_tab" role="tab" tabindex="-1" aria-controls="' + tab.name + '_tab">'
+        + '  <span class="mathquill-rendered-math">' + tab.example + '</span>' + tab.name + '</a></li>'
+      );
       var buttons = [];
       $.each(tab.button_groups, function(index, group) {
         $.each(group, function(index, cmd) {
           var obj = new LatexCmds[cmd](undefined, cmd);
-          buttons.push('<li><a class="mathquill-rendered-math" title="' + (cmd.match(/^[a-z]+$/i) ? '\\' + cmd : cmd) + '">' +
+           buttons.push('<li><a class="mathquill-rendered-math" href="#" title="' + (cmd.match(/^[a-z]+$/i) ? '\\' + cmd : cmd) + '">' +
                        (html_template_overrides[cmd] ? html_template_overrides[cmd] : '<span style="line-height: 1.5em">' + obj.html_template.join('') + '</span>') +
                        '</a></li>');
         });
         buttons.push('<li class="mathquill-button-spacer"></li>');
       });
-      panes.push('<div class="mathquill-tab-pane" id="' + tab.name + '_tab"><ul>' + buttons.join('') + '</ul></div>');
+      panes.push('<div class="mathquill-tab-pane" id="' + tab.name + '_tab" role="tabpanel"><ul>' + buttons.join('') + '</ul></div>');
     });
-    root.toolbar = $('<div class="mathquill-toolbar"><ul class="mathquill-tab-bar">' + tabs.join('') + '</ul><div class="mathquill-toolbar-panes">' + panes.join('') + '</div></div>').prependTo(jQ);
-
-    jQ.find('.mathquill-tab-bar li a').mouseenter(function() {
-      jQ.find('.mathquill-tab-bar li').removeClass('mathquill-tab-selected');
-      jQ.find('.mathquill-tab-pane').removeClass('mathquill-tab-pane-selected');
-      $(this).parent().addClass('mathquill-tab-selected');
+    root.toolbar = $('#mathquill-view .mathquill-toolbar').html('<ul class="mathquill-tab-bar" role="tablist">' + tabs.join('') + '</ul><div class="mathquill-toolbar-panes">' + panes.join('') + '</div>');
+    $('#mathquill-view .mathquill-tab-bar li a').click(function(e) {
+      e.preventDefault();
+      $('#mathquill-view .mathquill-tab-bar li').removeClass('mathquill-tab-selected')
+        .find('a').attr('tabindex', '-1').attr('aria-selected', 'false');
+      $('#mathquill-view .mathquill-tab-pane').removeClass('mathquill-tab-pane-selected');
+      $(this).attr('tabindex', '0').attr('aria-selected', 'true').focus()
+        .parent().addClass('mathquill-tab-selected');
       $(this.href.replace(/.*#/, '#')).addClass('mathquill-tab-pane-selected');
+    }).keydown(function (e) {
+      var direction, listIndex, $tabLinks;
+      switch (e.keyCode) {
+        case 37:
+          direction = 'l';
+          break;
+        case 39:
+          direction = 'r';
+          break;
+        default:
+          return true;
+      }
+      e.preventDefault();
+      $tabLinks = $('#mathquill-view .mathquill-tab-bar li a');
+      listIndex = $tabLinks.index(this);
+      if (listIndex === $tabLinks.length-1 && direction === 'r') {
+        listIndex = -1;
+      }
+      (direction === 'r') ? listIndex++ : listIndex--;
+      $($tabLinks.get(listIndex)).focus().click();
     });
-    jQ.find('.mathquill-tab-bar li:first-child a').mouseenter();
-    jQ.find('a.mathquill-rendered-math').mousedown(function(e) {
+    $('#mathquill-view .mathquill-tab-bar li:first-child a').click();
+    $('#mathquill-view a.mathquill-rendered-math').mousedown(function(e) {
       e.stopPropagation();
     }).click(function(){
       root.cursor.writeLatex(this.title, true);

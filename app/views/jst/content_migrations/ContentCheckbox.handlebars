@@ -1,0 +1,35 @@
+{{#if hasSubCheckboxes }}
+  <div class="treeitem-heading">
+    <a href="#" id="caret-{{cid}}" tabindex="-1" aria-hidden="true" class="checkbox-caret">
+      <i class="icon-arrow-down"></i><i class="icon-arrow-right"></i></a>
+
+    <label class="checkbox">
+      <input type="checkbox" tabindex="-1" name="{{property}}" value="1" id="checkbox-{{cid}}"/>
+      <i aria-hidden="true" class="{{iconClass}}"></i>
+      <span data-bind="title" class="checkbox-title">{{title}}</span>
+      {{#if screenreaderType}}<span class="screenreader-only">({{screenreaderType}})</span>{{/if}}
+
+      {{#if count}}
+      <span data-bind="count">({{count}})</span>
+      {{/if}}
+    </label>
+  </div>
+
+  <ul role="group">
+    <li data-content="sublevelCheckboxes">
+  </ul>
+{{else}}
+  <div class="treeitem-heading">
+    <label class="checkbox no-caret">
+      <input tabindex="-1" type="checkbox" name="{{property}}" value="1" id="checkbox-{{cid}}" />
+      {{#if isTopLevel}}<i aria-hidden="true" class="{{iconClass}}"></i>{{/if}}
+      <span data-bind="title" class="checkbox-title">{{title}}</span>
+
+      {{#if screenreaderType}}<span class="screenreader-only">({{screenreaderType}})</span>{{/if}}
+
+      {{#if count}}
+      <span data-bind="count">({{count}})</span>
+      {{/if}}
+    </label>
+  </div>
+{{/if}}

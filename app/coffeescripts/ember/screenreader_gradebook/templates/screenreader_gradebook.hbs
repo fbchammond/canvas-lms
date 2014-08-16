@@ -1,0 +1,18 @@
+{{partial "header"}}
+
+{{#ic-tabs}}
+  <div {{bind-attr class="hideOutcomes"}}>
+    {{#ic-tab-list}}
+      {{#ic-tab}}{{#t 'assignments'}}Assignments{{/t}}{{/ic-tab}}
+      {{#ic-tab}}{{#t 'learning_mastery'}}Learning Mastery{{/t}}{{/ic-tab}}
+    {{/ic-tab-list}}
+  </div>
+  {{#ic-tab-panel class="assignmentsPanel"}}
+    {{view App.AssignmentsView controller=controller}}
+  {{/ic-tab-panel}}
+  {{#ic-tab-panel class="learningMasteryPanel"}}
+    {{view App.LearningMasteryView controller=controller}}
+  {{/ic-tab-panel}}
+{{/ic-tabs}}
+
+{{partial "aria_announcer"}}

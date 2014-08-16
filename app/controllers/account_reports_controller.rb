@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2012 Instructure, Inc.
+# Copyright (C) 2012 - 2014 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -20,25 +20,143 @@
 #
 # API for accessing account reports.
 #
-# @object report
+# @model Report
 #     {
-#       // The unique identifier for the report.
-#       "id": 1,
+#       "id": "Report",
+#       "properties": {
+#         "id": {
+#           "description": "The unique identifier for the report.",
+#           "example": "1",
+#           "type": "integer"
+#         },
+#         "report": {
+#           "description": "The type of report.",
+#           "example": "sis_export_csv",
+#           "type": "string"
+#         },
+#         "file_url": {
+#           "description": "The url to the report download.",
+#           "example": "https://example.com/some/path",
+#           "type": "string"
+#         },
+#         "status": {
+#           "description": "The status of the report",
+#           "example": "complete",
+#           "type": "string"
+#         },
+#         "parameters": {
+#           "description": "The report parameters",
+#           "$ref": "ReportParameters"
+#         },
+#         "progress": {
+#           "description": "The progress of the report",
+#           "example": "100",
+#           "type": "string"
+#         }
+#       }
+#     }
 #
-#       // The type of report.
-#       "report": "sis_export_csv",
-#
-#       // The url to the report download.
-#       "file_url": "https://example.com/some/path",
-#
-#       // The status of the report
-#       "complete",
-#
-#       // The report parameters
-#       {"enrollment_term":"2","sis_terms_csv":"1","sis_accounts_csv":"1"},
-#
-#       // The progress of the report
-#       "100",
+# @model ReportParameters
+#     {
+#       "id": "ReportParameters",
+#       "description": "The parameters returned will vary for each report.",
+#       "properties": {
+#         "enrollment_term_id": {
+#           "description": "The canvas id of the term to get grades from",
+#           "example": 2,
+#           "type": "integer"
+#         },
+#         "include_deleted": {
+#           "description": "Include deleted objects",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "course_id": {
+#           "description": "The course to report on",
+#           "example": 2,
+#           "type": "integer"
+#         },
+#         "order": {
+#           "description": "The sort order for the csv, Options: 'users', 'courses', 'outcomes'.",
+#           "example": "users",
+#           "type": "string",
+#           "allowableValues": {
+#             "values": [
+#               "users",
+#               "courses",
+#               "outcomes"
+#             ]
+#           }
+#         },
+#         "users": {
+#           "description": "Get the data for users",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "accounts": {
+#           "description": "Get the data for accounts",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "terms": {
+#           "description": "Get the data for terms",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "courses": {
+#           "description": "Get the data for courses",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "sections": {
+#           "description": "Get the data for sections",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "enrollments": {
+#           "description": "Get the data for enrollments",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "groups": {
+#           "description": "Get the data for groups",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "xlist": {
+#           "description": "Get the data for cross-listed courses",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "sis_terms_csv": {
+#           "example": 1,
+#           "type": "integer"
+#         },
+#         "sis_accounts_csv": {
+#           "example": 1,
+#           "type": "integer"
+#         },
+#         "include_enrollment_state": {
+#           "description": "Include enrollment state. Defaults to false",
+#           "example": false,
+#           "type": "boolean"
+#         },
+#         "enrollment_state[]": {
+#           "description": "Include enrollment state. Defaults to 'all' Options: ['active'| 'invited'| 'creation_pending'| 'deleted'| 'rejected'| 'completed'| 'inactive'| 'all']",
+#           "example": "['all']",
+#           "type": "string"
+#         },
+#         "start_at": {
+#           "description": "The beginning date for submissions. Max time range is 2 weeks.",
+#           "example": "2012-07-13T10:55:20-06:00",
+#           "type": "datetime"
+#         },
+#         "end_at": {
+#           "description": "The end date for submissions. Max time range is 2 weeks.",
+#           "example": "2012-07-13T10:55:20-06:00",
+#           "type": "datetime"
+#         }
+#       }
 #     }
 #
 class AccountReportsController < ApplicationController
@@ -62,16 +180,18 @@ class AccountReportsController < ApplicationController
 # @example_response
 #
 #  [
-#    {"id":"student_assignment_outcome_map_csv",
-#    "title":"Student Competency",
-#    "parameters":null
+#    {
+#      "report":"student_assignment_outcome_map_csv",
+#      "title":"Student Competency",
+#      "parameters":null
 #    },
-#    {"report":"grade_export_csv",
-#    "title":"Grade Export",
-#    "parameters":{
-#      "term":{
-#        "description":"The canvas id of the term to get grades from",
-#        "required":true
+#    {
+#      "report":"grade_export_csv",
+#      "title":"Grade Export",
+#      "parameters":{
+#        "term":{
+#          "description":"The canvas id of the term to get grades from",
+#          "required":true
 #        }
 #      }
 #    }
@@ -79,15 +199,15 @@ class AccountReportsController < ApplicationController
 #
   def available_reports
     if authorized_action(@account, @current_user, :read_reports)
-      available_reports = AccountReport.available_reports(@account)
+      available_reports = AccountReport.available_reports
 
       results = []
 
       available_reports.each do |key, value|
-        last_run = @account.account_reports.scoped(:conditions => { :report_type => key }, :order => 'created_at DESC').first
+        last_run = @account.account_reports.where(:report_type => key).order('created_at DESC').first
         last_run = account_report_json(last_run, @current_user, session) if last_run
         report = {
-          :title => value[:title],
+          :title => value.title,
           :parameters => nil,
           :report => key,
           :last_run => last_run
@@ -104,7 +224,7 @@ class AccountReportsController < ApplicationController
         report[:parameters] = parameters unless parameters.length == 0
         results << report
       end
-      render :json => results.to_json
+      render :json => results
 
     end
   end
@@ -114,10 +234,12 @@ class AccountReportsController < ApplicationController
 #
 # @argument [parameters] The parameters will vary for each report
 #
-# @returns report
+# @returns Report
 #
   def create
     if authorized_action(@context, @current_user, :read_reports)
+      available_reports = AccountReport.available_reports.keys
+      raise ActiveRecord::RecordNotFound unless available_reports.include? params[:report]
       report = @account.account_reports.build(:user=>@current_user, :report_type=>params[:report], :parameters=>params[:parameters])
       report.workflow_state = :running
       report.progress = 0
@@ -128,7 +250,7 @@ class AccountReportsController < ApplicationController
   end
 
   def type_scope
-    @context.account_reports.scoped(:conditions => { :report_type => params[:report]})
+    @context.account_reports.where(:report_type => params[:report])
   end
 
 # @API Index of Reports
@@ -138,13 +260,12 @@ class AccountReportsController < ApplicationController
 #     curl -H 'Authorization: Bearer <token>' \ 
 #          https://<canvas>/api/v1/accounts/<account_id>/reports/<report_type>
 #
-# @returns [report]
+# @returns [Report]
 #
   def index
     if authorized_action(@context, @current_user, :read_reports)
 
-      reports = Api.paginate(type_scope, self, url_for({:action => :index, :controller => :account_reports}),
-                             :order => 'start_at DESC')
+      reports = Api.paginate(type_scope.order('start_at DESC'), self, url_for({:action => :index, :controller => :account_reports}))
 
       render :json => account_reports_json(reports, @current_user, session)
     end
@@ -152,13 +273,13 @@ class AccountReportsController < ApplicationController
 
 # @API Status of a Report
 # Returns the status of a report.
-# @argument [report_id] The report id.
+# @argument report_id [Integer] The report id.
 #
 # @example_request
 #     curl -H 'Authorization: Bearer <token>' \ 
 #          https://<canvas>/api/v1/accounts/<account_id>/reports/<report_type>/<report_id>
 #
-# @returns report
+# @returns Report
 #
   def show
     if authorized_action(@context, @current_user, :read_reports)
@@ -176,7 +297,7 @@ class AccountReportsController < ApplicationController
 #          -X DELETE \ 
 #          https://<canvas>/api/v1/accounts/<account_id>/reports/<report_type>/<id>
 #
-# @returns report
+# @returns Report
 #
   def destroy
     if authorized_action(@context, @current_user, :read_reports)

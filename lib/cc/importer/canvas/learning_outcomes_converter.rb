@@ -20,18 +20,23 @@ module CC::Importer::Canvas
     include CC::Importer
     
     def convert_learning_outcomes(doc)
-      outcomes = []
-      return outcomes unless doc
+      return [] unless doc
       
-      doc.at_css('learningOutcomes').children.each do |child|
+      process_outcome_children(doc.at_css('learningOutcomes'))
+    end
+    
+    def process_outcome_children(node, list=[])
+      return list unless node
+      
+      node.children.each do |child|
         if child.name == 'learningOutcome'
-          outcomes << process_learning_outcome(child)
+          list << process_learning_outcome(child)
         elsif child.name == 'learningOutcomeGroup'
-          outcomes << process_outcome_group(child)
+          list << process_outcome_group(child)
         end
       end
       
-      outcomes
+      list
     end
     
     def process_outcome_group(node)
@@ -40,11 +45,7 @@ module CC::Importer::Canvas
       group[:title] = get_val_if_child(node, 'title')
       group[:type] = 'learning_outcome_group'
       group[:description] = get_val_if_child(node, 'description')
-      group[:outcomes] = []
-      
-      node.css('learningOutcome').each do |out_node|
-        group[:outcomes] << process_learning_outcome(out_node)
-      end
+      group[:outcomes] = process_outcome_children(node.at_css('learningOutcomes'))
       
       group
     end
@@ -57,15 +58,28 @@ module CC::Importer::Canvas
       outcome[:description] = get_val_if_child(node, 'description')
       outcome[:mastery_points] = get_float_val(node, 'mastery_points')
       outcome[:points_possible] = get_float_val(node, 'points_possible')
+      outcome[:is_global_outcome] = get_bool_val(node, 'is_global_outcome')
+      outcome[:external_identifier] = get_node_val(node, 'external_identifier')
+
       outcome[:ratings] = []
-      
       node.css('rating').each do |r_node|
         rating = {}
         rating[:description] = get_node_val(r_node, 'description')
         rating[:points] = get_float_val(r_node, 'points')
         outcome[:ratings] << rating
       end
-      
+
+      outcome[:alignments] = []
+      node.css('alignments alignment').each do |align_node|
+        alignment = {}
+        alignment[:content_type] = get_node_val(align_node, 'content_type')
+        alignment[:content_id] = get_node_val(align_node, 'content_id')
+        alignment[:mastery_type] = get_node_val(align_node, 'mastery_type')
+        alignment[:mastery_score] = get_float_val(align_node, 'mastery_score')
+        alignment[:position] = get_int_val(align_node, 'position')
+        outcome[:alignments] << alignment
+      end
+
       outcome
     end
     

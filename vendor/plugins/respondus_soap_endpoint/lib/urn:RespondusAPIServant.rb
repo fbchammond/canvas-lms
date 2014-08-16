@@ -71,8 +71,8 @@ class RespondusAPIPort
   end
 
   def load_user_with_oauth(token, domain_root_account)
-    token = AccessToken.find_by_token(token)
-    if !token.try(:usable?) || !token.try(:user)
+    token = AccessToken.authenticate(token)
+    if !token.try(:user)
       raise(BadAuthError)
     end
     token.used!
@@ -107,7 +107,11 @@ class RespondusAPIPort
   # We wrap these api calls with the code to load and dump the session to the
   # context parameter. individual api methods just need to return any response
   # params after the first three.
-  def make_call(method, userName, password, context, *args)
+  def make_call(method, *args)
+    # nil values come in from soap4r as Soap::Mapping::Object objects,
+    # all other arguments are strings
+    args = args.map { |a| a.is_a?(String) ? a : nil }
+    userName, password, context, *args = args
     Rails.logger.debug "\nProcessing RespondusSoapApi##{method} (for #{rack_env['REMOTE_ADDR']} at #{Time.now}) [SOAP]"
     log_args = args.dup
     log_args.pop if %w(publishServerItem replaceServerItem appendServerItem).include?(method.to_s)
@@ -536,7 +540,7 @@ Implemented for: Canvas LMS}]
     migration.update_migration_settings(settings)
     if itemType == 'qdb'
       # skip creating the quiz, just import the questions into the bank
-      migration.migration_ids_to_import = { :copy => { :quizzes => {} } }
+      migration.migration_ids_to_import = { :copy => { :all_quizzes => false, :all_assessment_question_banks => true} }
     end
     migration.save!
 
@@ -552,7 +556,7 @@ Implemented for: Canvas LMS}]
     session['pending_migration_id'] = migration.id
     session['pending_migration_itemType'] = itemType
 
-    if Setting.get_cached('respondus_endpoint.polling_api', 'true') != 'false'
+    if Setting.get('respondus_endpoint.polling_api', 'true') != 'false'
       return poll_for_completion()
     else
       # Deprecated in-line waiting for the migration. We've worked with Respondus
@@ -561,7 +565,7 @@ Implemented for: Canvas LMS}]
         loop do
           ret = poll_for_completion()
           if ret == ['pending']
-            sleep(Setting.get_cached('respondus_endpoint.polling_time', '2').to_f)
+            sleep(Setting.get('respondus_endpoint.polling_time', '2').to_f)
           else
             return ret
           end

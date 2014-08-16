@@ -17,11 +17,12 @@
  */
 
 define([
-  'ENV',
+  'compiled/views/KeyboardNavDialog',
   'INST' /* INST */,
   'i18n!instructure',
   'jquery' /* $ */,
   'underscore',
+  'timezone',
   'compiled/userSettings',
   'str/htmlEscape',
   'wikiSidebar',
@@ -31,7 +32,7 @@ define([
   'jquery.doc_previews' /* filePreviewsEnabled, loadDocPreview */,
   'jquery.dropdownList' /* dropdownList */,
   'jquery.google-analytics' /* trackEvent */,
-  'jquery.instructure_date_and_time' /* parseFromISO, dateString */,
+  'jquery.instructure_date_and_time' /* datetimeString, dateString, fudgeDateForProfileTimezone */,
   'jquery.instructure_forms' /* formSubmit, fillFormData, formErrors */,
   'jqueryui/dialog',
   'jquery.instructure_misc_helpers' /* replaceTags, youTubeID */,
@@ -41,7 +42,7 @@ define([
   'compiled/jquery.rails_flash_notifications',
   'jquery.templateData' /* fillTemplateData, getTemplateData */,
   'compiled/jquery/fixDialogButtons',
-  'media_comments' /* mediaComment, mediaCommentThumbnail */,
+  'compiled/jquery/mediaCommentThumbnail',
   'tinymce.editor_box' /* editorBox */,
   'vendor/date' /* Date.parse */,
   'vendor/jquery.ba-tinypubsub' /* /\.publish\(/ */,
@@ -49,29 +50,13 @@ define([
   'jqueryui/resizable' /* /\.resizable/ */,
   'jqueryui/sortable' /* /\.sortable/ */,
   'jqueryui/tabs' /* /\.tabs/ */,
-  'vendor/scribd.view' /* scribd */
-], function(ENV, INST, I18n, $, _, userSettings, htmlEscape, wikiSidebar) {
+  'compiled/behaviors/trackEvent',
+  'compiled/badge_counts',
+  'vendor/scribd.view' /* scribd */,
+  'vendor/jquery.placeholder'
+], function(KeyboardNavDialog, INST, I18n, $, _, tz, userSettings, htmlEscape, wikiSidebar) {
 
-  // see: https://github.com/rails/jquery-ujs/blob/master/src/rails.js#L80
-  var CSRFProtection =  function(xhr) {
-    if (ENV.AUTHENTICITY_TOKEN) xhr.setRequestHeader('X-CSRF-Token', ENV.AUTHENTICITY_TOKEN);
-  }
-
-  $.ajaxPrefilter(function( options, originalOptions, jqXHR ) {
-    if ( !options.crossDomain ) CSRFProtection(jqXHR);
-
-    // sends timing info of XHRs to google analytics so we can track ajax speed.
-    // (ONLY for ajax requests that took longer than a second)
-    var urlWithoutPageViewParam = options.url;
-    var start = new Date().getTime();
-    jqXHR.done(function(data, textStatus, jqXHR){
-      var duration = new Date().getTime() - start;
-      if (duration > 1000) {
-        var label = '{"requestingPage": "' + window.location + '," "status": "' + textStatus + '", "X-Request-Context-Id" : "' + jqXHR.getResponseHeader('X-Request-Context-Id') + '", "X-Runtime": ' + jqXHR.getResponseHeader('X-Runtime') + '}';
-        $.trackEvent('XHRs', urlWithoutPageViewParam, label, duration );
-      }
-    });
-  });
+  $.trackEvent('Route', location.pathname.replace(/\/$/, '').replace(/\d+/g, '--') || '/');
 
   $(function() {
 
@@ -79,9 +64,7 @@ define([
     if (window._earlyClick) {
 
       // unset the onclick handler we were using to capture the events
-      document.removeEventListener ?
-        document.removeEventListener('click', _earlyClick, false) :
-        document.detachEvent('onclick', _earlyClick);
+      document.removeEventListener('click', _earlyClick);
 
       if (_earlyClick.clicks) {
         // wait to fire the "click" events till after all of the event hanlders loaded at dom ready are initialized
@@ -115,7 +98,6 @@ define([
     function unhoverMenuItem(){
       $menu_items.filter(".hover-pending").removeClass('hover-pending');
       menuItemHoverTimeoutId = window.setTimeout(clearMenuHovers, 400);
-      return false;
     }
 
     function hoverMenuItem(event){
@@ -130,21 +112,12 @@ define([
         }
       }, 300);
       $.publish('menu/hovered', $elem);
-      return false;
     }
 
     $menu
       .delegate('.menu-item', 'mouseenter focusin', hoverMenuItem )
       .delegate('.menu-item', 'mouseleave focusout', unhoverMenuItem );
 
-    // ie7 needs some help forcing the columns to be as wide as (width_of_one_column * #_of_columns_in_this_dropdown)
-    if (INST.browser.ie7) {
-      $(".menu-item-drop")
-        .width(function(){
-          var $columns = $(this).find(".menu-item-drop-column");
-          return $columns.length * $columns.css('width').replace('px', '');
-        });
-    }
 
     // this stuff is for the ipad, it needs a little help getting the drop menus to show up
     $menu_items.live('touchstart', function(){
@@ -198,15 +171,7 @@ define([
       }
     });
 
-
-    $(document).keycodes("shift+/", function(event) {
-      $("#keyboard_navigation").dialog('close').dialog({
-        title: I18n.t('titles.keyboard_shortcuts', "Keyboard Shortcuts"),
-        width: 400,
-        height: "auto",
-        autoOpen: false
-      }).dialog('open');
-    });
+    KeyboardNavDialog.prototype.bindOpenKeys.call({$el: $('#keyboard_navigation')});
 
     $("#switched_role_type").ifExists(function(){
       var context_class = $(this).attr('class');
@@ -253,44 +218,14 @@ define([
     $(".custom_search_results_link").click(function(event) {
       event.preventDefault();
       var $dialog = $("#custom_search_results_dialog");
-      $dialog.dialog('close').dialog({
-        autoOpen: false,
+      $dialog.dialog({
         title: I18n.t('titles.search_for_open_resources', "Search for Open Resources"),
         width: 600,
         height: 400
-      }).dialog('open');
+      });
       var control = $dialog.data('searchControl');
       if(control) {
         control.execute($("title").text());
-      }
-    });
-
-    $("a.instructure_inline_media_comment").live('click', function(event) {
-      event.preventDefault();
-      if(INST.kalturaSettings) {
-        var $link = $(this),
-            $div = $("<span><span></span></span>"),
-            mediaType = 'video',
-            id = $link.data('media_comment_id') || $link.find(".media_comment_id:first").text();
-        $div.css('display', 'block');
-
-        if(!id && $link.attr('id') && $link.attr('id').match(/^media_comment_/)) {
-          id = $link.attr('id').substring(14);
-        }
-        $link.after($div);
-        $link.hide(); //remove();
-        if($link.data('media_comment_type') === 'audio' || $link.is('.audio_playback, .audio_comment, .instructure_audio_link')) { mediaType = 'audio'; }
-        $div.children("span").mediaComment('show_inline', id, mediaType, $link.attr('href'));
-        $div.append("<br/><a href='#' style='font-size: 0.8em;' class='hide_flash_embed_link'>" + I18n.t('links.minimize_embedded_kaltura_content', "Minimize Embedded Content") + "</a>");
-        $div.find(".hide_flash_embed_link").click(function(event) {
-          event.preventDefault();
-          $div.remove();
-          $link.show();
-          $.trackEvent('hide_embedded_content', 'hide_media');
-        });
-        $.trackEvent('show_embedded_content', 'show_media');
-      } else {
-        alert(I18n.t('alerts.kaltura_disabled', "Kaltura has been disabled for this Canvas site"));
       }
     });
 
@@ -387,14 +322,16 @@ define([
             .addClass('external')
             .html('<span>' + $(this).html() + '</span>')
             .attr('target', '_blank')
+            .attr('aria-label', htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')))
             .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
         }).end()
-        .find("a.instructure_file_link").each(function() {
-          var $link = $(this),
-              $span = $("<span class='instructure_file_link_holder link_holder'/>");
-          $link.removeClass('instructure_file_link').before($span).appendTo($span);
-          if($link.attr('target') != '_blank') {
-            $span.append("<a href='" + $link.attr('href') + "' target='_blank' title='" + htmlEscape(I18n.t('titles.view_in_new_window', "View in a new window")) + "' style='padding-left: 5px;'><img src='/images/popout.png'/></a>");
+          .find("a.instructure_file_link").each(function() {
+              var $link = $(this),
+                  $span = $("<span class='instructure_file_link_holder link_holder'/>");
+              $link.removeClass('instructure_file_link').before($span).appendTo($span);
+              if($link.attr('target') != '_blank') {
+            $span.append("<a href='" + $link.attr('href') + "' target='_blank' title='" + htmlEscape(I18n.t('titles.view_in_new_window', "View in a new window")) +
+                "' style='padding-left: 5px;'><img src='/images/popout.png' alt='" + htmlEscape(I18n.t('titles.view_in_new_window', "View in a new window")) + "'/></a>");
           }
         });
       if ($.filePreviewsEnabled()) {
@@ -402,15 +339,16 @@ define([
           var $link = $(this);
           if ( $.trim($link.text()) ) {
             var $span = $("<span class='instructure_scribd_file_holder link_holder'/>"),
-                $scribd_link = $("<a class='scribd_file_preview_link' href='" + $link.attr('href') + "' title='" + htmlEscape(I18n.t('titles.preview_document', "Preview the document")) + "' style='padding-left: 5px;'><img src='/images/preview.png'/></a>");
-            $link.removeClass('instructure_scribd_file').before($span).appendTo($span);
-            $span.append($scribd_link);
-            if($link.hasClass('auto_open')) {
-              $scribd_link.click();
-            }
-          }
-        });
-      }
+                        $scribd_link = $("<a class='scribd_file_preview_link' aria-hidden='true' tabindex='-1' href='" + $link.attr('href') + "' title='" + htmlEscape(I18n.t('titles.preview_document', "Preview the document")) +
+                            "' style='padding-left: 5px;'><img src='/images/preview.png' alt='" + htmlEscape(I18n.t('titles.preview_document', "Preview the document")) + "'/></a>");
+                    $link.removeClass('instructure_scribd_file').before($span).appendTo($span);
+                    $span.append($scribd_link);
+                    if($link.hasClass('auto_open')) {
+                        $scribd_link.click();
+                    }
+                }
+            });
+        }
 
       $(".user_content.unenhanced a")
         .find("img.media_comment_thumbnail").each(function() {
@@ -456,14 +394,20 @@ define([
           var attachment = data && data.attachment,
               scribdDocAttributes = attachment && attachment.scribd_doc && attachment.scribd_doc.attributes;
           $link.loadingImage('remove');
-          if (attachment && (scribdDocAttributes || $.isPreviewable(attachment.content_type, 'google'))) {
+          if (attachment &&
+                (attachment['scribdable?'] ||
+                 $.isPreviewable(attachment.content_type, 'google') ||
+                 attachment.canvadoc_session_url)) {
             var $div = $("<span><br /></span>")
               .insertAfter($link.parents(".link_holder:last"))
               .loadDocPreview({
+                canvadoc_session_url: attachment.canvadoc_session_url,
                 scribd_doc_id: scribdDocAttributes && scribdDocAttributes.doc_id,
                 scribd_access_key: scribdDocAttributes && scribdDocAttributes.access_key,
                 mimeType: attachment.content_type,
-                public_url: attachment.authenticated_s3_url
+                public_url: attachment.authenticated_s3_url,
+                attachment_scribd_render_url: attachment.scribd_render_url,
+                attachment_preview_processing: attachment.workflow_state == 'pending_upload' || attachment.workflow_state == 'processing'
               })
               .append(
                 $('<a href="#" style="font-size: 0.8em;" class="hide_file_preview_link">' + htmlEscape(I18n.t('links.minimize_file_preview', 'Minimize File Preview')) + '</a>')
@@ -501,9 +445,9 @@ define([
 
     $(".zone_cached_datetime").each(function() {
       if($(this).attr('title')) {
-        var dt = $.parseFromISO($(this).attr('title'));
-        if(dt.timestamp) {
-          $(this).text(dt.datetime_formatted);
+        var datetime = tz.parse($(this).attr('title'));
+        if (datetime) {
+          $(this).text($.datetimeString(datetime));
         }
       }
     });
@@ -571,12 +515,11 @@ define([
 
     $(".cant_record_link").click(function(event) {
       event.preventDefault();
-      $("#cant_record_dialog").dialog('close').dialog({
-        autoOpen: false,
+      $("#cant_record_dialog").dialog({
         modal: true,
         title: I18n.t('titles.cant_create_recordings', "Can't Create Recordings?"),
         width: 400
-      }).dialog('open');
+      });
     });
 
     $(".communication_message .content .links .show_users_link,.communication_message .header .show_users_link").click(function(event) {
@@ -612,7 +555,7 @@ define([
         message_data = data.messages[0];
         $message.fillTemplateData({
           data: {
-            post_date: $.parseFromISO(message_data.created_at).datetime_formatted,
+            post_date: $.datetimeString(message_data.created_at),
             message: message_data.body
           },
           htmlValues: ['message']
@@ -626,7 +569,7 @@ define([
         // notify the user and any other watchers in the document
         $.flashMessage('Message Sent!');
         $(document).triggerHandler('user_content_change');
-        if(location.href.match(/dashboard/)) {
+        if(location.pathname === '/') {
           $.trackEvent('dashboard_comment', 'create');
         }
       },
@@ -657,7 +600,7 @@ define([
           }
           if(submission) {
             var comment = submission.submission_comments[submission.submission_comments.length - 1].submission_comment;
-            comment.post_date = $.parseFromISO(comment.created_at).datetime_formatted;
+            comment.post_date = $.datetimeString(comment.created_at);
             comment.message = comment.formatted_body || comment.comment;
             $message.fillTemplateData({
               data: comment,
@@ -666,7 +609,7 @@ define([
           }
         } else {
           var entry = data.discussion_entry;
-          entry.post_date = $.parseFromISO(entry.created_at).datetime_formatted;
+          entry.post_date = $.datetimeString(entry.created_at);
           $message.find(".content > .message_html").val(entry.message);
           $message.fillTemplateData({
             data: entry,
@@ -764,7 +707,7 @@ define([
             var topic = data.discussion_topic;
             topic.context_code = context_name;
             topic.user_name = $("#identity .user_name").text();
-            topic.post_date = $.parseFromISO(topic.created_at).datetime_formatted;
+            topic.post_date = $.datetimeString(topic.created_at);
             topic.topic_id = topic.id;
             var $template = $(this).parents(".communication_message").find(".template");
             var $message = $template.find(".communication_message").clone(true);
@@ -810,8 +753,7 @@ define([
     // vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
     // vvvvvvvvvvvvvvvvv BEGIN stuf form making pretty dates vvvvvvvvvvvvvvvvvv
     // vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-    var timeZoneOffset = parseInt($("#time_zone_offset").text(), 10),
-        timeAgoEvents  = [];
+    var timeAgoEvents  = [];
     function timeAgoRefresh() {
       timeAgoEvents = $(".time_ago_date:visible").toArray();
       processNextTimeAgoEvent();
@@ -820,31 +762,13 @@ define([
       var eventElement = timeAgoEvents.shift();
       if (eventElement) {
         var $event = $(eventElement),
-            originalDate = $event.data('original_date') || "",
-            date = $event.data('parsed_date') || ( originalDate ?
-                      Date.parse(originalDate.replace(/ (at|by)/, "")) :
-                      Date.parse(($event.text() || "").replace(/ (at|by)/, "")) );
+            date = $event.data('parsed_date') || Date.parse($event.data('timestamp') || "");
         if (date) {
-          var now = new Date();
-          now.setDate(now.getDate() + 1);
-          if (!originalDate && date > now && date - now > 3600000) {
-            var year = date.getUTCFullYear().toString();
-            if(date > now && date.getUTCFullYear() == now.getUTCFullYear() && !$event.text().match(year)) {
-              date.setUTCFullYear(date.getUTCFullYear() - 1);
-            }
-          }
-          var timeZoneDiff = now.getTimezoneOffset() - timeZoneOffset;
-          if(isNaN(timeZoneDiff)) { timeZoneDiff = 0; }
-          var diff = now - date + (timeZoneDiff * 60 * 1000);
-          $event.data('original_date', date.toString("MMM d, yyyy h:mmtt"));
+          var diff = new Date() - date;
+          $event.data('timestamp', date.toISOString());
           $event.data('parsed_date', date);
-          // This line would compensate for a user who set their time zone to something
-          //   different than the time zone setting on the current computer.  It would adjust
-          //   the times displayed to match the time zone of the current computer.  This could
-          //   be confusing for a student since due dates and things will NOT be adjusted,
-          //   so dates and times will not match up.
-          // date = date.addMinutes(-1 * timeZoneDiff);
-          var defaultDateString = date.toString("MMM d, yyyy") + date.toString(" h:mmtt").toLowerCase();
+          var fudgedDate = $.fudgeDateForProfileTimezone(date);
+          var defaultDateString = fudgedDate.toString("MMM d, yyyy") + fudgedDate.toString(" h:mmtt").toLowerCase();
           var dateString = defaultDateString;
           if(diff < (24 * 3600 * 1000)) {
             if(diff < (3600 * 1000)) {
@@ -890,6 +814,9 @@ define([
 
               if (!data[label + '_item']) {
                 tag.title = tag.title || tag.name;
+                if( tag.workflow_state === "unpublished" ){
+                  tag.title += " (" + I18n.t("draft", "Draft") + ")"
+                }
                 tag.text = (label == 'previous' ?
                   I18n.t('buttons.previous_module', "Previous Module") :
                   I18n.t('buttons.next_module', "Next Module"));
@@ -909,6 +836,16 @@ define([
           $(window).resize(); //this will be helpful for things like $.fn.fillWindowWithMe so that it knows the dimensions of the page have changed.
         }
       });
+    } else {
+      var draft_state_msf = $('#sequence_footer.draft_state_enabled')
+      if (draft_state_msf.length) {
+        var el = $(draft_state_msf[0]);
+        el.moduleSequenceFooter({
+          courseID: el.attr("data-course-id"),
+          assetType: el.attr("data-asset-type"),
+          assetID: el.attr("data-asset-id")
+        });
+      }
     }
 
     var $wizard_box = $("#wizard_box");
@@ -923,6 +860,7 @@ define([
       userSettings.set('hide_wizard_' + pathname, true);
       $wizard_box.slideUp('fast', function() {
         $(".wizard_popup_link").slideDown('fast');
+        $('.wizard_popup_link').focus();
         setWizardSpacerBoxDispay('hide');
       });
     });
@@ -932,6 +870,7 @@ define([
       $(".wizard_popup_link").slideUp('fast');
       $wizard_box.slideDown('fast', function() {
         $wizard_box.triggerHandler('wizard_opened');
+        $wizard_box.focus();
         $([document, window]).triggerHandler('scroll');
       });
     });
@@ -981,9 +920,9 @@ define([
 
     // this is for things like the to-do, recent items and upcoming, it
     // happend a lot so rather than duplicating it everywhere I stuck it here
-    $(".more_link").click(function(event) {
+    $("#right-side").delegate(".more_link", "click", function(event) {
       var $this = $(this);
-      var $children = $this.parents("ul").children().show();
+      var $children = $this.parents("ul").children(':hidden').show();
       $this.closest('li').remove();
 
       // if they are using the keyboard to navigate (they hit enter on the link instead of actually
@@ -996,7 +935,7 @@ define([
       }
       return false;
     });
-    $(".to-do-list, #topic_list").delegate('.disable_item_link', 'click', function(event) {
+    $("#right-side, #topic_list").delegate('.disable_item_link', 'click', function(event) {
       event.preventDefault();
       var $item = $(this).parents("li, div.topic_message");
       var url = $(this).data('api-href');
@@ -1020,17 +959,6 @@ define([
         remove(url + "?permanent=1");
       }
     });
-    // if there is not a h1 or h2 on the page, then stick one in there for accessibility.
-    if (!$('h1').length) {
-      $('<h1 class="ui-helper-hidden-accessible" />').text(document.title).prependTo('#content');
-    }
-    if(!$('h2').length && $('#breadcrumbs li:last').text().length ) {
-      var $h2 = $('<h2 class="ui-helper-hidden-accessible" />').text($('#breadcrumbs li:last').text()),
-          $h1 = $('#content h1');
-      $h1.length ?
-        $h1.after($h2) :
-        $h2.prependTo('#content');
-    }
 
     // in 2 seconds (to give time for everything else to load), find all the external links and add give them
     // the external link look and behavior (force them to open in a new tab)
@@ -1046,6 +974,7 @@ define([
           .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
       });
     }, 2000);
-
   });
+
+  $('input[placeholder], textarea[placeholder]').placeholder();
 });

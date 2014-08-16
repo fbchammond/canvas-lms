@@ -17,74 +17,36 @@
 #
 
 require 'ostruct'
+
+class OpenStruct
+  def as_json(options={})
+    table
+  end
+end
+
 class OpenObject < OpenStruct
   attr_accessor :object_type
   def self.build(type, data={})
-    data ||= {}
-    res = OpenObject.new(data.dup)
+    res = OpenObject.new(data)
     res.object_type = type
     res
   end
-  
-  def assert_hash_data
-    @table ||= {}
-  end
-  
+
   def id
-    assert_hash_data
-    @table && @table[:id]
+    self.table[:id]
   end
-  
-  def type
-    assert_hash_data
-    @table && @table[:type]
-  end
-  
+
   def asset_string
-    assert_hash_data
-    return @table[:asset_string] if @table[:asset_string]
-    return nil unless @table && @table[:type] && @table[:id]
-    "#{@table[:type].underscore}_#{@table[:id]}"
+    return self.table[:asset_string] if self.table[:asset_string]
+    return nil unless self.type && self.id
+    "#{self.type.underscore}_#{self.id}"
   end
-  
-  def hash_data
-    res = {}
-    assert_hash_data
-    @table.each do |key, value|
-      res[key] = value
-      if value.is_a? Array
-        new_list = []
-        res[key].each do |obj|
-          if obj.is_a? OpenObject
-            new_list << obj.hash_data
-          elsif obj.is_a? OpenStruct
-            new_list << obj.table
-          else
-            new_list << obj
-          end
-        end
-        res[key] = new_list
-      elsif value.is_a? Time
-        res[key] = value.utc.iso8601.to_s
-      elsif value.is_a? OpenObject
-        res[key] = value.hash_data
-      elsif value.is_a? OpenStruct
-        res[key] = value.table
-      end
-    end
-    res
+
+  def as_json(options={})
+    object_type ? {object_type => super} : super
   end
-  def to_json(context=nil)
-    if @object_type
-      res = {}
-      res[@object_type.to_sym] = self.hash_data
-      res.to_json
-    else
-      self.hash_data.to_json
-    end
-  end
+
   def self.process(pre={})
-    pre = JSON.parse(pre) if pre.is_a? String
     pre = pre.dup
     if pre.is_a? Array
       new_list = []

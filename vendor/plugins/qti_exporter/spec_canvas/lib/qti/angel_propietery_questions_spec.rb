@@ -1,4 +1,4 @@
-require File.dirname(__FILE__) + '/../../qti_helper'
+require File.expand_path(File.dirname(__FILE__) + '/../../qti_helper')
 if Qti.migration_executable
 describe "Converting Angel QTI" do
 
@@ -72,7 +72,7 @@ describe "Converting Angel QTI" do
     hash.should == AngelPropExpected::ORDER
   end
 
-  it "should flag file response questions as not supported" do
+  it "should convert file response questions" do
     qti_data = file_as_string(angel_question_dir, 'p_offline.xml')
     hash = Qti::AssessmentItemConverter.create_instructure_question(:qti_data=>qti_data, :interaction_type=>'file_upload_question', :custom_type=>'angel')
     hash.should == AngelPropExpected::FILE_RESPONSE
@@ -231,20 +231,22 @@ module AngelPropExpected
           :points_possible=>1,
           :question_type=>"file_upload_question",
           :question_text=>"<div>This is an offline item. I don't know what to do.</div>",
-          :unsupported=>true}
+      }
 
   FIB =
       {
           :answers=>
               [{:text=>"quick", :weight=>100, :comments=>"", :blank_id=>"l1"},
                {:text=>"fox", :weight=>100, :comments=>"", :blank_id=>"l2"},
-               {:text=>"dog", :weight=>100, :comments=>"", :blank_id=>"l3"}],
+               {:text=>"dog", :weight=>100, :comments=>"", :blank_id=>"l3"},
+               {:text=>"0.02", :weight=>100, :comments=>"", :blank_id=>"l4"},
+               {:text=>"5", :weight=>100, :comments=>"", :blank_id=>"l5"}],
           :correct_comments=>"",
           :incorrect_comments=>"",
           :question_name=>"Fill in the blank(s)",
           :migration_id=>"",
           :points_possible=>1,
-          :question_text=>"<div>The [l1] brown [l2] jumped over the lazy [l3] .</div>",
+          :question_text=>"<div>The [l1] brown [l2] jumped over the lazy [l3] .</div> [l4]  [l5] ",
           :question_type=>"fill_in_multiple_blanks_question"}
 
 end

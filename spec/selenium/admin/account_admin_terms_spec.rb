@@ -1,7 +1,7 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
 describe "account admin terms" do
-  it_should_behave_like "in-process server selenium tests"
+  include_examples "in-process server selenium tests"
 
   def click_term_action_link(term_div, action_link_css)
     term_div.find_element(:css, action_link_css).click
@@ -65,9 +65,7 @@ describe "account admin terms" do
 
     it "should delete a term" do
       term_name = "delete term"
-      term = EnrollmentTerm.create!(:name => term_name)
-      term.root_account_id = @course.root_account_id
-      term.save!
+      term = @course.root_account.enrollment_terms.create!(:name => term_name)
       get "/accounts/#{Account.default.id}/terms"
 
       validate_term_display(0, term_name, 0, 0)

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -24,6 +24,14 @@ class TestApiInstance
     @domain_root_account = root_account
     @current_user = current_user
   end
+
+  def account_url(account)
+    URI.encode("http://www.example.com/accounts/#{account}")
+  end
+
+  def course_assignment_url(course, assignment)
+    URI.encode("http://www.example.com/courses/#{course}/assignments/#{assignment}")
+  end
 end
 
 describe Api do
@@ -46,6 +54,26 @@ describe Api do
       @api.api_find(User, "sis_login_id:sis_user_1@example.com").should == @user
     end
 
+    it 'should not find record from other account' do
+      account = Account.create(name: 'new')
+      @user = user_with_pseudonym username: "sis_user_1@example.com", account: account
+      (lambda {@api.api_find(User, "sis_login_id:sis_user_2@example.com")}).should raise_error(ActiveRecord::RecordNotFound)
+    end
+
+    it 'should find record from other root account explicitly' do
+      account = Account.create(name: 'new')
+      @user = user_with_pseudonym username: "sis_user_1@example.com", account: account
+      Api.expects(:sis_parse_id).with("root_account:school:sis_login_id:sis_user_1@example.com", anything, anything).
+          returns(['pseudonyms.unique_id', ["sis_user_1@example.com", account]])
+      @api.api_find(User, "root_account:school:sis_login_id:sis_user_1@example.com").should == @user
+    end
+
+    it 'should allow passing account param and find record' do
+      account = Account.create(name: 'new')
+      @user = user_with_pseudonym username: "sis_user_1@example.com", account: account
+      @api.api_find(User, "sis_login_id:sis_user_1@example.com", account: account).should == @user
+    end
+
     it 'should not find a missing sis_id record' do
       @user = user_with_pseudonym :username => "sis_user_1@example.com"
       (lambda {@api.api_find(User, "sis_login_id:sis_user_2@example.com")}).should raise_error(ActiveRecord::RecordNotFound)
@@ -58,6 +86,46 @@ describe Api do
     it 'should not find user id "self" when a current user is not provided' do
       (lambda {TestApiInstance.new(Account.default, nil).api_find(User, "self")}).should raise_error(ActiveRecord::RecordNotFound)
     end
+
+    it 'should find account id "self"' do
+      account = Account.create!
+      account.should == TestApiInstance.new(account, nil).api_find(Account, 'self')
+    end
+
+    it 'should find account id "default"' do
+      account = Account.create!
+      Account.default.should == TestApiInstance.new(account, nil).api_find(Account, 'default')
+    end
+
+    it 'should find account id "site_admin"' do
+      account = Account.create!
+      Account.site_admin.should == TestApiInstance.new(account, nil).api_find(Account, 'site_admin')
+    end
+
+    it 'should find term id "default"' do
+      account = Account.create!
+      TestApiInstance.new(account, nil).api_find(account.enrollment_terms, 'default').should == account.default_enrollment_term
+    end
+
+    it 'should find term id "current"' do
+      account = Account.create!
+      term = account.enrollment_terms.create!(start_at: 1.week.ago, end_at: 1.week.from_now)
+      TestApiInstance.new(account, nil).api_find(account.enrollment_terms, 'current').should == term
+    end
+
+    it 'should not find a "current" term if there is more than one candidate' do
+      account = Account.create!
+      account.enrollment_terms.create!(start_at: 1.week.ago, end_at: 1.week.from_now)
+      account.enrollment_terms.create!(start_at: 2.weeks.ago, end_at: 2.weeks.from_now)
+      TestApiInstance.new(account, nil).api_find_all(account.enrollment_terms, ['current']).should == []
+    end
+
+    it 'should find an open ended "current" term' do
+      account = Account.create!
+      term = account.enrollment_terms.create!(start_at: 1.week.ago)
+      TestApiInstance.new(account, nil).api_find(account.enrollment_terms, 'current').should == term
+    end
+
 
     it 'should not find a user with an invalid AR id' do
       (lambda {@api.api_find(User, "a1")}).should raise_error(ActiveRecord::RecordNotFound)
@@ -83,6 +151,26 @@ describe Api do
           api.api_find(User, user.id).should == user
         end
       end
+    end
+
+    it "should find user by lti_context_id" do
+      @user.lti_context_id = Canvas::Security.hmac_sha1(@user.asset_string.to_s, 'key')
+      @user.save!
+      @api.api_find(User, "lti_context_id:#{@user.lti_context_id}").should == @user
+    end
+
+    it "should find course by lti_context_id" do
+      lti_course = course
+      lti_course.lti_context_id = Canvas::Security.hmac_sha1(lti_course.asset_string.to_s, 'key')
+      lti_course.save!
+      @api.api_find(Course, "lti_context_id:#{lti_course.lti_context_id}").should == lti_course
+    end
+
+    it "should find account by lti_context_id" do
+      account = Account.create!(name: 'account')
+      account.lti_context_id = Canvas::Security.hmac_sha1(account.asset_string.to_s, 'key')
+      account.save!
+      @api.api_find(Account, "lti_context_id:#{account.lti_context_id}").should == account
     end
   end
 
@@ -155,15 +243,15 @@ describe Api do
     it "should limit results if a limit is provided" do
       collection = mock()
       collection.stubs(:table_name).returns("courses")
-      collection.expects(:all).with({:conditions => ['? OR (id IN (?, ?, ?))', false, 1, 2, 3]}).returns("result")
+      collection.expects(:all).with({:conditions => { 'id' => [1, 2, 3]}}).returns("result")
       @api.api_find_all(collection, [1,2,3]).should == "result"
-      collection.expects(:all).with({:conditions => ['? OR (id IN (?, ?, ?))', false, 1, 2, 3], :limit => 3}).returns("result")
-      @api.api_find_all(collection, [1,2,3], 3).should == "result"
+      collection.expects(:all).with({:conditions => { 'id' => [1, 2, 3]}, :limit => 3}).returns("result")
+      @api.api_find_all(collection, [1,2,3], limit: 3).should == "result"
     end
 
     it 'should limit results if a limit is provided - unmocked' do
       users = 0.upto(9).map{|x| user}
-      result = @api.api_find_all(User, 0.upto(9).map{|i| users[i].id}, 5)
+      result = @api.api_find_all(User, 0.upto(9).map{|i| users[i].id}, limit: 5)
       result.count.should == 5
       result.each { |user| users.include?(user).should be_true }
     end
@@ -172,6 +260,17 @@ describe Api do
       collection = mock()
       collection.stubs(:table_name).returns("courses")
       @api.api_find_all(collection, ["sis_invalid:1"]).should == []
+    end
+
+    context "sharding" do
+      specs_require_sharding
+
+      it "should find users from other shards" do
+        @shard1.activate { @user2 = User.create! }
+        @shard2.activate { @user3 = User.create! }
+
+        @api.api_find_all(User, [@user2.id, @user3.id]).sort_by(&:global_id).should == [@user2, @user3].sort_by(&:global_id)
+      end
     end
   end
 
@@ -235,36 +334,28 @@ describe Api do
 
     it 'should try and make params when non-ar_id columns have returned with ar_id columns' do
       collection = mock()
-      object1 = mock()
-      object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
-      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({"test-lookup" => ["thing1", "thing2"], "other-lookup" => ["thing2", "thing3"]})
+      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}, anything).returns({"test-lookup" => ["thing1", "thing2"], "other-lookup" => ["thing2", "thing3"]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).with({"other-lookup" => ["thing2", "thing3"]}, {:lookups => {"id" => "test-lookup"}}, "test-root-account").returns({"find-params" => "test"})
-      collection.expects(:all).with({"find-params" => "test", :select => :id}).returns([object1, object2])
-      object1.expects(:id).returns("thing2")
-      object2.expects(:id).returns("thing3")
+      collection.expects(:scoped).with("find-params" => "test").returns(collection)
+      collection.expects(:pluck).with(:id).returns(["thing2", "thing3"])
       Api.map_ids("test-ids", collection, "test-root-account").should == ["thing1", "thing2", "thing3"]
     end
 
     it 'should try and make params when non-ar_id columns have returned without ar_id columns' do
       collection = mock()
-      object1 = mock()
-      object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
-      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({"other-lookup" => ["thing2", "thing3"]})
+      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}, anything).returns({"other-lookup" => ["thing2", "thing3"]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).with({"other-lookup" => ["thing2", "thing3"]}, {:lookups => {"id" => "test-lookup"}}, "test-root-account").returns({"find-params" => "test"})
-      collection.expects(:all).with({"find-params" => "test", :select => :id}).returns([object1, object2])
-      object1.expects(:id).returns("thing2")
-      object2.expects(:id).returns("thing3")
+      collection.expects(:scoped).with("find-params" => "test").returns(collection)
+      collection.expects(:pluck).with(:id).returns(["thing2", "thing3"])
       Api.map_ids("test-ids", collection, "test-root-account").should == ["thing2", "thing3"]
     end
 
     it 'should not try and make params when no non-ar_id columns have returned with ar_id columns' do
       collection = mock()
-      object1 = mock()
-      object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
-      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({"test-lookup" => ["thing1", "thing2"]})
+      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}, anything).returns({"test-lookup" => ["thing1", "thing2"]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).at_most(0)
       Api.map_ids("test-ids", collection, "test-root-account").should == ["thing1", "thing2"]
     end
@@ -274,7 +365,7 @@ describe Api do
       object1 = mock()
       object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
-      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({})
+      Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}, anything).returns({})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).at_most(0)
       Api.map_ids("test-ids", collection, "test-root-account").should == []
     end
@@ -383,7 +474,7 @@ describe Api do
   context 'sis_find_params_for_collection' do
     it 'should pass along the sis_mapping to sis_find_params_for_sis_mapping' do
       root_account = account_model
-      Api.expects(:sis_find_params_for_sis_mapping).with(Api::SIS_MAPPINGS['users'], [1,2,3], root_account).returns(1234)
+      Api.expects(:sis_find_params_for_sis_mapping).with(Api::SIS_MAPPINGS['users'], [1,2,3], root_account, anything).returns(1234)
       Api.expects(:sis_find_sis_mapping_for_collection).with(User).returns(Api::SIS_MAPPINGS['users'])
       Api.sis_find_params_for_collection(User, [1,2,3], root_account).should == 1234
     end
@@ -392,7 +483,7 @@ describe Api do
   context 'sis_find_params_for_sis_mapping' do
     it 'should pass along the parsed ids to sis_make_params_for_sis_mapping_and_columns' do
       root_account = account_model
-      Api.expects(:sis_parse_ids).with([1,2,3], "lookups").returns({"users.id" => [4,5,6]})
+      Api.expects(:sis_parse_ids).with([1,2,3], "lookups", anything).returns({"users.id" => [4,5,6]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).with({"users.id" => [4,5,6]}, {:lookups => "lookups"}, root_account).returns("params")
       Api.sis_find_params_for_sis_mapping({:lookups => "lookups"}, [1,2,3], root_account).should == "params"
     end
@@ -400,32 +491,28 @@ describe Api do
 
   context 'sis_make_params_for_sis_mapping_and_columns' do
     it 'should fail when not given a root account' do
-      Api.sis_make_params_for_sis_mapping_and_columns({}, {}, Account.default).should == { :conditions => ["?", false] }
+      Api.sis_make_params_for_sis_mapping_and_columns({}, {}, Account.default).should == :not_found
       (lambda {Api.sis_make_params_for_sis_mapping_and_columns({}, {}, user)}).should raise_error("sis_root_account required for lookups")
     end
 
     it 'should properly generate an escaped arg string' do
-      Api.sis_make_params_for_sis_mapping_and_columns({"id" => ["1",2,3]}, {:scope => "scope"}, Account.default).should == { :conditions => ["? OR (scope = #{Account.default.id} AND id IN (?, ?, ?))", false, "1", 2, 3] }
+      Api.sis_make_params_for_sis_mapping_and_columns({"id" => ["1",2,3]}, {:scope => "scope"}, Account.default).should == { :conditions => ["(scope = #{Account.default.id} AND id IN (?))", ["1", 2, 3]] }
     end
 
     it 'should work with no columns' do
-      Api.sis_make_params_for_sis_mapping_and_columns({}, {}, Account.default).should == { :conditions => ["?", false] }
-    end
-
-    it 'should add in joins if the sis_mapping has some with no columns' do
-      Api.sis_make_params_for_sis_mapping_and_columns({}, {:joins => 'some joins'}, Account.default).should == { :conditions => ["?", false], :include => 'some joins' }
+      Api.sis_make_params_for_sis_mapping_and_columns({}, {}, Account.default).should == :not_found
     end
 
     it 'should add in joins if the sis_mapping has some with columns' do
-      Api.sis_make_params_for_sis_mapping_and_columns({"id" => ["1",2,3]}, {:scope => "scope", :joins => 'some joins'}, Account.default).should == { :conditions => ["? OR (scope = #{Account.default.id} AND id IN (?, ?, ?))", false, "1", 2, 3], :include => 'some joins' }
+      Api.sis_make_params_for_sis_mapping_and_columns({"id" => ["1",2,3]}, {:scope => "scope", :joins => 'some joins'}, Account.default).should == { :conditions => ["(scope = #{Account.default.id} AND id IN (?))", ["1", 2, 3]], :include => 'some joins' }
     end
 
     it 'should work with a few different column types and account scopings' do
-      Api.sis_make_params_for_sis_mapping_and_columns({"id1" => [1,2,3], "id2" => ["a","b","c"], "id3" => ["s1", "s2", "s3"]}, {:scope => "some_scope", :is_not_scoped_to_account => ['id3'].to_set}, Account.default).should == { :conditions => ["? OR (some_scope = #{Account.default.id} AND id1 IN (?, ?, ?)) OR (some_scope = #{Account.default.id} AND id2 IN (?, ?, ?)) OR (id3 IN (?, ?, ?))", false, 1, 2, 3, "a", "b", "c", "s1", "s2", "s3"]}
+      Api.sis_make_params_for_sis_mapping_and_columns({"id1" => [1,2,3], "id2" => ["a","b","c"], "id3" => ["s1", "s2", "s3"]}, {:scope => "some_scope", :is_not_scoped_to_account => ['id3'].to_set}, Account.default).should == { :conditions => ["(some_scope = #{Account.default.id} AND id1 IN (?)) OR (some_scope = #{Account.default.id} AND id2 IN (?)) OR id3 IN (?)", [1, 2, 3], ["a", "b", "c"], ["s1", "s2", "s3"]]}
     end
 
     it "should scope to accounts by default if :is_not_scoped_to_account doesn't exist" do
-      Api.sis_make_params_for_sis_mapping_and_columns({"id" => ["1",2,3]}, {:scope => "scope"}, Account.default).should == { :conditions => ["? OR (scope = #{Account.default.id} AND id IN (?, ?, ?))", false, "1", 2, 3] }
+      Api.sis_make_params_for_sis_mapping_and_columns({"id" => ["1",2,3]}, {:scope => "scope"}, Account.default).should == { :conditions => ["(scope = #{Account.default.id} AND id IN (?))", ["1", 2, 3]] }
     end
 
     it "should fail if we're scoping to an account and the scope isn't provided" do
@@ -491,29 +578,69 @@ describe Api do
 
     it 'should correctly query the course table' do
       sis_mapping = Api.sis_find_sis_mapping_for_collection(Course)
-      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["? OR (id IN (?)) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", false, "1", "1"] }
+      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["id IN (?) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", ["1"], ["1"]] }
     end
 
     it 'should correctly query the enrollment_term table' do
       sis_mapping = Api.sis_find_sis_mapping_for_collection(EnrollmentTerm)
-      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["? OR (id IN (?)) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", false, "1", "1"] }
+      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["id IN (?) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", ["1"], ["1"]] }
     end
 
     it 'should correctly query the user table' do
       sis_mapping = Api.sis_find_sis_mapping_for_collection(User)
-      Api.sis_make_params_for_sis_mapping_and_columns({"pseudonyms.sis_user_id" => ["1"], "pseudonyms.unique_id" => ["1"], "users.id" => ["1"]}, sis_mapping, Account.default).should == { :include => [:pseudonym], :conditions => ["? OR (pseudonyms.account_id = #{Account.default.id} AND pseudonyms.sis_user_id IN (?)) OR (pseudonyms.account_id = #{Account.default.id} AND pseudonyms.unique_id IN (?)) OR (users.id IN (?))", false, "1", "1", "1"]}
+      Api.sis_make_params_for_sis_mapping_and_columns({"pseudonyms.sis_user_id" => ["1"], "pseudonyms.unique_id" => ["1"], "users.id" => ["1"]}, sis_mapping, Account.default).should == { :include => [:pseudonym], :conditions => ["(pseudonyms.account_id = #{Account.default.id} AND pseudonyms.sis_user_id IN (?)) OR (pseudonyms.account_id = #{Account.default.id} AND pseudonyms.unique_id IN (?)) OR users.id IN (?)", ["1"], ["1"], ["1"]]}
     end
 
     it 'should correctly query the account table' do
       sis_mapping = Api.sis_find_sis_mapping_for_collection(Account)
-      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["? OR (id IN (?)) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", false, "1", "1"] }
+      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["id IN (?) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", ["1"], ["1"]] }
     end
 
     it 'should correctly query the course_section table' do
       sis_mapping = Api.sis_find_sis_mapping_for_collection(CourseSection)
-      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["? OR (id IN (?)) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", false, "1", "1"] }
+      Api.sis_make_params_for_sis_mapping_and_columns({"sis_source_id" => ["1"], "id" => ["1"]}, sis_mapping, Account.default).should == { :conditions => ["id IN (?) OR (root_account_id = #{Account.default.id} AND sis_source_id IN (?))", ["1"], ["1"]] }
     end
 
+  end
+
+  context "map_non_sis_ids" do
+    it 'should return an array of numeric ids' do
+      Api.map_non_sis_ids([1, 2, 3, 4]).should == [1, 2, 3, 4]
+    end
+
+    it 'should convert string ids to numeric' do
+      Api.map_non_sis_ids(%w{5 4 3 2}).should == [5, 4, 3, 2]
+    end
+
+    it "should exclude things that don't look like ids" do
+      Api.map_non_sis_ids(%w{1 2 lolrus 4chan 5 6!}).should == [1, 2, 5]
+    end
+
+    it "should strip whitespace" do
+      Api.map_non_sis_ids(["  1", "2  ", " 3 ", "4\n"]).should == [1, 2, 3, 4]
+    end
+  end
+
+  context 'ISO8601 regex' do
+    it 'should not allow invalid dates' do
+      !!('10/01/2014' =~ Api::ISO8601_REGEX).should == false
+    end
+
+    it 'should not allow non ISO8601 dates' do
+      !!('2014-10-01' =~ Api::ISO8601_REGEX).should == false
+    end
+
+    it 'should not allow garbage dates' do
+      !!('bad_data' =~ Api::ISO8601_REGEX).should == false
+    end
+
+    it 'should allow valid dates' do
+      !!('2014-10-01T00:00:00-06:00' =~ Api::ISO8601_REGEX).should == true
+    end
+
+    it 'should not allow valid dates BC' do
+      !!('-2014-10-01T00:00:00-06:00' =~ Api::ISO8601_REGEX).should == false
+    end
   end
 
   context ".api_user_content" do
@@ -527,6 +654,196 @@ describe Api do
 </div>}
       res = T.api_user_content(html, @course, @student)
       res.should == html
+    end
+  end
+
+  context ".process_incoming_html_content" do
+    class T
+      extend Api
+    end
+
+    it "should add context to files and remove verifier parameters" do
+      course
+      attachment_model(:context => @course)
+
+      html = %{<div>
+        Here are some bad links
+        <a href="/files/#{@attachment.id}/download">here</a>
+        <a href="/files/#{@attachment.id}/download?verifier=lollercopter&amp;anotherparam=something">here</a>
+        <a href="/files/#{@attachment.id}/preview?sneakyparam=haha&amp;verifier=lollercopter&amp;another=blah">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/preview?noverifier=here">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?verifier=lol&amp;a=1">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?b=2&amp;verifier=something&amp;c=2">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/notdownload?b=2&amp;verifier=shouldstay&amp;c=2">but not here</a>
+      </div>}
+      fixed_html = T.process_incoming_html_content(html)
+      fixed_html.should == %{<div>
+        Here are some bad links
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?anotherparam=something">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/preview?sneakyparam=haha&amp;another=blah">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/preview?noverifier=here">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?a=1">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?b=2&amp;c=2">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/notdownload?b=2&amp;verifier=shouldstay&amp;c=2">but not here</a>
+      </div>}
+    end
+  end
+
+  context ".paginate" do
+    let(:request) { stub('request', query_parameters: {}) }
+    let(:response) { stub('response', headers: {}) }
+    let(:controller) { stub('controller', request: request, response: response, params: {}) }
+
+    describe "ordinal collection" do
+      let(:collection) { [1, 2, 3] }
+
+      it "should not raise Folio::InvalidPage for pages past the end" do
+        Api.paginate(collection, controller, 'example.com', page: collection.size + 1, per_page: 1).
+          should == []
+      end
+
+      it "should not raise Folio::InvalidPage for integer-equivalent non-Integer pages" do
+        Api.paginate(collection, controller, 'example.com', page: '1').
+          should == collection
+      end
+
+      it "should raise Folio::InvalidPage for pages <= 0" do
+        lambda{ Api.paginate(collection, controller, 'example.com', page: 0) }.
+          should raise_error(Folio::InvalidPage)
+
+        lambda{ Api.paginate(collection, controller, 'example.com', page: -1) }.
+          should raise_error(Folio::InvalidPage)
+      end
+
+      it "should raise Folio::InvalidPage for non-integer pages" do
+        lambda{ Api.paginate(collection, controller, 'example.com', page: 'abc') }.
+          should raise_error(Folio::InvalidPage)
+      end
+    end
+  end
+
+  context ".build_links" do
+    it "should not build links if not pagination is provided" do
+      Api.build_links("www.example.com").should be_empty
+    end
+
+    it "should not build links for empty pages" do
+      Api.build_links("www.example.com/", {
+        :per_page => 10,
+        :current => "",
+        :next => "",
+        :prev => "",
+        :first => "",
+        :last => "",
+      }).should be_empty
+    end
+
+    it "should build current, next, prev, first, and last links if provided" do
+      links = Api.build_links("www.example.com/", {
+        :per_page => 10,
+        :current => 8,
+        :next => 4,
+        :prev => 2,
+        :first => 1,
+        :last => 10,
+      })
+      links.all?{ |l| l =~ /www.example.com\/\?/ }.should be_true
+      links.find{ |l| l.match(/rel="current"/)}.should =~ /page=8&per_page=10>/
+      links.find{ |l| l.match(/rel="next"/)}.should =~ /page=4&per_page=10>/
+      links.find{ |l| l.match(/rel="prev"/)}.should =~ /page=2&per_page=10>/
+      links.find{ |l| l.match(/rel="first"/)}.should =~ /page=1&per_page=10>/
+      links.find{ |l| l.match(/rel="last"/)}.should =~ /page=10&per_page=10>/
+    end
+
+    it "should maintain query parameters" do
+      links = Api.build_links("www.example.com/", {
+        :query_parameters => { :search => "hihi" },
+        :per_page => 10,
+        :next => 2,
+      })
+      links.first.should == "<www.example.com/?search=hihi&page=2&per_page=10>; rel=\"next\""
+    end
+
+    it "should maintain array query parameters" do
+      links = Api.build_links("www.example.com/", {
+        :query_parameters => { :include => ["enrollments"] },
+        :per_page => 10,
+        :next => 2,
+      })
+      qs = "#{CGI.escape("include[]")}=enrollments"
+      links.first.should == "<www.example.com/?#{qs}&page=2&per_page=10>; rel=\"next\""
+    end
+
+    it "should not include certain sensitive params in the link headers" do
+      links = Api.build_links("www.example.com/", {
+        :query_parameters => { :access_token => "blah", :api_key => "xxx", :page => 3, :per_page => 10 },
+        :per_page => 10,
+        :next => 4,
+      })
+      links.first.should == "<www.example.com/?page=4&per_page=10>; rel=\"next\""
+    end
+  end
+
+  describe "#accepts_jsonapi?" do
+    class TestApiController
+      include Api
+    end
+
+    it "returns true when application/vnd.api+json in the Accept header" do
+      controller = TestApiController.new
+      controller.stubs(:request).returns stub(headers: {
+        'Accept' => 'application/vnd.api+json'
+      })
+      controller.accepts_jsonapi?.should == true
+    end
+
+    it "returns false when application/vnd.api+json not in the Accept header" do
+      controller = TestApiController.new
+      controller.stubs(:request).returns stub(headers: {
+        'Accept' => 'application/json'
+      })
+      controller.accepts_jsonapi?.should == false
+    end
+  end
+
+  describe ".value_to_array" do
+    it "splits comma delimited strings" do
+      Api.value_to_array('1,2,3').should == ['1', '2', '3']
+    end
+
+    it "does nothing to arrays" do
+      Api.value_to_array(['1', '2', '3']).should == ['1', '2', '3']
+    end
+
+    it "returns an empty array for nil" do
+      Api.value_to_array(nil).should == []
+    end
+  end
+
+  describe "#templated_url" do
+    before do
+      @api = TestApiInstance.new Account.default, nil
+    end
+
+    it "should return url with a single item" do
+      url = @api.templated_url(:account_url, "{courses.account}")
+      url.should == "http://www.example.com/accounts/{courses.account}"
+    end
+
+    it "should return url with multiple items" do
+      url = @api.templated_url(:course_assignment_url, "{courses.id}", "{courses.assignment}")
+      url.should == "http://www.example.com/courses/{courses.id}/assignments/{courses.assignment}"
+    end
+
+    it "should return url with no template items" do
+      url = @api.templated_url(:account_url, "1}")
+      url.should == "http://www.example.com/accounts/1%7D"
+    end
+
+    it "should return url with a combination of items" do
+      url = @api.templated_url(:course_assignment_url, "{courses.id}", "1}")
+      url.should == "http://www.example.com/courses/{courses.id}/assignments/1%7D"
     end
   end
 end

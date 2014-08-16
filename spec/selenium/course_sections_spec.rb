@@ -1,7 +1,7 @@
 require File.expand_path(File.dirname(__FILE__) + '/common')
 
 describe "course sections" do
-  it_should_behave_like "in-process server selenium tests"
+  include_examples "in-process server selenium tests"
 
   def add_enrollment(enrollment_state, section)
     enrollment = student_in_course(:workflow_state => enrollment_state, :course_section => section)
@@ -9,8 +9,7 @@ describe "course sections" do
   end
 
   def table_rows
-    table_rows = driver.find_elements(:css, '#enrollment_table tr')
-    table_rows
+    ff('#enrollment_table tr')
   end
 
   before (:each) do
@@ -22,6 +21,7 @@ describe "course sections" do
     add_enrollment('active', @section)
     get "/courses/#{@course.id}/sections/#{@section.id}"
 
+    wait_for_ajaximations
     table_rows.count.should == 1
     table_rows[0].should include_text('2 Active Enrollments')
   end
@@ -29,6 +29,7 @@ describe "course sections" do
   it "should validate the display when only 1 enrollment exists" do
     get "/courses/#{@course.id}/sections/#{@section.id}"
 
+    wait_for_ajaximations
     table_rows.count.should == 1
     table_rows[0].should include_text('1 Active Enrollment')
   end
@@ -38,6 +39,7 @@ describe "course sections" do
     add_enrollment('invited', @section)
     get "/courses/#{@course.id}/sections/#{@section.id}"
 
+    wait_for_ajaximations
     table_rows.count.should == 2
     table_rows[0].should include_text('2 Pending Enrollments')
   end
@@ -47,6 +49,7 @@ describe "course sections" do
     @course.complete!
     get "/courses/#{@course.id}/sections/#{@section.id}"
 
+    wait_for_ajaximations
     table_rows.count.should == 1
     table_rows[0].should include_text('2 Completed Enrollments')
   end
@@ -55,11 +58,11 @@ describe "course sections" do
     edit_name = 'edited section name'
     get "/courses/#{@course.id}/sections/#{@section.id}"
 
-    driver.find_element(:css, '.edit_section_link').click
-    edit_form = driver.find_element(:id, 'edit_section_form')
+    f('.edit_section_link').click
+    edit_form = f('#edit_section_form')
     replace_content(edit_form.find_element(:id, 'course_section_name'), edit_name)
     submit_form(edit_form)
     wait_for_ajaximations
-    driver.find_element(:id, 'section_name').should include_text(edit_name)
+    f('#section_name').should include_text(edit_name)
   end
 end

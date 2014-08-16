@@ -30,7 +30,11 @@ class ErrorReport < ActiveRecord::Base
   # Define a custom callback for external notification of an error report.
   define_callbacks :on_send_to_external
   # Setup callback to default behavior.
-  on_send_to_external :send_via_email_or_post
+  if CANVAS_RAILS2
+    on_send_to_external :send_via_email_or_post
+  else
+    set_callback :on_send_to_external, :send_via_email_or_post
+  end
 
   attr_accessible
 
@@ -44,12 +48,20 @@ class ErrorReport < ActiveRecord::Base
 
     attr_reader :opts, :exception
 
+    def self.hostname
+      @cached_hostname ||= Socket.gethostname
+    end
+
     def log_error(category, opts)
-      opts[:category] = category.to_s
+      opts[:category] = category.to_s.presence || 'default'
       @opts = opts
       # sanitize invalid encodings
-      @opts[:message] = Iconv.conv('UTF-8//IGNORE', 'UTF-8', @opts[:message]) if @opts[:message]
-      @opts[:exception_message] = Iconv.conv('UTF-8//IGNORE', 'UTF-8', @opts[:exception_message]) if @opts[:exception_message]
+      @opts[:message] = Utf8Cleaner.strip_invalid_utf8(@opts[:message]) if @opts[:message]
+      @opts[:exception_message] = Utf8Cleaner.strip_invalid_utf8(@opts[:exception_message]) if @opts[:exception_message]
+      @opts[:hostname] = self.class.hostname
+      @opts[:pid] = Process.pid
+      CanvasStatsd::Statsd.increment("errors.all")
+      CanvasStatsd::Statsd.increment("errors.#{category}")
       run_callbacks :on_log_error
       create_error_report(opts)
     end
@@ -64,25 +76,33 @@ class ErrorReport < ActiveRecord::Base
     end
 
     def create_error_report(opts)
-      report = ErrorReport.new
-      report.assign_data(opts)
-      report.save
-      report
-    # rescue
-      # we're really hosed here
+      Shackles.activate(:master) do
+        report = ErrorReport.new
+        report.assign_data(opts)
+        begin
+          report.save!
+          Rails.logger.info("Created ErrorReport ID #{report.global_id}")
+        rescue => e
+          Rails.logger.error("Failed creating ErrorReport: #{e.inspect}")
+          Rails.logger.error("Original error: #{opts[:message]}")
+          Rails.logger.error("Original exception: #{opts[:exception_message]}") if opts[:exception_message]
+          @exception.backtrace.each do |line|
+            Rails.logger.error("Trace: #{line}")
+          end if @exception
+        end
+        report
+      end
     end
   end
 
   # returns the new error report
   def self.log_error(category, opts = {})
     Reporter.new.log_error(category, opts)
-  # rescue
   end
 
   # returns the new error report
   def self.log_exception(category, exception, opts = {})
     Reporter.new.log_exception(category, exception, opts)
-  # rescue
   end
 
   # assigns data attributes to the column if there's a column with that name,
@@ -93,7 +113,9 @@ class ErrorReport < ActiveRecord::Base
       if respond_to?(:"#{k}=")
         self.send(:"#{k}=", v)
       else
-        self.data[k.to_s] = v
+        # dup'ing because some strings come in from Rack as frozen sometimes,
+        # depending on the web server, and our invalid utf-8 stripping breaks on that
+        self.data[k.to_s] = v.is_a?(String) ? v.dup : v
       end
     end
   end
@@ -113,7 +135,11 @@ class ErrorReport < ActiveRecord::Base
       write_attribute(:comments, val[0,self.class.maximum_text_length])
     end
   end
-  
+
+  def url=(val)
+    write_attribute(:url, LoggingFilter.filter_uri(val))
+  end
+
   def guess_email
     self.email = nil if self.email && self.email.empty?
     self.email ||= self.user.email rescue nil
@@ -128,15 +154,34 @@ class ErrorReport < ActiveRecord::Base
   # delete old error reports before a given date
   # returns the number of destroyed error reports
   def self.destroy_error_reports(before_date)
-    self.delete_all(['created_at < ?', before_date])
+    self.where("created_at<?", before_date).delete_all
   end
 
+  USEFUL_ENV = [
+    "HTTP_ACCEPT",
+    "HTTP_ACCEPT_ENCODING",
+    "HTTP_HOST",
+    "HTTP_REFERER",
+    "HTTP_USER_AGENT",
+    "PATH_INFO",
+    "QUERY_STRING",
+    "REMOTE_HOST",
+    "REQUEST_METHOD",
+    "REQUEST_PATH",
+    "REQUEST_URI",
+    "SERVER_NAME",
+    "SERVER_PORT",
+    "SERVER_PROTOCOL",
+  ]
   def self.useful_http_env_stuff_from_request(request)
-    stuff = request.env.slice( *["HTTP_ACCEPT", "HTTP_ACCEPT_ENCODING", "HTTP_COOKIE", "HTTP_HOST", "HTTP_REFERER",
-                         "HTTP_USER_AGENT", "PATH_INFO", "QUERY_STRING", "REMOTE_HOST",
-                         "REQUEST_METHOD", "REQUEST_PATH", "REQUEST_URI", "SERVER_NAME", "SERVER_PORT",
-                         "SERVER_PROTOCOL", "action_controller.request.path_parameters"] )
+    stuff = request.env.slice(*USEFUL_ENV)
     stuff['REMOTE_ADDR'] = request.remote_ip # ActionController::Request#remote_ip has proxy smarts
+    stuff['QUERY_STRING'] = LoggingFilter.filter_query_string("?" + stuff['QUERY_STRING'])
+    stuff['REQUEST_URI'] = request.url unless CANVAS_RAILS2
+    stuff['REQUEST_URI'] = LoggingFilter.filter_uri(stuff['REQUEST_URI'])
+    stuff['path_parameters'] = LoggingFilter.filter_params(request.path_parameters.dup).inspect # params rails picks up from the url
+    stuff['query_parameters'] = LoggingFilter.filter_params(request.query_parameters.dup).inspect # params rails picks up from the query string
+    stuff['request_parameters'] = LoggingFilter.filter_params(request.request_parameters.dup).inspect # params from forms
     stuff
   end
 

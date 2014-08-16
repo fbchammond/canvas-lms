@@ -32,7 +32,7 @@ class UserNotesController < ApplicationController
   
    def user_notes
     get_context
-    return render 'shared/unauthorized' unless @context.root_account.enable_user_notes
+    return render_unauthorized_action unless @context.root_account.enable_user_notes
     if authorized_action(@context, @current_user, :manage_user_notes)
       if @context && @context.is_a?(Account)
         @users = @context.all_users.active.has_current_student_enrollments
@@ -41,7 +41,7 @@ class UserNotesController < ApplicationController
         @is_course = true
       end
       count = @users.count
-      @users = @users.scoped(:select=> "name, users.id, last_user_note", :order=>"last_user_note ASC, #{User.sortable_name_order_by_clause} ASC", :extend => User::SortableNameExtension)
+      @users = @users.select("name, users.id, last_user_note").order("last_user_note").order_by_sortable_name
       @users = @users.paginate(:page => params[:page], :per_page => 20, :total_entries=>count)
       # rails gets confused by :include => :courses, because has_current_student_enrollments above references courses in a subquery
       User.send(:preload_associations, @users, :courses)
@@ -53,7 +53,7 @@ class UserNotesController < ApplicationController
     if authorized_action(@user_note, @current_user, :read)
       respond_to do |format|
         format.html { redirect_to user_user_notes_path }
-        format.json { render :json => @user_note.to_json(:methods=>[:creator_name]), :status => :created }
+        format.json { render :json => @user_note.as_json(:methods=>[:creator_name]), :status => :created }
         format.text { render :json => @user_note, :status => :created }
       end
     end
@@ -76,12 +76,12 @@ class UserNotesController < ApplicationController
         if @user_note.save
           flash[:notice] = t 'notices.created', "Journal Entry was successfully created."
           format.html { redirect_to user_user_notes_path }
-          format.json { render :json => @user_note.to_json(:methods=>[:creator_name, :formatted_note]), :status => :created }
+          format.json { render :json => @user_note.as_json(:methods=>[:creator_name, :formatted_note]), :status => :created }
           format.text { render :json => @user_note, :status => :created }
         else
           format.html { redirect_to(user_user_notes_path) }
-          format.json { render :json => @user_note.errors.to_json, :status => :bad_request }
-          format.text { render :json => @user_note.errors.to_json, :status => :bad_request }
+          format.json { render :json => @user_note.errors, :status => :bad_request }
+          format.text { render :json => @user_note.errors, :status => :bad_request }
         end
       end
     end
@@ -94,7 +94,7 @@ class UserNotesController < ApplicationController
 
       respond_to do |format|
         format.html { redirect_to user_user_notes_path }
-        format.json { render :json => @user_note.to_json(:methods=>[:creator_name]), :status => :ok }
+        format.json { render :json => @user_note.as_json(:methods=>[:creator_name]), :status => :ok }
       end 
     end
   end

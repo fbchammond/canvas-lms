@@ -1,7 +1,8 @@
 # requires jquery and date.js
 require [
+  'jquery'
   'compiled/calendar/TimeBlockList'
-], (TimeBlockList) ->
+], ($, TimeBlockList) ->
 
   module "TimeBlockList",
     setup: ->
@@ -15,7 +16,6 @@ require [
         [new Date("2/3/#{nextYear} 11:15"), new Date("2/3/#{nextYear} 15:01"), true ]
         [new Date("2/3/#{nextYear} 16:00"), new Date("2/3/#{nextYear} 19:00")]
       ]
-
       @me = new TimeBlockList(@$holder, @$splitter, @blocks)
 
     teardown: ->

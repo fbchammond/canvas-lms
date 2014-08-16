@@ -19,9 +19,10 @@
 module Turnitin
   class Client
     
-    attr_accessor :endpoint, :account_id, :shared_secret, :testing
-    def initialize(account_id, shared_secret, testing=false)
-      @host = "api.turnitin.com"
+    attr_accessor :endpoint, :account_id, :shared_secret, :host, :testing
+
+    def initialize(account_id, shared_secret, host=nil, testing=false)
+      @host = host || "api.turnitin.com"
       @endpoint = "/api.asp"
       raise "Account ID required" unless account_id
       raise "Shared secret required" unless shared_secret
@@ -66,14 +67,11 @@ module Turnitin
         null_email
       end
     end
+
+    TurnitinUser = Struct.new(:asset_string,:first_name,:last_name,:name)
     
     def testSettings
-      user = OpenObject.new({
-        :asset_string => "admin_test",
-        :first_name => "Admin",
-        :last_name => "Test",
-        :name => "Admin Test"
-      })
+      user = TurnitinUser.new("admin_test","Admin","Test","Admin Test")
       res = createTeacher(user)
       !!res
     end
@@ -117,10 +115,12 @@ module Turnitin
         valid_keys << :created
         settings = settings.slice(*valid_keys)
 
-        settings[:originality_report_visibility] = 'immediate' unless ['immediate', 'after_grading', 'after_due_date'].include?(settings[:originality_report_visibility])
+        settings[:originality_report_visibility] = 'immediate' unless ['immediate', 'after_grading', 'after_due_date', 'never'].include?(settings[:originality_report_visibility])
+        settings[:s_view_report] =  determine_student_visibility(settings[:originality_report_visibility])
 
         [:s_paper_check, :internet_check, :journal_check, :exclude_biblio, :exclude_quoted].each do |key|
-          settings[key] = '0' unless settings[key] == '1'
+          bool = Canvas::Plugin.value_to_boolean(settings[key])
+          settings[key] = bool ? '1' : '0'
         end
 
         exclude_value = settings[:exclude_value].to_i
@@ -133,7 +133,16 @@ module Turnitin
       end
       settings
     end
-    
+
+    def self.determine_student_visibility(originality_report_visibility)
+      case originality_report_visibility
+      when 'immediate', 'after_grading', 'after_due_date'
+        "1"
+      when 'never'
+        "0"
+      end
+    end
+
     def createOrUpdateAssignment(assignment, settings)
       course = assignment.context
       today = (Time.now.utc - 1.day).to_date # buffer by a day until we figure out what turnitin is doing with timezones
@@ -148,7 +157,6 @@ module Turnitin
         :dtstart => "#{today.strftime} 00:00:00", 
         :dtdue => "#{today.strftime} 00:00:00", 
         :dtpost => "#{today.strftime} 00:00:00", 
-        :s_view_report => "1", 
         :late_accept_flag => '1',
         :post => true
       }))
@@ -254,7 +262,7 @@ module Turnitin
       course = assignment.context
       sendRequest(:list_papers, 2, :assignment => assignment, :course => course, :user => course, :utp => '1', :tem => email(course))
     end
-    
+
     # From the turnitin api docs: To calculate the MD5, concatenate the data
     # values associated with the URL variables of ALL variables being sent, in
     # alphabetical order according to variable name, being sure to include at
@@ -313,8 +321,9 @@ module Turnitin
           params[:ufn] = user.name
           params[:uln] = "Course"
         else
-          params[:ufn] = user.name
-          params[:uln] = "Student"
+          params[:ufn] = user.first_name
+          params[:uln] = user.last_name
+          params[:uln] = "Student" if params[:uln].empty?
         end
       end
       if course
@@ -339,7 +348,7 @@ module Turnitin
       params = prepare_params(command, fcmd, args)
       
       if post
-        mp = Multipart::MultipartPost.new
+        mp = Multipart::Post.new
         query, headers = mp.prepare_query(params)
         puts query if @testing
         http = Net::HTTP.new(@host, 443)

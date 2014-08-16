@@ -26,11 +26,12 @@ class ExternalFeedAggregator
   end
   
   def initialize
-    @logger = RAILS_DEFAULT_LOGGER
+    @logger = Rails.logger
   end
   
   def process
     ExternalFeed.to_be_polled.each do |feed|
+      next if feed.context.root_account.deleted?
       process_feed(feed)
     end
   end
@@ -60,21 +61,6 @@ class ExternalFeedAggregator
           return true
         rescue
         end
-      end
-    elsif feed.feed_type == 'ical'
-      require 'icalendar'
-      begin
-        cals = Icalendar.parse(body)
-        tally = []
-        entries = []
-        cals.each do |cal|
-          tally += feed.events
-          entries += feed.add_ical_entries(cal)
-        end
-        @logger.info("#{tally.length} ical events found")
-        @logger.info("#{entries.length} new entries added")
-        return true
-      rescue
       end
     end
     false
