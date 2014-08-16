@@ -10,11 +10,13 @@ set :repository_cache, "git_cache"
 set :deploy_via, :remote_cache
 set :deploy_to, "/var/www/canvas"
 
-role :web, "root@newt.hylesanderson.edu", "root@ox.hylesanderson.edu" # Your HTTP server, Apache/etc
-role :app, "root@newt.hylesanderson.edu", "root@ox.hylesanderson.edu" # This may be the same as your `Web` server
+role :web, "root@newt.hylesanderson.edu"#, "root@ox.hylesanderson.edu" # Your HTTP server, Apache/etc
+role :app, "root@newt.hylesanderson.edu"#, "root@ox.hylesanderson.edu" # This may be the same as your `Web` server
 role :db,  "root@newt.hylesanderson.edu", :primary => true # This is where Rails migrations will run
 
 set :use_sudo, false
+
+set :bundle_without, []
 
 after "deploy:update_code" do
   %w{ amazon_s3 cache_store database delayed_jobs domain file_store outgoing_mail security }.each do |f|
@@ -33,6 +35,7 @@ after "deploy:update_code" do
   run "chown canvas:canvas #{release_path}/db"
   run "chown canvas:canvas #{release_path}/tmp"
 
+  run "cd #{release_path} && npm install"
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compile_assets"
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compress_assets"
 end
