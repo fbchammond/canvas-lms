@@ -16,23 +16,26 @@ role :db,  "root@newt.hylesanderson.edu", :primary => true # This is where Rails
 
 set :use_sudo, false
 
+set :bundle_without, []
+
 after "deploy:update_code" do
   %w{ amazon_s3 cache_store database delayed_jobs domain file_store outgoing_mail security }.each do |f|
     run "ln -s #{shared_path}/#{f}.yml #{release_path}/config/#{f}.yml"
   end
-  
+
   run "ln -s #{shared_path}/files #{release_path}/tmp/files"
   run "ln -s #{shared_path}/QTIMigrationTool #{release_path}/vendor/QTIMigrationTool"
-  
+
   #run "ln -s #{shared_path}/google2248bfbba38f2b28.html #{release_path}/public/google2248bfbba38f2b28.html"
-  
+
   # The Facebook icon is missing so symlink on deploy -- when the symlink fails it presumably means that the problem is fixed
   #run "ln -s #{release_path}/public/images/email_big.png #{release_path}/public/images/conversation_message_icon.png"
-  
+
   run "chown hb_canvas:hb_canvas #{release_path}/config/environment.rb"
   run "chown hb_canvas:hb_canvas #{release_path}/db"
   run "chown hb_canvas:hb_canvas #{release_path}/tmp"
-  
+
+  run "cd #{release_path} && npm install"
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compile_assets"
   run "cd #{release_path} && RAILS_ENV=assets bundle exec rake canvas:compress_assets"
 end
