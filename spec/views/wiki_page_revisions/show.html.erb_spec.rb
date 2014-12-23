@@ -23,8 +23,8 @@ describe "/wiki_page_revisions/show" do
   before do
     course_with_student
     view_context
-    assigns[:wiki] = WikiNamespace.default_for_context(@course).wiki
-    assigns[:page] = assigns[:wiki].wiki_page
+    assigns[:wiki] = @course.wiki
+    assigns[:page] = assigns[:wiki].front_page
     assigns[:page].save!
   end
   it "should say imported for no user edit" do

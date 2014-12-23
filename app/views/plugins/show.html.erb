@@ -1,6 +1,5 @@
 <% content_for :page_title do %><%= join_title t(:page_title, "Plugin Settings"), @plugin.name %><% end %>
 <% 
-  jammit_css :plugins
   js_bundle :plugins
   add_crumb(t('#crumbs.plugins', "Plugins"), plugins_path)
   add_crumb(@plugin.name)
@@ -11,7 +10,7 @@
 <%= render :partial => "settings_header" %>
 
 <div id="settings">
-  <% form_for(@plugin_setting, :url => plugin_path(@plugin.id), :html => {:method => :put}) do |f| %>
+  <%= form_for(@plugin_setting, :url => plugin_path(@plugin.id, :all => params[:all]), :html => {:method => :put}) do |f| %>
     <div style="margin-bottom: 15px; margin-top: -10px;">
       <%= f.check_box :disabled, :class => "disabled_checkbox" %>
       <%= f.label :disabled, :en => "Disable this Plugin" %>
@@ -22,8 +21,8 @@
         <%= partial %>
     </div>
     <div class='button-container'>
-      <button type="submit" class="button save_button"><%= t '#buttons.apply', "Apply" %></button>
-      <%=link_to(t(:back_to_list, "Return to plugins list"), plugins_path,:class => 'button button-secondary')%>
+      <button type="submit" class="btn save_button"><%= t '#buttons.apply', "Apply" %></button>
+      <%=link_to(t(:back_to_list, "Return to plugins list"), plugins_path,:class => 'btn btn button-secondary')%>
     </div>
   <% end %>
 </div>

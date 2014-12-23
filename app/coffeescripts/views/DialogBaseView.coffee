@@ -1,8 +1,27 @@
+#
+# Copyright (C) 2012 Instructure, Inc.
+#
+# This file is part of Canvas.
+#
+# Canvas is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, version 3 of the License.
+#
+# Canvas is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+# A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Affero General Public License along
+# with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+
 define [
   'i18n!dialog'
   'jquery'
   'underscore'
   'Backbone'
+  'jqueryui/dialog'
 ], (I18n, $, _, Backbone) ->
 
   ##
@@ -14,6 +33,7 @@ define [
   class DialogBaseView extends Backbone.View
 
     initialize: ->
+      super
       @initDialog()
       @setElement @dialog
 
@@ -23,18 +43,25 @@ define [
       autoOpen: false
       width: 420
       resizable: false
-      buttons: [
-        text: I18n.t 'cancel', 'Cancel'
-        click: @cancel
-      ,
-        text: I18n.t 'update', 'Update'
-        'class' : 'btn-primary'
-        click: @update
-      ]
+      buttons: []
 
     initDialog: () ->
-      opts = _.extend {}, @defaultOptions(), _.result(this, 'dialogOptions')
+      opts = _.extend {}, @defaultOptions(),
+        buttons: [
+          text: I18n.t '#buttons.cancel', 'Cancel'
+          'class' : 'cancel_button'
+          click: @cancel
+        ,
+          text: I18n.t '#buttons.update', 'Update'
+          'class' : 'btn-primary'
+          click: @update
+        ],
+        _.result(this, 'dialogOptions')
+
       @dialog = $("<div id=\"#{ opts.id }\"></div>").appendTo('body').dialog opts
+      @dialog.parent().attr('id', opts.containerId) if opts.containerId
+
+      @dialog
 
     ##
     # Sample

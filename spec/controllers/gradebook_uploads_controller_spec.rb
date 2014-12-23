@@ -18,32 +18,31 @@
 
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
-describe GradebookUploadsController do
+require 'csv'
 
+describe GradebookUploadsController do
   describe "POST 'create'" do
     it "should require authorization" do
       course_model
       post 'create', :course_id => @course.id
       assert_unauthorized
     end
-    
+
     it "should redirect on failed csvs" do
       course_with_teacher_logged_in(:active_all => true)
       file = Tempfile.new("csv.csv")
       file.puts("not a good csv")
       file.close
-      require 'action_controller'
-      require 'action_controller/test_process.rb'
-      data = ActionController::TestUploadedFile.new(file.path, 'text/csv', true)
+      data = Rack::Test::UploadedFile.new(file.path, 'text/csv', true)
       post 'create', :course_id => @course.id, :gradebook_upload => {:uploaded_data => data}
       response.should be_redirect
     end
-    
+
     it "should accept a valid csv upload" do
       course_with_graded_student
       check_create_response
     end
-    
+
     it "should accept a valid csv upload with a final grade column" do
       course_with_graded_student
       @course.grading_standard_id = 0
@@ -58,17 +57,17 @@ describe GradebookUploadsController do
       check_create_response(true)
     end
   end
-  
+
   describe "POST 'update'" do
-    
-    it "should update grades" do
+
+    it "should update grades and save new versions" do
       course_with_graded_student
       @assignment.reload
       @assignment2.reload
       @assignment.submissions.first.grade.should == '10'
       @assignment2.submissions.first.grade.should == '8'
-      
-      uploaded_csv = FasterCSV.generate do |csv|
+
+      uploaded_csv = CSV.generate do |csv|
         csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Section", "Some Assignment", "Some Assignment 2"]
         csv << ["    Points Possible", "", "","", ""]
         csv << ["" , @student.id.to_s, "", "", "", 5, 7]
@@ -77,17 +76,25 @@ describe GradebookUploadsController do
       @gi = GradebookImporter.new(@course, uploaded_csv)
       @gi.parse!
       post 'update', :course_id => @course.id, :json_data_to_submit => @gi.to_json
-      
-      @assignment.reload
-      @assignment2.reload
-      @assignment.submissions.first.grade.should == '5'
-      @assignment2.submissions.first.grade.should == '7'
+
+      a_sub = @assignment.reload.submissions.first
+      a2_sub = @assignment2.reload.submissions.first
+      a_sub.grade.should == '5'
+      a_sub.graded_at.should_not be_nil
+      a_sub.grader_id.should_not be_nil
+      a_sub.version_number.should == 2
+      a2_sub.grade.should == '7'
+      a2_sub.graded_at.should_not be_nil
+      a2_sub.grader_id.should_not be_nil
+      a2_sub.version_number.should == 2
+
+      response.should redirect_to(course_gradebook_url(@course))
     end
-    
+
     it "should create new assignments" do
       course_with_graded_student
-      
-      uploaded_csv = FasterCSV.generate do |csv|
+
+      uploaded_csv = CSV.generate do |csv|
         csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Section", "Some Assignment", "Some Assignment 2", "Third Assignment"]
         csv << ["    Points Possible", "", "","", "", "", "", "15"]
         csv << ["" , @student.id.to_s, "", "", "", 5, 7, 10]
@@ -96,17 +103,17 @@ describe GradebookUploadsController do
       @gi = GradebookImporter.new(@course, uploaded_csv)
       @gi.parse!
       post 'update', :course_id => @course.id, :json_data_to_submit => @gi.to_json
-      
+
       a = @course.assignments.find_by_title("Third Assignment")
       a.should_not be_nil
       a.title.should == "Third Assignment"
       a.points_possible.should == 15
       a.submissions.first.grade.should == '10'
     end
-    
-    
+
+
   end
-  
+
   def course_with_graded_student
     course_with_student(:active_all => true)
     @group = @course.assignment_groups.create!(:name => "Some Assignment Group", :group_weight => 100)
@@ -122,14 +129,12 @@ describe GradebookUploadsController do
     @course.enroll_teacher(@user).accept
     user_session(@user)
   end
-  
+
   def check_create_response(include_sis_id=false)
     file = Tempfile.new("csv.csv")
     file.puts(@course.gradebook_to_csv(:include_sis_id => include_sis_id))
     file.close
-    require 'action_controller'
-    require 'action_controller/test_process.rb'
-    data = ActionController::TestUploadedFile.new(file.path, 'text/csv', true)
+    data = Rack::Test::UploadedFile.new(file.path, 'text/csv', true)
     post 'create', :course_id => @course.id, :gradebook_upload => {:uploaded_data => data}
     response.should be_success
     upload = assigns[:uploaded_gradebook]
@@ -149,7 +154,7 @@ describe GradebookUploadsController do
       uploaded_json = <<-JSON
       {
         "students": [{
-          "original_id": #{@student.id},
+          "previous_id": #{@student.id},
           "name": "#{@student.name}",
           "submissions": [{
             "grade": "40%",
@@ -159,7 +164,7 @@ describe GradebookUploadsController do
           "last_name_first": "#{@student.last_name_first}"
         }],
         "assignments": [{
-          "original_id": #{@assignment.id},
+          "previous_id": #{@assignment.id},
           "title": "#{@assignment.title}",
           "id": #{@assignment.id},
           "points_possible": #{@assignment.points_possible},

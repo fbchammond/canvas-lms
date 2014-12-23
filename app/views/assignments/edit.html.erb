@@ -1,0 +1,27 @@
+<% content_for :page_title, t(:edit_assignment, "Edit Assignment") %>
+<% content_for :right_side do %>
+  <%= render "shared/wiki_sidebar" %>
+<% end %>
+
+<%
+  jammit_css :assignments, :assignments_edit, :tinymce
+  js_bundle :assignment_edit
+%>
+
+<% if @context.feature_enabled?(:draft_state) %>
+  <div id="edit_assignment_header" class="header-bar">
+  </div>
+<% end %>
+
+<div id="edit_assignment_wrapper">
+  <form id="edit_assignment_form" class="form-horizontal bootstrap-form">
+  </form>
+</div>
+
+<%= render "groups/add_group_category" %>
+<%= render "shared/select_content_dialog", :only => [:external_tools] %>
+<div id="edit_letter_grades_form" style="display: none;">
+  <%= render "shared/grading_standard", :object => @assignment.grading_standard %>
+  <a href="<%= context_url(@context, :context_grading_standards_url) %>" style="display: none;" class="create_grading_standard_url">&nbsp;</a>
+  <a href="<%= context_url(@context, :context_grading_standard_url, "{{ id }}") %>" style="display: none;" id="update_grading_standard_url">&nbsp;</a>
+</div>

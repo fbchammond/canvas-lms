@@ -24,13 +24,14 @@ describe "locale_selection" do
   end
 
   after do
-    I18n.locale = nil
+    I18n.locale = I18n.default_locale
   end
 
   it "should set the locale when authenticated" do
     course_with_teacher(:active_all => true, :user => user_with_pseudonym)
     user_session(@user, @pseudonym)
     @user.update_attribute :locale, 'es'
+    @pseudonym.reload
     get dashboard_url
     response.should be_success
     I18n.locale.should eql(:es)

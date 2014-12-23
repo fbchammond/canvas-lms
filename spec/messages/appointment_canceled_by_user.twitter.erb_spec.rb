@@ -30,12 +30,13 @@ describe 'appointment_canceled_by_user.twitter' do
 
     @message.body.should include('some title')
     @message.body.should include(user.name)
+    @message.main_link.should be_present
   end
 
   it "should render for groups" do
     user = user_model
     @course = course_model
-    cat = @course.group_categories.create
+    cat = group_category
     @group = cat.groups.create(:context => @course)
     @group.users << user
     appointment_participant_model(:participant => @group, :course => @course)
@@ -46,5 +47,6 @@ describe 'appointment_canceled_by_user.twitter' do
 
     @message.body.should include('some title')
     @message.body.should include(user.name)
+    @message.main_link.should be_present
   end
 end

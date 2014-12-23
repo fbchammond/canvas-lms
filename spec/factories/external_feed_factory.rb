@@ -22,8 +22,10 @@ end
 
 def valid_external_feed_attributes
   {
+    :context => @course || Account.default.courses.create!,
     :title => "some feed",
     :url => "http://www.nowhere.com",
-    :created_at => Time.parse("Jan 1 2000")
+    :created_at => Time.parse("Jan 1 2000"),
+    :feed_purpose => 'announcements',
   }
 end

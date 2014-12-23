@@ -44,7 +44,7 @@ class ServicesApiController < ApplicationController
   #     }
   def show_kaltura_config
     if @current_user
-      @kal = Kaltura::ClientV3.config
+      @kal = CanvasKaltura::ClientV3.config
       response = { 'enabled' => !@kal.nil? }
       
       if @kal
@@ -54,7 +54,7 @@ class ServicesApiController < ApplicationController
         response['partner_id'] = @kal['partner_id']
       end
     
-      render :json => response.to_json
+      render :json => response
     else
       render_unauthorized_action
     end
@@ -75,19 +75,19 @@ class ServicesApiController < ApplicationController
   def start_kaltura_session
     @user = @current_user
     if !@current_user
-      render :json => {:errors => {:base => t('must_be_logged_in', "You must be logged in to use Kaltura")}, :logged_in => false}.to_json
+      render :json => {:errors => {:base => t('must_be_logged_in', "You must be logged in to use Kaltura")}, :logged_in => false}
     end
-    client = Kaltura::ClientV3.new
+    client = CanvasKaltura::ClientV3.new
     uid = "#{@user.id}_#{@domain_root_account.id}"
-    res = client.startSession(Kaltura::SessionType::USER, uid)
+    res = client.startSession(CanvasKaltura::SessionType::USER, uid)
     raise "Kaltura session failed to generate" if res.match(/START_SESSION_ERROR/)
     render :json => {
       :ks => res,
-      :subp_id => Kaltura::ClientV3.config['subpartner_id'],
-      :partner_id => Kaltura::ClientV3.config['partner_id'],
+      :subp_id => CanvasKaltura::ClientV3.config['subpartner_id'],
+      :partner_id => CanvasKaltura::ClientV3.config['partner_id'],
       :uid => uid,
       :serverTime => Time.now.to_i
-    }.to_json
+    }
   end
   
 end

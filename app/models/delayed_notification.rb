@@ -18,14 +18,26 @@
 
 class DelayedNotification < ActiveRecord::Base
   include Workflow
+
   belongs_to :asset, :polymorphic => true
+  validates_inclusion_of :asset_type, :allow_nil => true, :in => ['AssessmentRequest', 'Attachment',
+    'ContentMigration', 'ContentExport', 'Collaborator', 'Submission', 'Assignment',
+    'CommunicationChannel', 'CalendarEvent', 'ConversationMessage', 'DiscussionEntry',
+    'SubmissionComment', 'Quizzes::QuizSubmission', 'DiscussionTopic', 'Course', 'Enrollment',
+    'WikiPage', 'GroupMembership', 'WebConference']
   belongs_to :notification
   belongs_to :asset_context, :polymorphic => true
+  validates_inclusion_of :asset_context_type, :allow_nil => true, :in => ['Account', 'Group', 'Course']
+
   attr_accessible :asset, :notification, :recipient_keys, :asset_context, :data
   attr_accessor :data
-  
+  validates_presence_of :notification_id, :asset_id, :asset_type, :workflow_state
+
   serialize :recipient_keys
-  
+
+  include PolymorphicTypeOverride
+  override_polymorphic_types asset_type: {'QuizSubmission' => 'Quizzes::QuizSubmission'}
+
   workflow do
     state :to_be_processed do
       event :do_process, :transitions_to => :processed
@@ -33,13 +45,13 @@ class DelayedNotification < ActiveRecord::Base
     state :processed
     state :errored
   end
-  
+
   def self.process(asset, notification, recipient_keys, asset_context, data)
     dn = DelayedNotification.new(:asset => asset, :notification => notification, :recipient_keys => recipient_keys,
       :asset_context => asset_context, :data => data)
     dn.process
   end
-  
+
   def process
     tos = self.to_list
     if self.asset && !tos.empty?
@@ -56,8 +68,9 @@ class DelayedNotification < ActiveRecord::Base
     self.save
     []
   end
-  
+
   def to_list
+    return @to_list if @to_list
     lookups = {}
     (recipient_keys || []).each do |key|
       pieces = key.split('_')
@@ -70,13 +83,12 @@ class DelayedNotification < ActiveRecord::Base
     lookups.each do |klass, ids|
       includes = []
       includes = [:user] if klass == CommunicationChannel
-      res += klass.find(:all, :conditions => {:id => ids}, :include => includes) rescue []
+      res += klass.where(:id => ids).includes(includes).all rescue []
     end
-    res.uniq
+    @to_list = res.uniq
   end
-  memoize :to_list
-  
-  named_scope :to_be_processed, lambda {|limit|
-    {:conditions => ['delayed_notifications.workflow_state = ?', 'to_be_processed'], :limit => limit, :order => 'delayed_notifications.created_at'}
+
+  scope :to_be_processed, lambda { |limit|
+    where(:workflow_state => 'to_be_processed').limit(limit).order("delayed_notifications.created_at")
   }
 end

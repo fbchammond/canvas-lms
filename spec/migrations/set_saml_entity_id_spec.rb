@@ -21,14 +21,14 @@ require 'db/migrate/20120106220543_set_saml_entity_id'
 
 describe 'SetSamlEntityId' do
   before(:each) do
-    Setting.set_config('saml', {
+    ConfigFile.stub('saml', {
             :entity_id => "http://watup_fool.com/saml2"
     })
     HostUrl.stubs(:default_host).returns('bob.cody.instructure.com')
     @account = Account.new
     @account.save
     @aac = @account.account_authorization_configs.create!(:auth_type => "saml")
-    AccountAuthorizationConfig.update_all(:entity_id => nil, :id => [@aac.id])
+    AccountAuthorizationConfig.where(:id => @aac).update_all(:entity_id => nil)
   end
   
   it "should set the entity_id to the current setting if none is set" do
@@ -48,7 +48,7 @@ describe 'SetSamlEntityId' do
   end
   
   it "should use the account's domain if no config is set" do
-    Setting.set_config('saml', {
+    ConfigFile.stub('saml', {
             :entity_id => nil
     })
 

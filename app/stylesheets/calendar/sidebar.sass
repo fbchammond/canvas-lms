@@ -11,12 +11,14 @@
   &:first-child
     padding-top: 0
 #undated-events
+  &.droppable-hover
+    background-color: $droppableBackground
   ul
     margin: 0
     padding: 0
     list-style: none
   .event
-    padding: 0px 4px
+    padding: 0px 4px 1px 4px
     cursor: move
     border-radius: 3px
     margin: 2px 0
@@ -27,7 +29,13 @@
     width: 22px
     height: 20px
     position: relative
+  .undated_event_title
+    color: rgba(0,0,0,0.75)
+    text-decoration: none
+    font-size: 11px
 
+.ui-kyle-menu li
+  min-width: 95px
 
 #calendar-feed-message
   background: url('/images/ical_big.png') no-repeat top left
@@ -51,8 +59,10 @@
     cursor: pointer
     line-height: 22px
     position: relative
+    &:hover
+      background: #b5b5b5
 
-  .checkbox
+  .context-list-toggle-box
     width: 11px
     height: 11px
     margin: 5px 11px 0 15px
@@ -61,18 +71,12 @@
 
   .not-checked
     color: #888
-    .checkbox
+    .context-list-toggle-box
       border-color: #bbbbbb !important
       background-color: #e6e7e9 !important
-  .settings
-    visibility: hidden
-    padding: 4px 0
+
+  .context-list-add
     position: absolute
     right: 5px
-  .hovering .settings, .settings.ui-state-hover
-    visibility: visible
-  .hovering
-    color: inherit
-    background: #b5b5b5
 
 

@@ -19,18 +19,10 @@
 # wrapping your API routes in an ApiRouteSet adds structure to the routes file
 # and lets us auto-discover the route for a given API method in the docs.
 class ApiRouteSet
-  cattr_accessor :apis
   attr_reader :prefix
-  self.apis = []
 
   def initialize(prefix)
-    ApiRouteSet.apis << self
     @prefix = prefix
-    # mapper.with_options(:path_prefix => @path_prefix,
-    #                     :name_prefix => @name_prefix,
-    #                     :requirements => { :id => ID_REGEX }) do |api|
-    #   yield api
-    # end
   end
   attr_accessor :mapper
 
@@ -42,22 +34,49 @@ class ApiRouteSet
     route_set.mapper = nil
   end
 
+  def self.draw(router, prefix = self.prefix, &block)
+    route_set = self.new(prefix)
+    route_set.mapper = router
+    route_set.instance_eval(&block)
+  ensure
+    route_set.mapper = nil
+  end
+
   def self.prefix
     raise ArgumentError, "prefix required"
   end
 
   def self.routes_for(prefix)
-    builder = ActionController::Routing::RouteBuilder.new
-    segments = builder.segments_for_route_path(prefix)
-    ActionController::Routing::Routes.routes.select { |r| segments_match(r.segments[0,segments.size], segments) }
+    if CANVAS_RAILS2
+      builder = ActionController::Routing::RouteBuilder.new
+      segments = builder.segments_for_route_path(prefix)
+      ActionController::Routing::Routes.routes.select { |r| segments_match(r.segments[0,segments.size], segments) }
+    else
+      CanvasRails::Application.routes.set.select{|r| r.path.spec.to_s.start_with?(prefix)}
+    end
   end
 
   def self.segments_match(seg1, seg2)
     seg1.size == seg2.size && seg1.each_with_index { |s,i| return false unless s.respond_to?(:value) && s.value == seg2[i].value }
   end
 
-  def api_methods_for_controller_and_action(controller, action)
-    self.class.routes_for(prefix).find_all { |r| r.matches_controller_and_action?(controller, action) }
+  def self.api_methods_for_controller_and_action(controller, action)
+    @routes ||= self.routes_for(prefix)
+    @routes.find_all { |r| matches_controller_and_action?(r, controller, action) }
+  end
+
+  def self.matches_controller_and_action?(route, controller, action)
+    if CANVAS_RAILS2
+      route.matches_controller_and_action?(controller, action)
+    else
+      route.requirements[:controller] == controller && route.requirements[:action] == action
+    end
+  end
+
+  def method_missing(m, *a, &b)
+    mapper.__send__(m, *a) {
+      self.instance_eval(&b) if b
+    }
   end
 
   def get(path, opts = {})
@@ -108,7 +127,29 @@ class ApiRouteSet
 
   def route(method, path, opts)
     opts ||= {}
-    mapper.__send__ mapper_method(opts), "#{prefix}/#{path}", opts.merge(:conditions => { :method => method })
+    if defined?(ActionController::Routing::RouteSet::Mapper) && mapper.is_a?(ActionController::Routing::RouteSet::Mapper)
+      # backwards compat until plugins are all updated
+      mapper.__send__ mapper_method(opts), "#{prefix}/#{path}", (opts || {}).merge(:conditions => { :method => method }, :format => 'json')
+      mapper.__send__ mapper_method(opts), "#{prefix}/#{path}.json", (opts || {}).merge(:conditions => { :method => method }, :format => 'json')
+      return
+    end
+
+    if opts[:path_name]
+      opts[:as] = "#{mapper_prefix}#{opts.delete(:path_name)}"
+    end
+    opts[:constraints] ||= {}
+    opts[:constraints][:format] = 'json'
+    if CANVAS_RAILS2
+      # Our fake rails3 router isn't clever enough to translate (.json) to
+      # something that rails 2 routing understands, so we help it out here for
+      # api routes.
+      opts[:format] = false
+      mapper.send(method, "#{prefix}/#{path}.json", opts)
+      mapper.send(method, "#{prefix}/#{path}", opts)
+    else
+      opts[:format] = 'json'
+      mapper.send(method, "#{prefix}/#{path}(.json)", opts)
+    end
   end
 
   class V1 < ::ApiRouteSet
@@ -118,7 +159,7 @@ class ApiRouteSet
     # .json -- but see the api docs for info on sending hex-encoded sis ids,
     # which allows any string.
     ID_REGEX = %r{(?:[^/?.]|\.(?!json(?:\z|[/?])))+}
-    ID_PARAM = %r{^:(id|[\w_]+_id)$}
+    ID_PARAM = %r{^:(id|[\w]+_id)$}
 
     def self.prefix
       "/api/v1"
@@ -129,10 +170,14 @@ class ApiRouteSet
     end
 
     def route(method, path, opts)
-      opts ||= {}
-      path.split('/').each { |segment| opts[segment[1..-1].to_sym] = ID_REGEX if segment.match(ID_PARAM) }
-      mapper.__send__ mapper_method(opts), "#{prefix}/#{path}", (opts || {}).merge(:conditions => { :method => method }, :format => 'json')
-      mapper.__send__ mapper_method(opts), "#{prefix}/#{path}.json", (opts || {}).merge(:conditions => { :method => method }, :format => 'json')
+      if defined?(ActionController::Routing::RouteSet::Mapper) && mapper.is_a?(ActionController::Routing::RouteSet::Mapper)
+        # backwards compat until plugins are all updated
+        path.split('/').each { |segment| opts[segment[1..-1].to_sym] = ID_REGEX if segment.match(ID_PARAM) }
+      else
+        opts[:constraints] ||= {}
+        path.split('/').each { |segment| opts[:constraints][segment[1..-1].to_sym] = ID_REGEX if segment.match(ID_PARAM) }
+      end
+      super(method, path, opts)
     end
   end
 end

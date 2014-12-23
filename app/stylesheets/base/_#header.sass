@@ -17,17 +17,21 @@
     z-index: 1
 // the #header.no-user #header-logo part here is so that it overrides the byuh logo
 #header-logo, #header.no-user #header-logo
-  background: url("/images/canvas/header_canvas_logo.png") no-repeat
+  +bg-image('canvas/header_canvas_logo', 'png', no-repeat, left, top, transparent, 110px, 26px)
   width: 135px
   height: 26px
   left: 16px
   bottom: 21px
   position: absolute
   text-indent: -9999px
-  outline: none
+
+// TODO: remove this style once people have time to update their logo-related custom
+// css. See related code in app/coffeescripts/bundles/common.coffee too.
+#header-logo.original, #header.no-user #header-logo.original
+  bottom: 12px
 #header-logo-secondary
   display: none
-  background: url("/images/canvas/header_canvas_logo.png") no-repeat
+  +bg-image('canvas/header_canvas_logo', 'png', no-repeat, left, top, transparent, 110px, 26px)
   width: 135px
   height: 26px
   right: 26px
@@ -42,7 +46,10 @@
 #header
   position: relative
   z-index: 11 /* IE7 needs this o so the menu-item-drops get stuck above #main */
-  background: #6a7177 url("/images/canvas/header_bg.png") repeat-x left bottom
+  @if $use_high_contrast
+    background-color: #333
+  @else
+    +bg-image('canvas/header_bg', 'png', repeat-x, left, bottom, transparent, 28px, 70px)
   &.no-user
     background-position: 0 -25px
     min-height: 45px
@@ -66,7 +73,10 @@
   margin-right: $right_side_margin
   margin-bottom: 4px /*make room for the drop shadow*/
   padding: 0 11px
-  background: transparent url('/images/canvas/top_bar_bg.png') repeat-x
+  @if $use_high_contrast
+    background-color: #555
+  @else
+    +bg-image('canvas/top_bar_bg', 'png', repeat-x, left, top, transparent, 22px, 23px)
   box-shadow: rgba(0, 0, 0, 0.3) 1px 1px 1px
   border-bottom-left-radius: 6px
   border-bottom-right-radius: 5px
@@ -75,6 +85,7 @@
 
 
   li
+    color: white
     float: left
     line-height: 1em
     margin: 5px 8px 5px 0
@@ -87,6 +98,8 @@
       text-decoration: none !important
   a
     color: $identity_link_color
+  .emphasize-name
+    color: $masquerade-link-color
 
   .inbox a
     text-decoration: none
@@ -95,12 +108,8 @@
         text-decoration: underline
 
     .unread-messages-count
-      text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25)
-      +border-radius(8px)
-      background-color: $highlight-color
-      padding: 1px 6px
+      +count-bubble
   #identity-help-container a
-    color: $help-link-color
     padding: 1px 8px
 
 #menu
@@ -128,12 +137,8 @@
 
   .menu-item-no-drop:hover
     text-decoration: underline
-  .menu-item-title
-    background: url("/images/canvas/menu_arrow_white.png") no-repeat right 17px
-    padding-right: 27px
   &.hover
     .menu-item-title
-      background-image: url("/images/canvas/menu_arrow.png")
       text-shadow: none
       color: $menu-text-color
       border-top-color: $menu-border-color
@@ -158,7 +163,7 @@
 
     .menu-item-view-all
       border-bottom: none
-      font-size: 11px
+      font-size: 12px
       text-align: right
       white-space: nowrap
       &:hover
@@ -174,11 +179,13 @@
       min-width: 270px
       width: 270px
       vertical-align: top
-      h2
+      .menu-item-heading
+        display: block
         padding: 9px 12px 3px
         border-bottom: 1px solid lighten($borderColor, 22%)
         color: $menu-text-color
         font-size: 1.1em
+        line-height: 20px
         margin: 0
       &:first-child
         border-left: none
@@ -190,7 +197,10 @@
         color: #555
       .subtitle
         display: block
-        color: #bcbcbc
+        @if $use_high_contrast
+          color: $menu-text-color
+        @else
+          color: #bcbcbc
         font-size: 9px
       .menu-item-drop-float-right
         float: right
@@ -223,7 +233,7 @@
     border-bottom: 1px solid lighten($borderColor, 22%)
     &:hover
       .name
-        color: darken($link_color, 12%)
+        color: $linkColorHover
     a
       display: block
       line-height: 1.2
@@ -246,8 +256,11 @@
     bottom: 10px
     width: 270px
     box-shadow: 2px 2px 4px rgba(0,0,0, 0.2)
-    +transition(all 200ms ease)
-    +transform(scale(0.5))
+    transition: all 200ms ease
+    transform: scale(0.5)
+
+    .customListRestore
+      float: left
 
     .customListClose
       float: right
@@ -277,9 +290,12 @@
         background-position: -8px -41px
 
   .customListOpen
-    color: $link_color
-    float: right
+    color: $linkColor
     font-size: 11px
+    float: right
+    position: relative
+    top: -26px
+    right: 12px
 
 .customListEditing ul
   min-height: 350px
@@ -288,7 +304,7 @@
   min-height: 300px
 
 #menu_enrollments.customListEditing .customListWrapper
-  +transform(scale(1))
+  transform: scale(1)
   left: 270px
   opacity: 1
 

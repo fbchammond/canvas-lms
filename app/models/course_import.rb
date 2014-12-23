@@ -23,6 +23,8 @@ class CourseImport < ActiveRecord::Base
   serialize :parameters
   belongs_to :course
   belongs_to :source, :class_name => 'Course'
+
+  validates_presence_of :course_id, :source_id, :import_type, :workflow_state
   validates_length_of :added_item_codes, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
   
   workflow do
@@ -62,7 +64,5 @@ class CourseImport < ActiveRecord::Base
   end
   handle_asynchronously :perform_later, :max_attempts => 1, :priority => Delayed::LOW_PRIORITY
   
-  named_scope :for_course, lambda{|course, type|
-    {:conditions => ['course_imports.course_id = ? AND course_imports.import_type = ?', course.id, type], :order => 'course_imports.created_at DESC' }
-  }
+  scope :for_course, lambda { |course, type| where(:course_id => course, :import_type => type).order("course_imports.created_at DESC") }
 end

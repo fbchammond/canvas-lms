@@ -1,9 +1,9 @@
 class PopulateConversationRootAccountIds < ActiveRecord::Migration
-  tag :postdeploy
-  self.transactional = false
+  tag :predeploy
+  disable_ddl_transaction!
 
   def self.up
-    DataFixup::PopulateConversationRootAccountIds.send_later_if_production(:run)
+    DataFixup::PopulateConversationRootAccountIds.run
   end
 
   def self.down

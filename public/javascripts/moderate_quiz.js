@@ -21,9 +21,10 @@ define([
   'jquery' /* $ */,
   'quiz_timing',
   'jquery.ajaxJSON' /* ajaxJSON */,
-  'jquery.instructure_date_and_time' /* parseFromISO */,
+  'jquery.instructure_date_and_time' /* datetimeString */,
   'jquery.instructure_forms' /* fillFormData, getFormData */,
   'jqueryui/dialog',
+  'compiled/jquery/fixDialogButtons' /* fix dialog formatting */,
   'jquery.instructure_misc_helpers' /* replaceTags */,
   'jquery.instructure_misc_plugins' /* showIf */,
   'compiled/jquery.rails_flash_notifications',
@@ -88,7 +89,6 @@ define([
       } else if(submission.attempts_left) {
         data.attempts_left = submission.attempts_left;
       }
-
       if(submission.workflow_state != 'untaken') {
         data.time = state_text;
       }
@@ -170,6 +170,7 @@ define([
       }
       checkChange();
     });
+
     $(".moderate_multiple_button").live('click', function(event) {
       var student_ids = []
       var data = {};
@@ -192,11 +193,10 @@ define([
       $("#moderate_student_form").data('ids', student_ids);
       $("#moderate_student_dialog h2").text(I18n.t('extensions_for_students', {'one': "Extensions for 1 Student", 'other': "Extensions for %{count} Students"}, {'count': student_ids.length}));
       $("#moderate_student_form").fillFormData(data);
-      $("#moderate_student_dialog").dialog('close').dialog({
-        auotOpen: false,
+      $("#moderate_student_dialog").dialog({
         title: I18n.t('titles.student_extensions', "Student Extensions"),
         width: 400
-      }).dialog('open');
+      }).fixDialogButtons();
     });
 
     $(".moderate_student_link").live('click', function(event) {
@@ -212,16 +212,38 @@ define([
       $("#moderate_student_form").data('ids', [$student.attr('data-user-id')]);
       $("#moderate_student_form").find("button").attr('disabled', false);
       $("#moderate_student_dialog h2").text(I18n.t('extensions_for_student', "Extensions for %{student}", {'student': name}));
-      $("#moderate_student_dialog").dialog('close').dialog({
-        auotOpen: false,
+      $("#moderate_student_dialog").dialog({
         title: I18n.t('titles.student_extensions', "Student Extensions"),
         width: 400
-      }).dialog('open');
+      }).fixDialogButtons();
     });
     $(".reload_link").click(function(event) {
       event.preventDefault();
       updateSubmissions();
     });
+
+    $('#extension_extra_time')
+      .on('invalid:not_a_number', function(e) {
+        $(this).errorBox(I18n.t('errors.quiz_submission_extra_time_not_a_number', 'Extra time must be a number.'));
+      })
+      .on('invalid:greater_than', function(e) {
+        $(this).errorBox(I18n.t('errors.quiz_submission_extra_time_too_short', 'Extra time must be greater than 0.'));
+      })
+      .on('invalid:less_than', function(e) {
+        $(this).errorBox(I18n.t('errors.quiz_submission_extra_time_too_long', 'Extra time must be less than than 10080.'));
+      });
+
+    $('#extension_extra_attempts')
+      .on('invalid:not_a_number', function(e) {
+        $(this).errorBox(I18n.t('errors.quiz_submission_extra_attempts_not_a_number', 'Extra attempts must be a number.'));
+      })
+      .on('invalid:greater_than', function(e) {
+        $(this).errorBox(I18n.t('errors.quiz_submission_extra_attempts_too_short', 'Extra attempts must be greater than 0.'));
+      })
+      .on('invalid:less_than', function(e) {
+        $(this).errorBox(I18n.t('errors.quiz_submission_extra_attempts_too_long', 'Extra attempts must be less than than 1000.'));
+      });
+
     $("#moderate_student_form").submit(function(event) {
       event.preventDefault();
       event.stopPropagation();
@@ -231,6 +253,40 @@ define([
       $form.find("button").attr('disabled', true).filter(".save_button").text(I18n.t('buttons.saving', "Saving..."));
       var finished = 0, errors = 0;
       var formData = $(this).getFormData();
+
+      function valid(data) {
+        var extraAttempts = parseInt(data.extra_attempts),
+            extraTime     = parseInt(data.extra_time),
+            valid         = true;
+
+        if (data.extra_attempts && isNaN(extraAttempts)) {
+          $("#extension_extra_attempts").trigger("invalid:not_a_number");
+          valid = false;
+        } else if (extraAttempts > 1000) {
+          $("#extension_extra_attempts").trigger("invalid:less_than");
+          valid = false;
+        } else if (extraAttempts < 0) {
+          $("#extension_extra_attempts").trigger("invalid:greater_than");
+          valid = false;
+        }
+
+        if (data.extra_time && isNaN(extraTime)) {
+          $("#extension_extra_time").trigger("invalid:not_a_number");
+          valid = false;
+        } else if (extraTime > 10080) { // 1 week
+          $("#extension_extra_time").trigger("invalid:less_than");
+          valid = false;
+        } else if (extraTime < 0) {
+          $("#extension_extra_time").trigger("invalid:greater_than");
+          valid = false;
+        }
+        return valid;
+      }
+      if (!valid(formData)) {
+        $form.find("button").attr('disabled', false).filter(".save_button").text(I18n.t('buttons.save', "Save"));
+        return;
+      }
+
       function checkIfFinished() {
         if(finished >= ids.length) {
           if(errors > 0) {
@@ -265,8 +321,8 @@ define([
     $(".extend_time_link").live('click', function(event) {
       event.preventDefault();
       var $row = $(event.target).parents(".student");
-      var end_at = $.parseFromISO($row.attr('data-end-at')).datetime_formatted;
-      var started_at = $.parseFromISO($row.attr('data-started-at')).datetime_formatted;
+      var end_at = $.datetimeString($row.attr('data-end-at'));
+      var started_at = $.datetimeString($row.attr('data-started-at'));
       var $dialog = $("#extend_time_dialog");
       $dialog.data('row', $row);
       $dialog.fillTemplateData({
@@ -276,11 +332,10 @@ define([
         }
       });
       $dialog.find("button").attr('disabled', false);
-      $dialog.dialog('close').dialog({
-        auto_open: false,
+      $dialog.dialog({
         title: I18n.t('titles.extend_quiz_time', "Extend Quiz Time"),
         width: 400
-      }).dialog('open');
+      }).fixDialogButtons();
     });
     $("#extend_time_dialog").find(".cancel_button").click(function() {
       $("#extend_time_dialog").dialog('close');

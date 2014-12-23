@@ -1,10 +1,13 @@
+<%
+   js_bundle :eportfolio
+%>
 <% content_for :page_title do %>
   <%= t(:page_title, "My ePortfolios") %>
 <% end %>
 
 <% content_for :right_side do %>
   <div class="rs-margin-lr rs-margin-top">
-    <a href="#" class="add_eportfolio_link button button-sidebar-wide"><%= image_tag "add.png" %><%= t('links.create', "Create an ePortfolio") %></a>
+    <a href="#" class="add_eportfolio_link btn button-sidebar-wide"><i class="icon-add"></i> <%= t('links.create', "Create an ePortfolio") %></a>
   </div>
 <% end %>
 
@@ -32,7 +35,7 @@ Ready to get started? Click the button.
 DETAILS
   %>
   <div class="button-container">
-    <a href="#" class="add_eportfolio_link button button-sidebar-wide"><%= image_tag "add.png" %><%= t('links.create', "Create an ePortfolio") %></a>
+    <a href="#" class="add_eportfolio_link btn button-sidebar-wide"><i class="icon-add"></i> <%= t('links.create', "Create an ePortfolio") %></a>
   </div>
   </div>
 <% else %>
@@ -41,29 +44,7 @@ DETAILS
     <%= render :partial => "eportfolio", :collection => @portfolios %>
   </ul>
 <% end %>
-<% js_block do %>
-<script>
-require([
-  'jquery' /* $ */
-], function($) {
-
-$(document).ready(function() {
-  $(".add_eportfolio_link").click(function(event) {
-    event.preventDefault();
-    $("#whats_an_eportfolio").slideToggle();
-    $("#add_eportfolio_form").slideToggle(function() {
-      $(this).find(":text:first").focus().select();
-    });
-  });
-  $("#add_eportfolio_form .cancel_button").click(function() {
-    $("#add_eportfolio_form").slideToggle();
-    $("#whats_an_eportfolio").slideToggle();
-  });
-});
-});
-</script>
-<% end %>
-<% form_for Eportfolio.new, :url => eportfolios_path, :html => {:style => "display: none;", :id => "add_eportfolio_form"} do |f| %>
+<%= form_for Eportfolio.new, :url => eportfolios_path, :html => {:style => "display: none;", :id => "add_eportfolio_form"} do |f| %>
 <h2><%= t('headers.add_eportfolio', "Make an ePortfolio") %></h2>
 <table class="formtable">
   <tr>
@@ -76,8 +57,8 @@ $(document).ready(function() {
     </td>
   </tr><tr>
     <td colspan="2">
-      <button class="button " id="eportfolio_submit" name="commit" type="submit"><%= t('buttons.add_eportfolio', "Make ePortfolio") %></button>
-      <button type="button" class="cancel_button button-secondary" style><%= t('#buttons.cancel', "Cancel") %></button>
+      <button class="btn " id="eportfolio_submit" name="commit" type="submit"><%= t('buttons.add_eportfolio', "Make ePortfolio") %></button>
+      <button type="button" class="cancel_button btn button-secondary" style><%= t('#buttons.cancel', "Cancel") %></button>
     </td>
   <td>
 </table>

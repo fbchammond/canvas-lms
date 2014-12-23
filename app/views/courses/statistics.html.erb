@@ -8,27 +8,28 @@
 <div style="padding: 0 20px;" id="stats">
 <h2><%= t 'headings.stats', 'Statistics for %{course}', :course => @context.name %></h2>
 
-<% active_students = @context.participating_students.scoped(:conditions => "enrollments.type != 'StudentViewEnrollment'").enrolled_before(@range_end).length %>
+<% active_students = @context.participating_students.where("enrollments.type<>'StudentViewEnrollment'").enrolled_before(@range_end).count %>
 <% inactive_students = @context.student_enrollments.before(@range_end).select{|e| e.invited? }.length %>
 
-<% total_topics = @context.discussion_topics.active.before(@range_end).count %>
-<% total_entries = DiscussionEntry.active.scoped(:conditions => {:discussion_topic_id => @context.discussion_topics.active.before(@range_end).map(&:id)}).count %>
+<% active_topics =  @context.discussion_topics.active.before(@range_end).pluck(:id) %>
+<% total_topics = active_topics.length %>
+<% total_entries = DiscussionEntry.active.where(:discussion_topic_id => active_topics).count %>
 <% new_topics = @context.discussion_topics.active.before(@range_end).select{|t| t.created_at > @range_start}.length %>
-<% new_entries = DiscussionEntry.active.after(@range_start).scoped(:conditions => {:discussion_topic_id => @context.discussion_topics.active.before(@range_end).map(&:id)}).count %>
+<% new_entries = DiscussionEntry.active.after(@range_start).where(:discussion_topic_id => active_topics).count %>
 <% new_assignments = @context.assignments.active.before(@range_end).select{|a| a.expects_submission? && a.created_at > @range_start }.length %>
-<% new_submissions = @context.submissions.before(@range_end).having_submission.scoped(:conditions => ['submitted_at > ?', @range_start]).count %>
+<% new_submissions = @context.submissions.before(@range_end).having_submission.where('submitted_at > ?', @range_start).count %>
 <% total_assignments = @context.assignments.active.before(@range_end).select{|a| a.expects_submission? }.length %>
 <% total_submissions = @context.submissions.before(@range_end).having_submission.count %>
 
 <%
   rubric_associations = @context.rubric_associations.bookmarked.before(@range_end)
-  rubric_associations = rubric_associations.select(&:rubric_id).once_per(&:rubric_id)
+  rubric_associations = rubric_associations.select(&:rubric_id).uniq(&:rubric_id)
 %>
-<div id="reports-tabs">
+<div id="reports-tabs" style="display:none;">
   <ul>
     <li><a href="#tab-totals"><%= t('tabs.totals', %{Totals}) %></a></li>
     <li><a href="#tab-assignments"><%= t('tabs.assignments', %{Assignments}) %></a></li>
-    <li><a href="#tab-students"><%= t('tabs.students', %{Students}) %></a></li>
+    <li><a href="#tab-students" id="students_stats_tab"><%= t('tabs.students', %{Students}) %></a></li>
     <li><a href="#tab-files"><%= t('tabs.files', %{File Storage}) %></a></li>
   </ul>
   <div class="stats" id="tab-totals">
@@ -72,7 +73,7 @@
         <td class="indent"><%= @context.quizzes.before(@range_end).map{|q| (q.quiz_data || []).length}.sum %></td>
       </tr><tr>
         <td class="indent"><%= t('quiz_submissions', %{Quiz Submissions}) %></td>
-        <td class="indent"><%= QuizSubmission.scoped(:conditions => {:quiz_id => @context.quizzes.before(@range_end).map(&:id)}).count %></td>
+        <td class="indent"><%= Quizzes::QuizSubmission.where(quiz_id: @context.quizzes.before(@range_end)).count %></td>
       </tr>
     </table>
   </div>
@@ -99,40 +100,30 @@
       <tr>
         <td><%= t('file_upload', %{File Upload}) %></td>
         <td><%= @context.assignments.active.before(@range_end).select{|a| a.submission_types.match(/online_upload/) }.length %></td>
-        <td><%= @context.submissions.before(@range_end).scoped(:conditions => {:submission_type => 'online_upload' }).count %></td>
+        <td><%= @context.submissions.before(@range_end).where(:submission_type => 'online_upload').count %></td>
       </tr><tr>
         <td><%= t('text_entry', %{Text Entry}) %></td>
         <td><%= @context.assignments.active.before(@range_end).select{|a| a.submission_types.match(/online_text_entry/) }.length %></td>
-        <td><%= @context.submissions.before(@range_end).scoped(:conditions => {:submission_type => 'online_text_entry' }).count %></td>
+        <td><%= @context.submissions.before(@range_end).where(:submission_type => 'online_text_entry').count %></td>
       </tr><tr>
         <td><%= t('website_url', %{Website URL}) %></td>
         <td><%= @context.assignments.active.before(@range_end).select{|a| a.submission_types.match(/online_url/) }.length %></td>
-        <td><%= @context.submissions.before(@range_end).scoped(:conditions => {:submission_type => 'online_url' }).count %></td>
+        <td><%= @context.submissions.before(@range_end).where(:submission_type => 'online_url').count %></td>
       </tr><tr>
         <td><%= t('quiz', %{Quiz}) %></td>
         <td><%= @context.assignments.active.before(@range_end).select{|a| a.submission_types.match(/online_quiz/) }.length %></td>
-        <td><%= @context.submissions.before(@range_end).scoped(:conditions => {:submission_type => 'online_quiz' }).count %></td>
+        <td><%= @context.submissions.before(@range_end).where(:submission_type => 'online_quiz').count %></td>
       </tr><tr>
         <td><%= t('discussion_topic', %{Discussion Topic}) %></td>
         <td><%= @context.assignments.active.before(@range_end).select{|a| a.submission_types.match(/discussion_topic/) }.length %></td>
-        <td><%= @context.submissions.before(@range_end).scoped(:conditions => {:submission_type => 'discussion_topic' }).count %></td>
+        <td><%= @context.submissions.before(@range_end).where(:submission_type => 'discussion_topic').count %></td>
       </tr>
       </tbody>
     </table>
   </div>
   <div id="tab-students">
     <h3><%= t('headings.students', %{Recently Logged-In Users}) %></h3>
-    <ul class="item_list">
-      <% @recently_logged_students.each do |user| %>
-        <li>
-          <a href="<%= user_path(user.id) %>" class="header"><%= user.name %></a>
-          <div class="sub_header"><%= t 'student_last_logged_in', "last logged in %{time}", :time => datetime_string(user.pseudonyms.map{|p| [p.current_login_at, p.last_login_at]}.flatten.compact.max) %></div>
-        </li>
-      <% end %>
-      <% if @recently_logged_students.empty? %>
-        <li><%= t('none_to_show', %{None to show}) %></li>
-      <% end %>
-    </ul>
+    <ul class="item_list"></ul>
   </div>
   <div class="stats" id="tab-files">
     <h3><%= t('headings.files', %{File Storage}) %></h3>
@@ -155,13 +146,4 @@
     </table>
   </div>
 </div>
-
-<% js_block do -%>
-  <script>
-  require(['jquery'], function() {
-  $(document).ready(function() {
-    $("#reports-tabs").tabs().show();
-  });
-  });
-  </script>
-<% end %>
+<% js_bundle :course_statistics %>

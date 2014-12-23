@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2012 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -31,7 +31,9 @@ module Api::V1::Submission
     if includes.include?("submission_history")
       hash['submission_history'] = []
       submission.submission_history.each_with_index do |ver, idx|
-        hash['submission_history'] << submission_attempt_json(ver, assignment, user, session, idx, context)
+        ver.without_versioned_attachments do
+          hash['submission_history'] << submission_attempt_json(ver, assignment, user, session, idx, context)
+        end
       end
     end
 
@@ -39,18 +41,19 @@ module Api::V1::Submission
       hash['submission_comments'] = submission.comments_for(@current_user).map do |sc|
         sc_hash = sc.as_json(
           :include_root => false,
-          :only => %w(author_id author_name created_at comment))
+          :only => %w(id author_id author_name created_at comment))
         if sc.media_comment?
           sc_hash['media_comment'] = media_comment_json(:media_id => sc.media_comment_id, :media_type => sc.media_comment_type)
         end
         sc_hash['attachments'] = sc.attachments.map do |a|
-          attachment_json(a)
+          attachment_json(a, user)
         end unless sc.attachments.blank?
+        sc_hash['author'] = user_display_json(sc.author, sc.context)
         sc_hash
       end
     end
 
-    if includes.include?("rubric_assessment") && submission.rubric_assessment
+    if includes.include?("rubric_assessment") && submission.rubric_assessment && submission.grants_right?(user, :read_grade)
       ra = submission.rubric_assessment.data
       hash['rubric_assessment'] = {}
       ra.each { |rating| hash['rubric_assessment'][rating[:criterion_id]] = rating.slice(:points, :comments) }
@@ -75,38 +78,42 @@ module Api::V1::Submission
     hash
   end
 
-  SUBMISSION_JSON_FIELDS = %w(user_id url score grade attempt submission_type submitted_at body assignment_id grade_matches_current_submission workflow_state).freeze
+  SUBMISSION_JSON_FIELDS = %w(id user_id url score grade attempt submission_type submitted_at body assignment_id graded_at grade_matches_current_submission grader_id workflow_state).freeze
+  SUBMISSION_JSON_METHODS = %w(late).freeze
   SUBMISSION_OTHER_FIELDS = %w(attachments discussion_entries)
 
   def submission_attempt_json(attempt, assignment, user, session, version_idx = nil, context = nil)
     context ||= assignment.context
 
     json_fields = SUBMISSION_JSON_FIELDS
+    json_methods = SUBMISSION_JSON_METHODS.dup # dup because AR#to_json modifies the :methods param in-place
+    other_fields = SUBMISSION_OTHER_FIELDS
+
     if params[:response_fields]
       json_fields = json_fields & params[:response_fields]
-    end
-    if params[:exclude_response_fields]
-      json_fields -= params[:exclude_response_fields]
-    end
-
-    other_fields = SUBMISSION_OTHER_FIELDS
-    if params[:response_fields]
+      json_methods = json_methods & params[:response_fields]
       other_fields = other_fields & params[:response_fields]
     end
     if params[:exclude_response_fields]
+      json_fields -= params[:exclude_response_fields]
+      json_methods -= params[:exclude_response_fields]
       other_fields -= params[:exclude_response_fields]
     end
 
-    hash = api_json(attempt, user, session, :only => json_fields)
+    hash = api_json(attempt, user, session, :only => json_fields, :methods => json_methods)
+    if hash['body'].present?
+      hash['body'] = api_user_content(hash['body'], context, user)
+    end
 
+    preview_args = { 'preview' => '1' }
+    preview_args['version'] = version_idx if version_idx
     hash['preview_url'] = course_assignment_submission_url(
-      context, assignment, attempt[:user_id], 'preview' => '1',
-      'version' => version_idx)
+      context, assignment, attempt[:user_id], preview_args)
 
     unless attempt.media_comment_id.blank?
       hash['media_comment'] = media_comment_json(:media_id => attempt.media_comment_id, :media_type => attempt.media_comment_type)
     end
-    
+
     if attempt.turnitin_data && attempt.grants_right?(@current_user, :view_turnitin_report)
       turnitin_hash = attempt.turnitin_data.dup
       turnitin_hash.delete(:last_processed_attempt)
@@ -117,7 +124,11 @@ module Api::V1::Submission
       attachments = attempt.versioned_attachments.dup
       attachments << attempt.attachment if attempt.attachment && attempt.attachment.context_type == 'Submission' && attempt.attachment.context_id == attempt.id
       hash['attachments'] = attachments.map do |attachment|
-        attachment_json(attachment)
+        attachment.skip_submission_attachment_lock_checks = true
+        atjson = attachment_json(attachment, user, {},
+                                 submission_attachment: true)
+        attachment.skip_submission_attachment_lock_checks = false
+        atjson
       end.compact unless attachments.blank?
     end
 
@@ -137,6 +148,58 @@ module Api::V1::Submission
     end
 
     hash
+  end
+
+  # Create an attachment with a ZIP archive of an assignment's submissions.
+  # The attachment will be re-created if it's 1 hour old, or determined to be
+  # "stale". See the argument descriptions for testing the staleness of the attachment.
+  #
+  # @param [Assignment] assignment
+  # The assignment, or an object that implements its interface, for which the
+  # submissions will be zipped.
+  #
+  # @param [DateTime] updated_at
+  # A timestamp that marks the latest update to the assignment object which will
+  # be used to determine whether the attachment will be re-created.
+  #
+  # Note that this timestamp will be ignored if the attachment is 1 hour old.
+  #
+  # @return [Attachment] The attachment that contains the archive.
+  def submission_zip(assignment, updated_at = nil)
+    attachments = assignment.attachments.where({
+      display_name: 'submissions.zip',
+      workflow_state: %w[to_be_zipped zipping zipped errored unattached],
+      user_id: @current_user
+    }).order(:created_at).all
+
+    attachment = attachments.pop
+    attachments.each { |a| a.destroy! }
+
+    # Remove the earlier attachment and re-create it if it's "stale"
+    if attachment
+      created_at = attachment.created_at
+      updated_at ||= assignment.submissions.map { |s| s.submitted_at }.compact.max
+
+      if created_at < 1.hour.ago || (updated_at && created_at < updated_at)
+        attachment.destroy!
+        attachment = nil
+      end
+    end
+
+    if !attachment
+      attachment = assignment.attachments.build(:display_name => 'submissions.zip')
+      attachment.workflow_state = 'to_be_zipped'
+      attachment.file_state = '0'
+      attachment.user = @current_user
+      attachment.save!
+
+      ContentZipper.send_later_enqueue_args(:process_attachment, {
+        priority: Delayed::LOW_PRIORITY,
+        max_attempts: 1
+      }, attachment)
+    end
+
+    attachment
   end
 end
 

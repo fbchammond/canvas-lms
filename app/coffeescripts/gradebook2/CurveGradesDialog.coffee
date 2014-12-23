@@ -11,10 +11,10 @@ define [
 ], (I18n, $, curveGradesDialogTemplate) ->
 
   class CurveGradesDialog
-    constructor: (@assignment, @gradebook) ->
+    constructor: ({@assignment, @students, context_url}) ->
       locals =
         assignment: @assignment
-        action: "#{@gradebook.options.context_url}/gradebook/update_submission"
+        action: "#{context_url}/gradebook/update_submission"
         middleScore: parseInt((@assignment.points_possible || 0) * 0.6)
         showOutOf: @assignment.points_possible >= 0
       # the dialog will be shared across all instantiation, so make it a prototype property
@@ -23,13 +23,21 @@ define [
         .formSubmit
           disableWhileLoading: true
           processData: (data) =>
+            if !@assignment.points_possible || @assignment.points_possible == "0"
+              errorBox = @$dialog.errorBox I18n.t("errors.no_points_possible", "Cannot curve without points possible")
+              setTimeout((-> errorBox.fadeOut(-> errorBox.remove())), 3500)
+              return false
             cnt = 0
             curves = @curve()
             for idx of curves
               pre = "submissions[submission_" + idx + "]"
               data[pre + "[assignment_id]"] = data.assignment_id
               data[pre + "[user_id]"] = idx
-              data[pre + "[grade]"] = curves[idx]
+              if @assignment.grading_type == "gpa_scale"
+                percent = (curves[idx]/@assignment.points_possible)*100
+                data[pre + "[grade]"] = "#{percent}%"
+              else
+                data[pre + "[grade]"] = curves[idx]
               cnt++
             if cnt == 0
               errorBox = @$dialog.errorBox I18n.t("errors.none_to_update", "None to Update")
@@ -65,8 +73,9 @@ define [
 
       return  if isNaN(middleScore)
 
-      for idx, student of @gradebook.students
-        score = student["assignment_#{@assignment.id}"].score
+      for idx, student of @students
+        sub = student["assignment_#{@assignment.id}"]
+        score = sub?.score
         score = @assignment.points_possible if score > @assignment.points_possible
         score = 0 if score < 0 or !score? and should_assign_blanks
         users_for_score[parseInt(score, 10)] = users_for_score[parseInt(score, 10)] or []
@@ -94,8 +103,7 @@ define [
       while idx >= 0
         users = users_for_score[idx] or []
         score = Math.round(breakScores[currentBreak])
-        for jdx of users
-          user = users[jdx]
+        for user in users
           finalScores[user[0]] = score
           finalScores[user[0]] = 0  if user[1] == 0
           finalScore = finalScores[user[0]]

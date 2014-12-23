@@ -21,12 +21,22 @@ class AccountUser < ActiveRecord::Base
   belongs_to :user
   has_many :role_overrides, :as => :context
   has_a_broadcast_policy
-  before_save :infer_defaults
+  before_validation :infer_defaults
   after_save :touch_user
+  after_destroy :touch_user
   after_save :update_account_associations_if_changed
+  after_destroy :update_account_associations_later
   attr_accessible :account, :user, :membership_type
 
-  validates_presence_of :account_id, :user_id
+  EXPORTABLE_ATTRIBUTES = [:id, :account_id, :user_id, :membership_type, :created_at, :updated_at]
+
+  EXPORTABLE_ASSOCIATIONS = [:account, :user]
+
+  validates_presence_of :account_id, :user_id, :membership_type
+
+  alias_method :context, :account
+
+  BASE_ROLE_NAME = 'AccountMembership'
 
   def update_account_associations_if_changed
     if (self.account_id_changed? || self.user_id_changed?)
@@ -40,6 +50,10 @@ class AccountUser < ActiveRecord::Base
         self.user.update_account_associations_later
       end
     end
+  end
+
+  def update_account_associations_later
+    self.user.update_account_associations_later
   end
 
   def infer_defaults
@@ -59,7 +73,12 @@ class AccountUser < ActiveRecord::Base
     p.to {|record| record.user }
     p.whenever {|record| @account_user_notification }
   end
-  
+
+  set_policy do
+    given { |user| self.account.grants_right?(user, :manage_account_memberships) && is_subset_of?(user) }
+    can :create and can :destroy
+  end
+
   def readable_type
     AccountUser.readable_type(self.membership_type)
   end
@@ -75,10 +94,44 @@ class AccountUser < ActiveRecord::Base
     self.save!
     @account_user_notification = false
   end
-  
-  def has_permission_to?(action)
+
+  def enabled_for?(context, action)
     @permission_lookup ||= {}
-    @permission_lookup[action] ||= RoleOverride.permission_for(self, action, self.membership_type)[:enabled]
+    @permission_lookup[[context.class, context.global_id, action]] ||= RoleOverride.enabled_for?(account, context, action, base_role_name, membership_type)
+  end
+
+  def has_permission_to?(context, action)
+    enabled_for?(context, action).include?(:self)
+  end
+
+  def self.all_permissions_for(user, account)
+    account_users = account.account_users_for(user)
+    result = {}
+    account_users.each do |account_user|
+      RoleOverride.permissions.keys.each do |permission|
+        result[permission] ||= []
+        result[permission] |= account_user.enabled_for?(account, permission)
+      end
+    end
+    result
+  end
+
+  def is_subset_of?(user)
+    needed_permissions = RoleOverride.permissions.keys.inject({}) do |result, permission|
+      result[permission] = enabled_for?(account, permission)
+      result
+    end
+    target_permissions = AccountUser.all_permissions_for(user, account)
+    needed_permissions.all? do |(permission, needed_permission)|
+      next true unless needed_permission.present?
+      target_permission = target_permissions[permission]
+      next false unless target_permission.present?
+      (needed_permission - target_permission).empty?
+    end
+  end
+
+  def base_role_name
+    BASE_ROLE_NAME
   end
   
   def self.readable_type(type)
@@ -104,7 +157,5 @@ class AccountUser < ActiveRecord::Base
     account_ids_for_user(user).include?(account_id)
   end
   
-  named_scope :for_user, lambda{|user|
-    {:conditions => ['account_users.user_id = ?', user.id] }
-  }
+  scope :for_user, lambda { |user| where(:user_id => user) }
 end

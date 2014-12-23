@@ -17,8 +17,8 @@
 #
 require File.expand_path(File.dirname(__FILE__) + '/common')
 
-describe "/profile/communication" do
-  it_should_behave_like "in-process server selenium tests"
+describe "profile communication settings" do
+  include_examples "in-process server selenium tests"
   before :each do
     user_logged_in(:username => 'somebody@example.com')
 
@@ -32,6 +32,7 @@ describe "/profile/communication" do
   def mouse_enter_cell(category, channel_id)
     driver.execute_script("$('#notification-preferences .comm-event-option[data-category=#{category}][data-channelid=#{channel_id}]').trigger('mouseenter')")
   end
+
   # Using javascript, trigger a mouseleave event to hide buttons and display text.
   def mouse_leave_cell(category, channel_id)
     driver.execute_script("$('#notification-preferences .comm-event-option[data-category=#{category}][data-channelid=#{channel_id}]').trigger('mouseleave')")
@@ -45,14 +46,14 @@ describe "/profile/communication" do
   it "should render" do
     get "/profile/communication"
     # Page title should match expected
-    f('title').text.should == 'Notification Preferences'
+    driver.execute_script("return document.title").should == 'Notification Preferences'
     # Expect breadcrumbs to correctly display page name
-    f('nav#breadcrumbs').text.should match(/Notification Preferences/)
+    f('#breadcrumbs').should include_text('Notification Preferences')
     # Expect h2 with
     f('#content > h2').text.should == 'Notification Preferences'
   end
 
-  it "should display the user's email address as channel" do
+  it "should display the users email address as channel" do
     get "/profile/communication"
     wait_for_ajaximations
     fj('th.comm-channel:first').should include_text('Email Address')
@@ -63,13 +64,40 @@ describe "/profile/communication" do
     channel = @user.communication_channels.create(:path => "8011235555@vtext.com", :path_type => "sms")
     channel.confirm
     get "/profile/communication"
-    keep_trying_until do
-      fj('tr.grouping:first th.comm-channel:last').should include_text('Cell Number')
-      fj('tr.grouping:first th.comm-channel:last').should include_text('8011235555@vtext.com')
-    end
     wait_for_ajaximations
     fj('tr.grouping:first th.comm-channel:last').should include_text('Cell Number')
     fj('tr.grouping:first th.comm-channel:last').should include_text('8011235555@vtext.com')
+  end
+
+  let(:sns_response) { stub(data: {endpointarn: 'endpointarn'}) }
+  let(:sns_client) { stub(create_platform_endpoint: sns_response) }
+  let(:sns_developer_key_sns_field) { stub(client: sns_client) }
+
+  let(:sns_developer_key) do
+    DeveloperKey.stubs(:sns).returns(sns_developer_key_sns_field)
+    dk = DeveloperKey.default
+    dk.sns_arn = 'apparn'
+    dk.save!
+    dk
+  end
+
+  let(:sns_access_token) { @user.access_tokens.create!(developer_key: sns_developer_key) }
+  let(:sns_channel) { @user.communication_channels.create_push(sns_access_token, 'device_token') }
+
+  it "should display an sns channel" do
+    sns_channel
+    get "/profile/communication"
+    wait_for_ajaximations
+    fj('tr.grouping:first th.comm-channel:last').should include_text('Push Notification')
+  end
+
+  it "should only display asap and never for sns channels" do
+    sns_channel
+    get "/profile/communication"
+    wait_for_ajaximations
+    cell = find_frequency_cell("grading", sns_channel.id)
+    buttons = ffj('.frequency', cell)
+    buttons.map {|b| b.attribute(:'data-value')}.should == %w(immediately never)
   end
 
   it "should load the initial state of a user-pref checkbox" do
@@ -108,7 +136,7 @@ describe "/profile/communication" do
     policy.frequency = Notification::FREQ_DAILY
     policy.save!
     get "/profile/communication"
-    cell = find_frequency_cell(@sub_comment.category, channel.id)
+    cell = find_frequency_cell(@sub_comment.category.underscore.gsub(/\s/, '_'), channel.id)
     # validate existing text is shown correctly (text display and button state)
     cell.text.should == 'Daily'
 
@@ -117,6 +145,8 @@ describe "/profile/communication" do
     mouse_leave_cell(@sub_comment.category, channel.id)
     # Change to a different value and verify flash and the save. (click on the radio)
     cell.text.should == 'ASAP'
+
+    wait_for_ajaximations
 
     # test data stored
     policy.reload
@@ -131,5 +161,4 @@ describe "/profile/communication" do
     it "should create a select with options instead of radio buttons"
     it "should save the frequency change for select" #flash - test data
   end
-
 end

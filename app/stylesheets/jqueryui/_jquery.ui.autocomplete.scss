@@ -7,6 +7,7 @@
  *
  * http://docs.jquery.com/UI/Autocomplete#theming
  */
+
 .ui-autocomplete { position: absolute; cursor: default; }
 
 /* workarounds */
@@ -44,9 +45,12 @@
       zoom:1;
 
       &.ui-state-hover,
-      &.ui-state-active {
+      &.ui-state-active,
+      &.ui-state-focus {
+        @include vertical-gradient($gradientTopActive, $gradientBottomActive);
         font-weight: normal;
         margin: -1px;
+        text-shadow: 0 -1px 0 rgba(#000, 0.25);
       }
     }
   }

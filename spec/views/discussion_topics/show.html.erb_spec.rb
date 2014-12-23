@@ -23,30 +23,34 @@ describe "/discussion_topics/show" do
   it "should render" do
     course_with_teacher
     view_context(@course, @user)
-    @topic = @course.discussion_topics.create!(:title => "some topic")
+    @topic = @course.discussion_topics.create!(:title => "some topic", :user => @user)
     @entry = @topic.discussion_entries.create!(:message => "some message")
     @topic.discussion_entries.create!(:message => "another message")
     assigns[:topic] = @topic
     assigns[:grouped_entries] = @topic.discussion_entries.group_by(&:parent_id)
     assigns[:entries] = @topic.discussion_entries
     assigns[:all_entries] = @topic.discussion_entries
+    assigns[:presenter] = DiscussionTopicPresenter.new(@topic, @user)
     render "discussion_topics/show"
     response.should have_tag("div#discussion_subentries")
   end
 
   it "should render in a group context" do
     assignment_model(:submission_types => 'discussion_topic')
-    rubric_association_model(:association => @assignment, :purpose => 'grading')
+    rubric_association_model(:association_object => @assignment, :purpose => 'grading')
     group_model
     view_context(@group, @user)
     @topic = @assignment.discussion_topic
+    @topic.user = @user
+    @topic.save!
     @entry = @topic.discussion_entries.create!(:message => "some message")
     @topic.discussion_entries.create!(:message => "another message")
     assigns[:topic] = @topic
     assigns[:grouped_entries] = @topic.discussion_entries.group_by(&:parent_id)
     assigns[:entries] = @topic.discussion_entries
     assigns[:all_entries] = @topic.discussion_entries
-    assigns[:assignment] = @assignment
+    assigns[:assignment] = AssignmentOverrideApplicator.assignment_overridden_for(@assignment, @user)
+    assigns[:presenter] = DiscussionTopicPresenter.new(@topic, @user)
     @topic.for_assignment?.should be_true
     @topic.assignment.rubric_association.rubric.should_not be_nil
     render "discussion_topics/show"

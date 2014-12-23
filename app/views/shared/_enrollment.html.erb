@@ -27,7 +27,7 @@
       <% end %>
     <% end %>
     <% if allowedbypermissions && !multiple_enrollments %>
-      <a href="<%= context_url(@context, :context_unenroll_url, (enrollment.try_rescue(:id) || "{{ id }}" ) ) %>" class="unenroll_user_link <%= cant_unenroll %> no-hover" title="<%= t 'links.unenroll_user_course', "Remove User from Course" %>"><%= image_tag unenroll_image %></a>
+      <a href="<%= context_url(@context, :context_unenroll_url, (enrollment.try_rescue(:id) || "{{ id }}" ) ) %>" class="unenroll_user_link <%= cant_unenroll %> no-hover" title="<%= t 'links.unenroll_user_course', "Remove User from Course" %>"><i class="icon-end"></i></a>
     <% end %>
     <a href="<%= re_send_confirmation_url( enrollment.try_rescue(:user_id) || "{{ user_id }}", enrollment.try_rescue(:user).try_rescue(:communication_channel).try_rescue(:id) || "{{ communication_channel_id }}", :enrollment_id => enrollment.try_rescue(:id) || "{{ id }}" ) rescue "#" %>" class="re_send_confirmation_url" style="display: none;">&nbsp;</a>
   </span>
@@ -88,14 +88,14 @@
         <div class="section section_<%= enrollment.course_section_id %>">
           <div class="section_name"><%= enrollment.course_section.display_name %></div>
           <% unless lockedbysis %>
-            <% form_tag course_move_enrollment_url(@context, enrollment.id), {:class => "enrollment_course_section_form", :style => "display: none;"} do  %>
+            <%= form_tag course_move_enrollment_url(@context, enrollment.id), {:class => "enrollment_course_section_form", :style => "display: none;"} do  %>
               <select title="<%= t 'titles.course_section', "Course Section" %>" name="course_section_id" class="course_section_id">
                 <% @context.course_sections.active.each do |section| %>
                   <option value="<%= section.id %>" class="option_for_section_<%= section.id %>" <%= "selected=selected" if enrollment.course_section_id==section.id %>><%= section.display_name %></option>
                 <% end %>
               </select>
               <% if allowedbypermissions && multiple_enrollments %>
-                <a href="<%= context_url(@context, :context_unenroll_url, (enrollment.try_rescue(:id) || "{{ id }}" ) ) %>" class="unenroll_user_link <%= cant_unenroll %> no-hover" title="<%= t 'links.unenroll_user_section', "Remove User from Section" %>"><%= image_tag unenroll_image %></a>
+                <a href="<%= context_url(@context, :context_unenroll_url, (enrollment.try_rescue(:id) || "{{ id }}" ) ) %>" class="unenroll_user_link <%= cant_unenroll %> no-hover" title="<%= t 'links.unenroll_user_section', "Remove User from Section" %>"><i class="icon-end"></i></a>
               <% end %>
             <% end %>
           <% end %>

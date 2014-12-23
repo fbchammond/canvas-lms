@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2012 Instructure, Inc.
+# Copyright (C) 2012 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -18,12 +18,13 @@
 
 require File.expand_path(File.dirname(__FILE__) + '/../api_spec_helper')
 
-describe 'Account Reports API', :type => :integration do
+describe 'Account Reports API', type: :request do
   before do
     @admin = account_admin_user
     user_with_pseudonym(:user => @admin)
-    @report = AccountReport.create()
+    @report = AccountReport.new
     @report.account = @admin.account
+    @report.user = @admin
     @report.progress=rand(100)
     @report.start_at=DateTime.now
     @report.end_at=(Time.now + (rand(60*60*4))).to_datetime
@@ -63,6 +64,12 @@ describe 'Account Reports API', :type => :integration do
       report.key?('progress').should be_true
       report.key?('file_url').should be_true
     end
+
+    it 'should 404 for non existing reports' do
+      raw_api_call(:post, "/api/v1/accounts/#{@admin.account.id}/reports/bad_report_csv",
+                   { :report=> 'bad_report_csv', :controller => 'account_reports', :action => 'create', :format => 'json', :account_id => @admin.account.id.to_s })
+      assert_status(404)
+    end
   end
 
   describe 'index' do
@@ -89,7 +96,9 @@ describe 'Account Reports API', :type => :integration do
       json['id'].should == @report.id
       json['status'].should == @report.workflow_state
       json['progress'].should == @report.progress
-      json['file_url'].should == "https://#{HostUrl.context_host(@admin.account)}/accounts/#{@admin.account.id}/files/#{@report.attachment.id}/download"
+      json['file_url'].should == "https://#{HostUrl.context_host(@admin.account)}/accounts/#{@admin.account.id}/files/#{@report.attachment_id}/download"
+      #test that attachment object is here, no need to test attachment json
+      json['attachment']['id'].should == @report.attachment_id
       @report.parameters.each do |key, value|
         json['parameters'][key].should == value
       end

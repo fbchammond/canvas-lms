@@ -1,10 +1,11 @@
 define [
   'i18n!calendar'
+  'jquery'
   'compiled/util/semanticDateRange'
   'compiled/calendar/CommonEvent'
   'jquery.instructure_date_and_time'
   'jquery.instructure_misc_helpers'
-], (I18n, semanticDateRange, CommonEvent) ->
+], (I18n, $, semanticDateRange, CommonEvent) ->
 
   deleteConfirmation = I18n.t('prompts.delete_event', "Are you sure you want to delete this event?")
 
@@ -15,18 +16,20 @@ define [
       @deleteConfirmation = deleteConfirmation
       @deleteURL = contextInfo.calendar_event_url
 
-      @copyDataFromObject(data)
-
     copyDataFromObject: (data) =>
       data = data.calendar_event if data.calendar_event
       @object = @calendarEvent = data
-      @id = "calendar_event_#{data.id}"
+      @id = "calendar_event_#{data.id}" if data.id
       @title = data.title || "Untitled"
-      @start = if data.start_at then $.parseFromISO(data.start_at).time else null
-      @end = if data.end_at then $.parseFromISO(data.end_at).time else null
+      @location_name = data.location_name
+      @location_address = data.location_address
+      @start = @parseStartDate()
+      @end = @parseEndDate()
+      @originalEndDate = new Date(@end) if @end
       @allDay = data.all_day
       @editable = true
       @lockedTitle = @object.parent_event_id?
+      @description = data.description
       @addClass "group_#{@contextCode()}"
       if @isAppointmentGroupEvent()
         @addClass "scheduler-event"
@@ -38,13 +41,15 @@ define [
           @addClass "scheduler-available"
         @editable = false
 
-      @description = data.description
+      super
 
-    startDate: () ->
-      if @calendarEvent.start_at then $.parseFromISO(@calendarEvent.start_at).time else null
+    endDate: () -> @originalEndDate
 
-    endDate: () ->
-      if @calendarEvent.end_at then $.parseFromISO(@calendarEvent.end_at).time else null
+    parseStartDate: () ->
+      if @calendarEvent.start_at then $.fudgeDateForProfileTimezone(@calendarEvent.start_at) else null
+
+    parseEndDate: () ->
+      if @calendarEvent.end_at then $.fudgeDateForProfileTimezone(@calendarEvent.end_at) else null
 
     fullDetailsURL: () ->
       if @isAppointmentGroupEvent()
@@ -53,12 +58,20 @@ define [
         $.replaceTags(@contextInfo.calendar_event_url, 'id', @calendarEvent.parent_event_id ? @calendarEvent.id)
 
     displayTimeString: () ->
-      semanticDateRange(@calendarEvent.start_at, @calendarEvent.end_at)
+        if @calendarEvent.all_day
+          datetime = $.unfudgeDateForProfileTimezone(@startDate())
+          "<time datetime='#{datetime.toISOString()}'>#{$.dateString(datetime)}</time>"
+        else
+          semanticDateRange(@calendarEvent.start_at, @calendarEvent.end_at)
+
+    readableType: () ->
+      @readableTypes['event']
 
     saveDates: (success, error) =>
       @save {
-        'calendar_event[start_at]': if @start then $.dateToISO8601UTC($.unfudgeDateForProfileTimezone(@start)) else ''
-        'calendar_event[end_at]': if @end then $.dateToISO8601UTC($.unfudgeDateForProfileTimezone(@end)) else ''
+        'calendar_event[start_at]': if @start then $.unfudgeDateForProfileTimezone(@start).toISOString() else ''
+        'calendar_event[end_at]': if @end then $.unfudgeDateForProfileTimezone(@end).toISOString() else ''
+        'calendar_event[all_day]': @allDay
       }, success, error
 
     methodAndURLForSave: () ->

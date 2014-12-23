@@ -29,8 +29,8 @@ class DeveloperKeysController < ApplicationController
   end
 
   def index
-    @keys = DeveloperKey.scoped(:order => 'id DESC', :include => :account)
-    @keys = Api.paginate(@keys, self, developer_keys_path)
+    @keys = DeveloperKey.order("id DESC").includes(:account)
+    @keys = Api.paginate(@keys, self, developer_keys_url)
     respond_to do |format|
       format.html
       format.json { render :json => developer_keys_json(@keys, @current_user, session) }
@@ -42,7 +42,7 @@ class DeveloperKeysController < ApplicationController
     if @key.save
       render :json => developer_key_json(@key, @current_user, session)
     else
-      render :json => @key.errors.to_json, :status => :bad_request
+      render :json => @key.errors, :status => :bad_request
     end
   end
   
@@ -52,7 +52,7 @@ class DeveloperKeysController < ApplicationController
     if @key.save
       render :json => developer_key_json(@key, @current_user, session)
     else
-      render :json => @key.errors.to_json, :status => :bad_request
+      render :json => @key.errors, :status => :bad_request
     end
   end
   

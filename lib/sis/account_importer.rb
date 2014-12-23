@@ -16,15 +16,13 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require "skip_callback"
-
 module SIS
   class AccountImporter < BaseImporter
 
     def process
       start = Time.now
-      importer = Work.new(@batch_id, @root_account, @logger)
-      Account.skip_callback(:update_account_associations_if_changed) do
+      importer = Work.new(@batch, @root_account, @logger)
+      Account.suspend_callbacks(:update_account_associations_if_changed) do
         Account.process_as_sis(@sis_options) do
           yield importer
         end
@@ -38,15 +36,15 @@ module SIS
     class Work
       attr_accessor :success_count
 
-      def initialize(batch_id, root_account, logger)
-        @batch_id = batch_id
+      def initialize(batch, root_account, logger)
+        @batch = batch
         @root_account = root_account
         @accounts_cache = {}
         @logger = logger
         @success_count = 0
       end
 
-      def add_account(account_id, parent_account_id, status, name)
+      def add_account(account_id, parent_account_id, status, name, integration_id)
         @logger.debug("Processing Account #{[account_id, parent_account_id, status, name].inspect}")
 
         raise ImportError, "No account_id given for an account" if account_id.blank?
@@ -73,8 +71,9 @@ module SIS
         # only update the name on new records, and ones that haven't been changed since the last sis import
         account.name = name if name.present? && (account.new_record? || (!account.stuck_sis_fields.include?(:name)))
 
+        account.integration_id = integration_id
         account.sis_source_id = account_id
-        account.sis_batch_id = @batch_id if @batch_id
+        account.sis_batch_id = @batch.id if @batch
 
         if status.present?
           if status =~ /active/i

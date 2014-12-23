@@ -6,11 +6,16 @@ require 'tmpdir'
 
 class Worker
 
-  Settings = [ :max_run_time, :max_attempts ]
+  Settings = [ :max_attempts ]
   cattr_accessor :queue, *Settings
 
   self.max_attempts = 15
-  self.max_run_time = 4.hours
+
+  def self.queue=(queue_name)
+    raise(ArgumentError, "queue_name must not be blank") if queue_name.blank?
+    @@queue = queue_name
+  end
+
   self.queue = "canvas_queue"
 
   attr_reader :config, :queue, :min_priority, :max_priority, :sleep_delay, :sleep_delay_stagger
@@ -27,6 +32,10 @@ class Worker
     @@on_max_failures = block
   end
   cattr_reader :on_max_failures
+
+  def self.lifecycle
+    @lifecycle ||= Delayed::Lifecycle.new
+  end
 
   def initialize(options = {})
     @exit = false
@@ -80,15 +89,18 @@ class Worker
 
   def run
     # need to do this here, since we're avoiding db calls in the master process pre-fork
-    @sleep_delay ||= Setting.get_cached('delayed_jobs_sleep_delay', '5.0').to_f
-    @sleep_delay_stagger ||= Setting.get_cached('delayed_jobs_sleep_delay_stagger', '2.5').to_f
-    @make_tmpdir ||= Setting.get_cached('delayed_jobs_unique_tmpdir', 'true') == 'true'
+    @sleep_delay ||= Setting.get('delayed_jobs_sleep_delay', '5.0').to_f
+    @sleep_delay_stagger ||= Setting.get('delayed_jobs_sleep_delay_stagger', '2.5').to_f
+    @make_tmpdir ||= Setting.get('delayed_jobs_unique_tmpdir', 'true') == 'true'
 
-    job = Delayed::Job.get_and_lock_next_available(
-      name,
-      queue,
-      min_priority,
-      max_priority)
+    job =
+        self.class.lifecycle.run_callbacks(:pop, self) do
+          Delayed::Job.get_and_lock_next_available(
+            name,
+            queue,
+            min_priority,
+            max_priority)
+        end
 
     if job
       configure_for_job(job) do
@@ -118,31 +130,35 @@ class Worker
 
   def perform(job)
     count = 1
-    set_process_name("run:#{job.id}:#{job.name}")
-    say("Processing #{log_job(job, :long)}", :info)
-    runtime = Benchmark.realtime do
-      if job.batch?
-        # each job in the batch will have perform called on it, so we don't
-        # need a timeout around this 
-        count = perform_batch(job.payload_object)
-      else
-        Timeout.timeout(self.class.max_run_time.to_f, Delayed::TimeoutError) { job.invoke_job }
+    self.class.lifecycle.run_callbacks(:perform, self, job) do
+      set_process_name("run:#{job.id}:#{job.name}")
+      say("Processing #{log_job(job, :long)}", :info)
+      runtime = Benchmark.realtime do
+        if job.batch?
+          # each job in the batch will have perform called on it, so we don't
+          # need a timeout around this 
+          count = perform_batch(job)
+        else
+          job.invoke_job
+        end
+        Delayed::Stats.job_complete(job, self)
+        Rails.logger.quietly do
+          job.destroy
+        end
       end
-      Delayed::Stats.job_complete(job, self)
-      Rails.logger.silence do
-        job.destroy
-      end
+      say("Completed #{log_job(job)} #{"%.0fms" % (runtime * 1000)}", :info)
     end
-    say("Completed #{log_job(job)} #{"%.0fms" % (runtime * 1000)}", :info)
     count
   rescue Exception => e
     handle_failed_job(job, e)
     count
   end
 
-  def perform_batch(batch)
+  def perform_batch(parent_job)
+    batch = parent_job.payload_object
     if batch.mode == :serial
       batch.jobs.each do |job|
+        job.source = parent_job.source
         job.create_and_lock!(name)
         configure_for_job(job) do
           ensure_db_connection
@@ -154,33 +170,9 @@ class Worker
   end
 
   def handle_failed_job(job, error)
-    job.last_error = error.message + "\n" + error.backtrace.join("\n")
+    job.last_error = "#{error.message}\n#{error.backtrace.join("\n")}"
     say("Failed with #{error.class} [#{error.message}] (#{job.attempts} attempts)", :error)
-    reschedule(job, error)
-  end
-
-  # Reschedule the job in the future (when a job fails).
-  # Uses an exponential scale depending on the number of failed attempts.
-  def reschedule(job, error = nil, time = nil)
-    job.attempts += 1
-    if job.attempts >= (job.max_attempts || self.class.max_attempts)
-      destroy_job = true
-      if self.class.on_max_failures
-        destroy_job = self.class.on_max_failures.call(job, error)
-      end
-
-      if destroy_job
-        say("destroying job because of #{job.attempts} failures", :info)
-        job.destroy
-      else
-        job.fail!
-      end
-    else
-      time ||= job.reschedule_at
-      job.run_at = time
-      job.unlock
-      job.save!
-    end
+    job.reschedule(error)
   end
 
   def id
@@ -194,7 +186,7 @@ class Worker
   def log_job(job, format = :short)
     case format
     when :long
-      "#{job.full_name} #{ job.to_json(:include_root => false, :only => %w(priority attempts created_at max_attempts)) }"
+      "#{job.full_name} #{ job.to_json(:include_root => false, :only => %w(strand priority attempts created_at max_attempts)) }"
     else
       job.full_name
     end
@@ -205,9 +197,10 @@ class Worker
   def configure_for_job(job)
     previous_tmpdir = ENV['TMPDIR'] if @make_tmpdir
     Thread.current[:context] = {
-      # these keys aren't terribly well named for this, since they were intended for http requests
+      # these 2 keys aren't terribly well named for this, since they were intended for http requests
       :request_id => job.id,
       :session_id => self.name,
+      :job        => job,
     }
 
     if @make_tmpdir
@@ -231,6 +224,10 @@ class Worker
       # if this fails again, it'll raise the error up
       ActiveRecord::Base.connection.execute("select 1")
     end
+  end
+
+  def self.current_job
+    Thread.current[:context].try(:[], :job)
   end
 
 end

@@ -1,5 +1,5 @@
 <% content_for :page_title do %>
-  <%= join_title t(:page_title, "Profile Settings"), @user.name %>
+  <%= join_title t(:page_title, "User Settings"), @user.name %>
 <% end %>
 
 <% content_for :right_side do %>
@@ -7,49 +7,52 @@
   <%= render :partial => "ways_to_contact" %>
   <div class="rs-margin-lr">
     <hr />
-    <a href="#" class="edit_profile_link button button-sidebar-wide"><%= image_tag "edit.png" %> <%= t('links.edit_profile', "Edit Profile") %></a>
+    <a href="#" class="edit_settings_link btn button-sidebar-wide"><i class="icon-edit"></i> <%= t('links.edit_settings', "Edit Settings") %></a>
+    <% mfa_settings = @user.mfa_settings %>
+    <% if mfa_settings != :disabled %>
+      <a href="<%= otp_login_path %>" class="btn button-sidebar-wide"><%= image_tag "lock.png" %> <%= @user.otp_secret_key ? t('links.reconfigure_mfa', "Reconfigure Multi-Factor Authentication") : t('links.configure_mfa', "Set Up Multi-Factor Authentication") %></a>
+    <% end %>
+    <% if mfa_settings == :optional && @user.otp_secret_key %>
+      <a href="<%= disable_mfa_path('self') %>" class="btn button-sidebar-wide" id="disable_mfa_link"><%= image_tag "unlock.png" %> <%= t('links.disable_mfa', "Disable Multi-Factor Authentication") %></a>
+    <% end %>
   </div>
   <% end %>
 <% end %>
 
+<% js_env :folder_id => @user.profile_pics_folder.id,
+          :PASSWORD_POLICY => @domain_root_account.password_policy,
+          :PASSWORD_POLICIES => Hash[@password_pseudonyms.map{ |p| [p.id, p.account.password_policy]}],
+          :PROFILE => @user_data
+%>
 <% js_bundle :profile %>
 <% jammit_css :profile_edit %>
 
 <% if service_enabled?(:avatars) %>
-  <a href="#" class="profile_pic_link <%= @user.avatar_state %>" title="<%= t('titles.click_to_change_profile_pic', "Click to change profile pic") %>" style="float: left; margin-right: 5px; min-width: 50px; min-height: 50px; display: inline-block;">
-    <%= avatar_image(@user.id) %>
-  </a>
+  <%= avatar(@user, url: '#', edit: true, class: "profile_pic_link #{@user.avatar_state}", title: t('titles.click_to_change_profile_pic', "Click to change profile pic")) %>
 <% end %>
-<h2 style="padding-top: 0.3em;"><%= t('headers.users_profile', "%{user}'s Profile", :user => @user.short_name) %></h2>
+<h2 style="padding-top: 0.3em;"><%= t('headers.users_profile', "%{user}'s Settings", :user => @user.short_name) %></h2>
 <div class="clear"></div>
-<% form_for @user, :url => profile_path, :html => {:id => "update_profile_form", :style => "margin-bottom: 20px;"} do |f| %>
+<%= form_for @user, :url => profile_path, :html => {:id => "update_profile_form", :style => "margin-bottom: 20px;", :class => 'form-inline'} do |f| %>
 <table class="profile_table">
   <tr>
     <% editable_name = @user.user_can_edit_name? %>
     <td><%= f.blabel :name, :en => "Full Name" %></td>
     <td><span class="full_name <%= editable_name ? 'display_data' : 'edit_or_show_data' %>"><%=h @user.name %></span>
-      <%= f.text_field :name, :class => "edit_data" if editable_name %>
+      <%= f.text_field :name, :class => "edit_data", :maxlength => 255, :size => 30 if editable_name %>
       <span class="edit_or_show_data" style="font-size: 0.8em; color: #888;"><br/><%= t('hints.name', "This name will be used for grading.") %></span>
   </tr>
   <tr>
     <td><%= f.blabel :short_name, :en => "Display Name" %></td>
     <td><span class="short_name <%= editable_name ? 'display_data' : 'edit_or_show_data' %>"><%=h @user.short_name %></span>
-      <%= f.text_field :short_name, :class => "edit_data"  if editable_name %>
+      <%= f.text_field :short_name, :class => "edit_data", :maxlength => 255, :size => 30 if editable_name %>
       <span class="edit_or_show_data" style="font-size: 0.8em; color: #888;"><br/><%= t('hints.short_name', "People will see this name in discussions, messages and comments.") %></span>
     </td>
   </tr>
   <tr>
     <td><%= f.blabel :sortable_name, :en => "Sortable Name" %></td>
     <td><span class="sortable_name <%= editable_name ? 'display_data' : 'edit_or_show_data' %>"><%=h @user.sortable_name %></span>
-      <%= f.text_field :sortable_name, :class => "edit_data"  if editable_name %>
+      <%= f.text_field :sortable_name, :class => "edit_data", :maxlength => 255, :size => 30  if editable_name %>
       <span class="edit_or_show_data" style="font-size: 0.8em; color: #888;"><br/><%= t('hints.sortable_name', "This name appears in sorted lists.") %></span>
-    </td>
-  </tr>
-  <tr>
-    <td><%= f.blabel :birthdate, :en => "Birth Date" %></td>
-    <td>
-      <span class="birthdate display_data"><%= @user.birthdate ? date_string(@user.birthdate) : "-" %></span>
-      <%= f.date_select :birthdate, {:start_year => Time.now.year - 1, :end_year => Time.now.year - 125, :include_blank => @user.birthdate.nil?}, :class => 'edit_data' %>
     </td>
   </tr>
   <% active_email_channels = @email_channels.select { |cc| cc.active? } %>
@@ -72,7 +75,8 @@
     <td>
       <% no_language = t(:no_language_preference, "System Default (%{language})", :language => available_locales[infer_locale(:root_account => @domain_root_account, :accept_language => request.headers['Accept-Language'])]) %>
       <span class="locale display_data"><%= @user.locale ? available_locales[@user.locale] : no_language %></span>
-      <span class="edit_data"><%= f.select :locale, [[no_language, nil]] + available_locales.invert.sort, :selected => @user.locale %>
+      <span class="edit_data"><%= f.select :locale, [[no_language, nil]] + available_locales.invert.sort, {:selected => @user.locale}, {:class => 'locale'} %>
+      <%= render :partial => 'shared/locale_warning' %>
       <span style="font-size: 0.8em; color: #888;"><br/><%= t('hints.language', "This will override any browser or account settings.") %></span>
       </span>
     </td>
@@ -81,16 +85,18 @@
   <tr>
     <td><%= f.blabel :time_zone, :en => "Time Zone" %></td>
     <td>
-      <span class="time_zone display_data"><%= @user.time_zone || t(:none, "None") %></span>
-      <span class="edit_data"><%= f.time_zone_select :time_zone, ActiveSupport::TimeZone.us_zones, :model => I18nTimeZone, :default => ((@domain_root_account && @domain_root_account.default_time_zone) || "Mountain Time (US & Canada)") %><%# that default time zone is a value, not text %></span>
+      <span class="time_zone display_data"><%= @user.time_zone.try(:name) || t(:none, "None") %></span>
+      <span class="edit_data"><%= f.time_zone_select :time_zone, ActiveSupport::TimeZone.us_zones, :model => I18nTimeZone, :default => ((@domain_root_account && @domain_root_account.default_time_zone.name) || "Mountain Time (US & Canada)") %><%# that default time zone is a value, not text %></span>
     </td>
   </tr>
   <% if @domain_root_account == Account.default %>
     <tr>
       <td colspan="2">
         <div class="edit_data">
-          <%= f.check_box :subscribe_to_emails %>
-          <%= f.label :subscribe_to_emails, :en => "I want to receive information, news and tips from Instructure" %>
+          <label for="user_subscribe_to_emails" class="checkbox">
+            <%= f.check_box :subscribe_to_emails %>
+            <%= t(:subscribe_to_emails, "I want to receive information, news and tips from Instructure") %>
+          </label>
         </div>
       </td>
     </tr>
@@ -98,7 +104,7 @@
   <% if !@password_pseudonyms.empty? %>
   <tr class="edit_data_row select_change_password_row" style="display: none;">
     <td><%= before_label(:password, "Password") %></td>
-    <td><input type="checkbox" id="change_password_checkbox" name="pseudonym[change_password]" value="1"/><label for="change_password_checkbox"><%= t('labels.change_password', "Change Password") %></label></td>
+    <td><label for="change_password_checkbox" class="checkbox"><input type="checkbox" id="change_password_checkbox" name="pseudonym[change_password]" value="1"/><%= t('labels.change_password', "Change Password") %></label></td>
   </tr>
   <% end %>
   <tr class="change_password_row" style="display: none;">
@@ -128,9 +134,12 @@
   </tr>
   <tr class="edit_data_row" style="display: none;">
     <td colspan="2">
-      <p><a style="font-size: 0.9em" href="<%= user_delete_url(@user.id) %>" class="admin"><%= t('links.delete_profile', "Delete My Profile") %> </a></p>
-      <button type="submit" class="button"><%= t('buttons.update_profile', "Update Profile") %></button>
-      <button type="button" class="cancel_button button-secondary"><%= t('#buttons.cancel', "Cancel") %></button>
+      <p><a style="font-size: 0.9em" href="<%= user_delete_url(@user.id) %>" class="admin"><%= t('links.delete_account', "Delete My Account") %> </a></p>
+      <div class="form-actions">
+        <button type="button" class="btn cancel_button"><%= t('#buttons.cancel', "Cancel") %></button>
+        <button type="submit" class="btn btn-primary"><%= t('buttons.update_settings', "Update Settings") %></button>
+      </div>
+
     </td>
   </tr>
 </table>
@@ -172,7 +181,7 @@ you already use.  Click any of the services in "Other Services" to see what we m
 TEXT
 %></p>
 <p>
-<input type="checkbox" id="show_user_services" <%= 'checked' if @user.show_user_services %>/><label for="show_user_services"><%= t('labels.show_user_services', "Let fellow course/group members see which services I've linked to my profile") %></label>
+<input type="checkbox" id="show_user_services" <%= 'checked' if @user.show_user_services %>/> <label for="show_user_services"><%= t('labels.show_user_services', "Let fellow course/group members see which services I've linked to my profile") %></label>
 </p>
 <table style="width: 100%;"><tr>
   <td style="vertical-align: top; width: 50%; padding-right: 20px;">
@@ -180,7 +189,7 @@ TEXT
     <div style="margin-left: 20px; margin-bottom: 20px;">
     <ul id="registered_services" class="unstyled_list">
       <% @user.user_services.select{|s| !UserService.configured_service?(s.service) || feature_and_service_enabled?(s.service) }.each do |service| %>
-        <li class="service" id="service_<%= service.service %>">
+        <li class="service clearfix" id="service_<%= service.service %>">
           <a href="<%= profile_user_service_url(service.id) %>" class="delete_service_link no-hover" style="float: right; padding-top: 0.5em; padding-right: 10px;" title="<%= t('titles.unregister_service', "Unregister Service") %>"><%= image_tag "delete_circle.png" %></a>
           <a href="<%= service.service_access_link %>">
             <%= image_tag "#{service.service}.png", :style => "vertical-align: middle; float: left;" %> 
@@ -195,7 +204,7 @@ TEXT
               <% elsif service.has_readable_user_name? %>
                 <span><%= service.service_user_name %></span>
               <% end %>
-              <% if service.service == 'facebook' && feature_and_service_enabled?(:facebook) && Facebook.config['canvas_name'] %>
+              <% if service.service == 'facebook' && feature_and_service_enabled?(:facebook) && Facebook::Connection.config['canvas_name'] %>
                 <div style="line-height: 2.0em;">
                   <a href="<%= service.service_access_link %>"><%= t('links.view_facebook_app', "view the Facebook app") %></a>
                 </div>
@@ -205,7 +214,7 @@ TEXT
           <div class="clear"></div>
         </li>
       <% end %>
-      <li id="service_blank" class="service" style="display: none;">
+      <li id="service_blank" class="service clearfix" style="display: none;">
         <a href="<%= profile_user_service_url("{{ id }}") %>" class="delete_service_link no-hover" style="float: right;" title="<%= t('titles.unregister_service', "Unregister Service") %>"><%= image_tag "delete_circle.png" %></a>
         <span class="service">&nbsp;</span>
       </li>
@@ -220,7 +229,7 @@ TEXT
     <% services = @user.user_services.map{|s| s.service} %>
     <ul id="unregistered_services" class="unstyled_list">
       <li id="unregistered_service_google_docs" class="service" style="<%= hidden if !feature_and_service_enabled?(:google_docs) || services.include?("google_docs") %>">
-        <a href="#" class="button small-button"><%= image_tag "google_docs_icon.png" %> <%= t('links.google_docs', "Google Docs") %></a>
+        <a href="#" class="btn btn-small"><%= image_tag "google_docs_icon.png" %> <%= t('links.google_docs', "Google Docs") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.authorize_google_docs', "Authorize Google Docs") %>" id="unregistered_service_google_docs_dialog">
           <div>
             <%= image_tag "google_docs.png", :style => "float: left; padding-right: 5px;" %>
@@ -233,12 +242,12 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="text-align: center; margin-top: 10px;">
-            <a class='button' href="<%= oauth_url(:service => "google_docs", :return_to => user_profile_url(@current_user)) %>"><%= t('buttons.authorize_google_docs', "Authorize Google Docs Access") %></a>
+            <a class="btn" href="<%= oauth_url(:service => "google_docs", :return_to => settings_profile_url) %>"><%= t('buttons.authorize_google_docs', "Authorize Google Docs Access") %></a>
           </div>
         </div>
       </li>
-      <li id="unregistered_service_skype" class="service" style="<%= hidden if services.include?("skype") %>">
-        <a href="#" class="button small-button"><%= image_tag "skype_icon.png" %> <%= t('links.skype', "Skype") %></a>
+      <li id="unregistered_service_skype" class="service" style="<%= hidden if services.include?("skype") || !service_enabled?(:skype) %>">
+        <a href="#" class="btn btn-small"><%= image_tag "skype_icon.png" %> <%= t('links.skype', "Skype") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.register_skype', "Register Skype") %>" id="unregistered_service_skype_dialog">
           <div>
             <%= image_tag "skype.png", :style => "float: left; padding-right: 5px;" %>
@@ -253,7 +262,7 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="text-align: center; font-size: 1.2em; margin-top: 10px;">
-            <% form_for :user_service, :url => profile_create_user_service_url, :html => {:class => "create_user_service_form"} do |f| %>
+            <%= form_for :user_service, :url => profile_create_user_service_url, :html => {:class => "create_user_service_form"} do |f| %>
             <%= f.hidden_field :service, :value => "skype" %>
             <table class="formtable">
               <tr>
@@ -261,7 +270,7 @@ TEXT
                 <td><%= f.text_field :user_name, :style => "width: 150px;" %></td>
               </tr><tr>
                 <td colspan="2">
-                  <button type="submit" class="button"><%= t('buttons.save_skype_name', "Save Skype Name") %></button>
+                  <button type="submit" class="btn btn-primary"><%= t('buttons.save_skype_name', "Save Skype Name") %></button>
                 </td>
               </tr>
             </table>
@@ -270,7 +279,7 @@ TEXT
         </div>
       </li>
       <li id="unregistered_service_facebook" class="service" style="<%= hidden if !feature_and_service_enabled?(:facebook) || services.include?("facebook") %>">
-        <a href="#" class="button small-button"><%= image_tag "facebook_icon.png" %> <%= t('links.facebook', "Facebook") %></a>
+        <a href="#" class="btn btn-small"><%= image_tag "facebook_icon.png" %> <%= t('links.facebook', "Facebook") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.authorize_facebook', "Authorize Facebook") %>" id="unregistered_service_facebook_dialog">
           <div>
             <%= image_tag "facebook.png", :style => "float: left; padding-right: 5px;" %>
@@ -284,12 +293,12 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="text-align: center; font-size: 1.2em; margin-top: 10px;">
-            <a class="button" href="<%= oauth_url(:service => "facebook", :return_to => user_profile_url(@current_user)) %>"><%= t('buttons.register_facebook_account', "Register Your Facebook Account") %></a>
+            <a class="btn btn-primary" href="<%= oauth_url(:service => "facebook", :return_to => settings_profile_url) %>"><%= t('buttons.register_facebook_account', "Register Your Facebook Account") %></a>
           </div>
         </div>
       </li>
       <li id="unregistered_service_linked_in" class="service" style="<%= hidden if services.include?("linked_in") || !feature_and_service_enabled?(:linked_in) %>">
-        <a href="#" class="button small-button"><%= image_tag "linked_in_icon.png" %> <%= t('links.linkedin', "LinkedIn") %></a>
+        <a href="#" class="btn btn-small"><%= image_tag "linked_in_icon.png" %> <%= t('links.linkedin', "LinkedIn") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.authorize_linkedin', "Authorize LinkedIn") %>" id="unregistered_service_linked_in_dialog">
           <div>
             <%= image_tag "linked_in.png", :style => "float: left; padding-right: 5px;" %>
@@ -306,12 +315,12 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="text-align: center; font-size: 1.2em; margin-top: 10px;">
-            <a class="button" href="<%= oauth_url(:service => "linked_in", :return_to => user_profile_url(@current_user)) %>"><%= t('buttons.register_linkedin_account', "Register Your LinkedIn Account") %></a>
+            <a class="btn btn-primary" href="<%= oauth_url(:service => "linked_in", :return_to => settings_profile_url) %>"><%= t('buttons.register_linkedin_account', "Register Your LinkedIn Account") %></a>
           </div>
         </div>
       </li>
       <li id="unregistered_service_twitter" class="service" style="<%= hidden if services.include?("twitter") || !feature_and_service_enabled?(:twitter) %>">
-        <a href="#" class="button small-button"><%= image_tag "twitter_icon.png" %> <%= t('links.twitter', "Twitter") %></a>
+        <a href="#" class="btn btn-small"><%= image_tag "twitter_icon.png" %> <%= t('links.twitter', "Twitter") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.authorize_twitter', "Authorize Twitter") %>" id="unregistered_service_twitter_dialog">
           <div>
             <%= image_tag "twitter.png", :style => "float: left; padding-right: 5px;" %>
@@ -330,12 +339,12 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="text-align: center; margin-top: 10px;">
-            <a class="button" href="<%= oauth_url(:service => "twitter", :return_to => user_profile_url(@current_user)) %>"><%= t('buttons.authorize_twitter', "Authorize Twitter Access") %></a>
+            <a class="btn btn-primary" href="<%= oauth_url(:service => "twitter", :return_to => settings_profile_url) %>"><%= t('buttons.authorize_twitter', "Authorize Twitter Access") %></a>
           </div>
         </div>
       </li>
-      <li id="unregistered_service_delicious" class="service" style="<%= hidden if services.include?("delicious") %>">
-        <a href="#" class="button small-button"><%= image_tag "delicious_icon.png" %> <%= t('links.delicious', "Delicious") %></a>
+      <li id="unregistered_service_delicious" class="service" style="<%= hidden if services.include?("delicious") || !service_enabled?(:delicious) %>">
+        <a href="#" class="btn btn-small"><%= image_tag "delicious_icon.png" %> <%= t('links.delicious', "Delicious") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.delicious_login', "Delicious Login") %>" id="unregistered_service_delicious_dialog">
           <div>
             <%= image_tag "delicious.png", :style => "float: left; padding-right: 5px;" %>
@@ -349,7 +358,7 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="font-size: 1.0em; margin-top: 10px;">
-            <% form_for :user_service, :url => profile_create_user_service_url, :html => {:class => "create_user_service_form"} do |f| %>
+            <%= form_for :user_service, :url => profile_create_user_service_url, :html => {:class => "create_user_service_form"} do |f| %>
             <%= f.hidden_field :service, :value => "delicious" %>
             <table class="formtable">
               <tr>
@@ -360,7 +369,7 @@ TEXT
                 <td><%= f.password_field :password, :style => "width: 150px;" %></td>
               </tr><tr>
                 <td colspan="2">
-                  <button type="submit" class="button"><%= t('buttons.save_login', "Save Login") %></button>
+                  <button type="submit" class="btn btn-primary"><%= t('buttons.save_login', "Save Login") %></button>
                 </td>
               </tr>
             </table>
@@ -368,8 +377,8 @@ TEXT
           </div>
         </div>
       </li>
-      <li id="unregistered_service_diigo" class="service" style="<%= hidden if services.include?("diigo") %>">
-        <a href="#" class="button small-button"><%= image_tag "diigo_icon.png" %> <%= t('links.diigo', "Diigo") %></a>
+      <li id="unregistered_service_diigo" class="service" style="<%= hidden if services.include?("diigo") || !service_enabled?(:diigo) %>">
+        <a href="#" class="btn btn-small"><%= image_tag "diigo_icon.png" %> <%= t('links.diigo', "Diigo") %></a>
         <div style="display: none; text-align: left;" class="content" title="<%= t('titles.diigo_login', "Diigo Login") %>" id="unregistered_service_diigo_dialog">
           <div>
             <%= image_tag "diigo.png", :style => "float: left; padding-right: 5px;" %>
@@ -384,7 +393,7 @@ TEXT
             <div class="clear"></div>
           </div>
           <div style="font-size: 1.0em; margin-top: 10px;">
-            <% form_for :user_service, :url => profile_create_user_service_url, :html => {:class => "create_user_service_form"} do |f| %>
+            <%= form_for :user_service, :url => profile_create_user_service_url, :html => {:class => "create_user_service_form"} do |f| %>
             <%= f.hidden_field :service, :value => "diigo" %>
             <table class="formtable">
               <tr>
@@ -395,7 +404,7 @@ TEXT
                 <td><%= f.password_field :password, :style => "width: 150px;" %></td>
               </tr><tr>
                 <td colspan="2">
-                  <button type="submit" class="button"><%= t('buttons.save_login', "Save Login") %></button>
+                  <button type="submit" class="btn btn-primary"><%= t('buttons.save_login', "Save Login") %></button>
                 </td>
               </tr>
             </table>
@@ -440,9 +449,11 @@ TEXT
       </tbody>
     </table>
   </div>
-  <div style="margin-top: 10px;">
-    <a href="#" class="button add_access_token_link"><%= image_tag "add.png" %> <%= t('buttons.new_access_token', "New Access Token") %></a>
-  </div>
+  <% unless @real_current_user %>
+    <div style="margin-top: 10px;">
+      <a href="#" class="btn btn-primary add_access_token_link"><i class="icon-add"></i> <%= t('buttons.new_access_token', "New Access Token") %></a>
+    </div>
+  <% end %>
   <div id="token_details_dialog" style="display: none;" title="<%= t('titles.access_token_details', "Access Token Details") %>">
     <p><%= t(:access_token_description, <<-TEXT, :wrapper => '<a href="https://canvas.instructure.com/doc/api/index.html" target="_blank" class="external">\1</a>')
       Access tokens can be used to allow other applications to make API calls
@@ -481,13 +492,16 @@ TEXT
         </tr><tr>
           <th><%= before_label(:token_expires, "Expires") %></th>
           <td class="expires">&nbsp;</td>
-        </tr><tr class="refresh_token">
-          <td colspan="2">
-            <div class="button-container">
-              <button class="button regenerate_token"><%= t('buttons.regenerate_token', "Regenerate Token") %></button>
-            </div>
-          </td>
         </tr>
+        <% unless @real_current_user %>
+          <tr class="refresh_token">
+            <td colspan="2">
+              <div class="button-container">
+                <button class="btn regenerate_token"><%= t('buttons.regenerate_token', "Regenerate Token") %></button>
+              </div>
+            </td>
+          </tr>
+        <% end %>
       </table>
     </div>
   </div>
@@ -500,7 +514,7 @@ applications as needed, but if [you're developing a new or limited
 project](%{documentation_url}) you can just generate the token from here.
 TEXT
     %>
-    <% form_for :access_token, :url => profile_tokens_url, :html => {:id => "access_token_form", :style => "margin-top: 10px;"} do |f| %>
+    <%= form_for :access_token, :url => profile_tokens_url, :html => {:id => "access_token_form", :style => "margin-top: 10px;"} do |f| %>
       <table class="formtable">
         <tr>
           <td><%= f.blabel :purpose, :en => "Purpose" %></td>
@@ -515,8 +529,8 @@ TEXT
         </tr>
           <td colspan="2">
             <div class="button-container">
-              <button class="button submit_button" type="submit"><%= t('buttons.generate_token', "Generate Token") %></button>
-              <button class="button button-secondary cancel_button" type="button"><%= t('#buttons.cancel', "Cancel") %></button>
+              <button class="btn cancel_button" type="button"><%= t('#buttons.cancel', "Cancel") %></button>
+              <button class="btn btn-primary submit_button" type="submit"><%= t('buttons.generate_token', "Generate Token") %></button>
             </div>
           </td>
         </tr>
@@ -524,6 +538,12 @@ TEXT
     <% end %>
   </div>
 </div>
+
+<h3><%= t(:feature_options, 'Feature Options') %></h3>
+<div class="feature-flag-wrapper">
+  <!-- this is populated by FeatureFlagAdminView -->
+</div>
+
 <div id="profile_pic_dialog" style="display: none;">
   <a href="<%= profile_pics_url %>" class="profile_pics_url" style="display: none;">&nbsp;</a>
   <%= t(:profile_pictures, "Select the image you'd like to use as your profile pic, or upload a new image:") %>
@@ -532,22 +552,21 @@ TEXT
     <div class="clear"></div>
   </div>
   <a href="#" class="add_pic_link add"><%= t('links.upload_new_image', "Upload a new Image") %></a>
-  <% form_for :attachment, :url => context_url(@user, :context_files_url, :format => 'json'), :html => {:id => "add_pic_form", :style => "display: none;"} do |f| %>
+  <%= form_for :attachment, :url => context_url(@user, :context_files_url, :format => 'json'), :html => {:id => "add_pic_form", :style => "display: none;"} do |f| %>
     <input type="hidden" name="format" value="text" />
-    <%= f.hidden_field :folder_id, :value => @user.profile_pics_folder.id %>
     <%= f.file_field :uploaded_data %>
-    <button type="submit" class="button small-button"><%= t('buttons.add_picture_file', "Add File") %></button>
+    <button type="submit" class="btn btn-small"><%= t('buttons.add_picture_file', "Add File") %></button>
   <% end %>
-  <div class="button-container">
-    <button type="button" class="button select_button"><%= t('buttons.select_image', "Select Image") %></button>
-    <button type="button" class="button cancel_button button-secondary"><%= t('#buttons.cancel', "Cancel") %></button>
+  <div class="form-actions">
+    <button type="button" class="btn cancel_button button-secondary"><%= t('#buttons.cancel', "Cancel") %></button>
+    <button type="button" class="btn select_button btn-primary"><%= t('buttons.select_image', "Select Image") %></button>
   </div>
 </div>
 <% else %>
   <p class="alert alert-info">
     <%= t "confirm_email_instructions", <<-TEXT, :email => @current_user.email, :wrapper => {'*' => '<a href="' + re_send_confirmation_path(@current_user, @current_user.communication_channel) + '" class="re_send_confirmation_link">\1</a>'}
       Before you can edit your profile, you need to verify your email address (%{email}) by clicking the link in the email we sent you.
-      If you don't see it, *re-send the email*, and make sure to check your spam box.
+      If you don't see it, *click to re-send the email*, and make sure to check your spam box.
     TEXT
     %>
   </p>

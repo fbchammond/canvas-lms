@@ -25,7 +25,9 @@ class DiscussionTopicsApiController < ApplicationController
 
   before_filter :require_context
   before_filter :require_topic
-  before_filter :require_initial_post, :except => [:add_entry, :mark_topic_read, :mark_topic_unread]
+  before_filter :require_initial_post, except: [:add_entry, :mark_topic_read,
+                                                :mark_topic_unread, :show,
+                                                :unsubscribe_topic]
 
   # @API Get a single topic
   #
@@ -36,8 +38,8 @@ class DiscussionTopicsApiController < ApplicationController
   #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id> \ 
   #         -H 'Authorization: Bearer <token>'
   def show
-    return unless authorized_action(@topic, @current_user, :read)
-    render :json => discussion_topics_api_json([@topic], @context, @current_user, session).first
+    render(json: discussion_topics_api_json([@topic], @context,
+                                            @current_user, session).first)
   end
 
   # @API Get the full topic
@@ -58,6 +60,10 @@ class DiscussionTopicsApiController < ApplicationController
   #   and avatar_url.
   # * "unread_entries": A list of entry ids that are unread by the current
   #   user. this implies that any entry not in this list is read.
+  # * "forced_entries": A list of entry ids that have forced_read_state set to
+  #   true. This flag is meant to indicate the entry's read_state has been 
+  #   manually set to 'unread' by the user, so the entry should not be
+  #   automatically marked as read.
   # * "view": A threaded view of all the entries in the discussion, containing
   #   the id, user_id, and message.
   # * "new_entries": Because this view is eventually consistent, it's possible
@@ -69,12 +75,13 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/view' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/view' \
   #        -H "Authorization: Bearer <token>"
   #
   # @example_response
   #   {
   #     "unread_entries": [1,3,4],
+  #     "forced_entries": [1],
   #     "participants": [
   #       { "id": 10, "display_name": "user 1", "avatar_image_url": "https://...", "html_url": "https://..." },
   #       { "id": 11, "display_name": "user 2", "avatar_image_url": "https://...", "html_url": "https://..." }
@@ -88,18 +95,41 @@ class DiscussionTopicsApiController < ApplicationController
   #     ]
   #   }
   def view
-    return unless authorized_action(@topic, @current_user, :read)
-    structure, participant_ids, entry_ids, new_entries_structure = @topic.materialized_view(:include_new_entries => params[:include_new_entries] == '1')
+    structure, participant_ids, entry_ids, new_entries = @topic.materialized_view(:include_new_entries => params[:include_new_entries] == '1')
 
     if structure
-      participant_info = User.find(participant_ids).map do |user|
-        user_display_json(user, @context.is_a_context? && @context)
+
+      # we assume that json_structure will typically be served to users requesting string IDs
+      unless stringify_json_ids?
+        entries = JSON.parse(structure)
+        Api.recursively_stringify_json_ids(entries, reverse: true)
+        structure = entries.to_json
       end
+
+      participants = Shard.partition_by_shard(participant_ids) do |shard_ids|
+        User.find(shard_ids)
+        end
+
+      participant_info = participants.map do |participant|
+        user_display_json(participant, @context.is_a_context? && @context)
+      end
+
       unread_entries = entry_ids - DiscussionEntryParticipant.read_entry_ids(entry_ids, @current_user)
+      unread_entries = unread_entries.map(&:to_s) if stringify_json_ids?
+      forced_entries = DiscussionEntryParticipant.forced_read_state_entry_ids(entry_ids, @current_user)
+      forced_entries = forced_entries.map(&:to_s) if stringify_json_ids?
       # as an optimization, the view structure is pre-serialized as a json
       # string, so we have to do a bit of manual json building here to fit it
       # into the response.
-      render :json => %[{ "unread_entries": #{unread_entries.to_json}, "participants": #{participant_info.to_json}, "view": #{structure}, "new_entries": #{new_entries_structure} }]
+      fragments = {
+        :unread_entries => unread_entries.to_json,
+        :forced_entries => forced_entries.to_json,
+        :participants   => json_cast(participant_info).to_json,
+        :view           => structure,
+        :new_entries    => json_cast(new_entries).to_json,
+      }
+      fragments = fragments.map { |k, v| %("#{k}": #{v}) }
+      render :json => "{ #{fragments.join(', ')} }"
     else
       render :nothing => true, :status => 503
     end
@@ -109,7 +139,7 @@ class DiscussionTopicsApiController < ApplicationController
   # Create a new entry in a discussion topic. Returns a json representation of
   # the created entry (see documentation for 'entries' method) on success.
   #
-  # @argument message The body of the entry.
+  # @argument message [String] The body of the entry.
   #
   # @argument attachment [Optional] a multipart/form-data form-field-style
   #   attachment. Attachments larger than 1 kilobyte are subject to quota
@@ -117,7 +147,7 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries.json' \
   #        -F 'message=<message>' \ 
   #        -F 'attachment=@<filename>' \ 
   #        -H "Authorization: Bearer <token>"
@@ -156,6 +186,8 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @response_field read_state The read state of the entry, "read" or "unread".
   #
+  # @response_field forced_read_state Whether the read_state was forced (was set manually)
+  #
   # @response_field created_at The creation time of the entry, in ISO8601
   #   format.
   #
@@ -181,6 +213,7 @@ class DiscussionTopicsApiController < ApplicationController
   #       "user_name": "nobody@example.com",
   #       "message": "Newer entry",
   #       "read_state": "read",
+  #       "forced_read_state": false,
   #       "created_at": "2011-11-03T21:33:29Z",
   #       "attachment": {
   #         "content-type": "unknown/unknown",
@@ -193,6 +226,7 @@ class DiscussionTopicsApiController < ApplicationController
   #       "user_name": "nobody@example.com",
   #       "message": "first top-level entry",
   #       "read_state": "unread",
+  #       "forced_read_state": false,
   #       "created_at": "2011-11-03T21:32:29Z",
   #       "recent_replies": [
   #         {
@@ -204,10 +238,8 @@ class DiscussionTopicsApiController < ApplicationController
   #         } ],
   #       "has_more_replies": false } ]
   def entries
-    if authorized_action(@topic, @current_user, :read)
-      @entries = Api.paginate(root_entries(@topic).newest_first, self, entry_pagination_path(@topic))
-      render :json => discussion_entry_api_json(@entries, @context, @current_user, session)
-    end
+    @entries = Api.paginate(root_entries(@topic).newest_first, self, entry_pagination_url(@topic))
+    render :json => discussion_entry_api_json(@entries, @context, @current_user, session)
   end
 
   # @API Post a reply
@@ -219,7 +251,7 @@ class DiscussionTopicsApiController < ApplicationController
   # If it is required, and the user has not posted, will respond with a 403
   # Forbidden status and the body 'require_initial_post'.
   #
-  # @argument message The body of the entry.
+  # @argument message [String] The body of the entry.
   #
   # @argument attachment [Optional] a multipart/form-data form-field-style
   #   attachment. Attachments larger than 1 kilobyte are subject to quota
@@ -227,14 +259,14 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries/<entry_id>/replies.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries/<entry_id>/replies.json' \
   #        -F 'message=<message>' \ 
   #        -F 'attachment=@<filename>' \ 
   #        -H "Authorization: Bearer <token>"
   def add_reply
     @parent = all_entries(@topic).find(params[:entry_id])
     @entry = build_entry(@parent.discussion_subentries)
-    if authorized_action(@topic, @current_user, :read) && authorized_action(@entry, @current_user, :create)
+    if authorized_action(@entry, @current_user, :create)
       save_entry
     end
   end
@@ -261,6 +293,8 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @response_field read_state The read state of the entry, "read" or "unread".
   #
+  # @response_field forced_read_state Whether the read_state was forced (was set manually)
+  #
   # @response_field created_at The creation time of the reply, in ISO8601
   #   format.
   #
@@ -271,6 +305,7 @@ class DiscussionTopicsApiController < ApplicationController
   #       "user_name": "nobody@example.com",
   #       "message": "Newer message",
   #       "read_state": "read",
+  #       "forced_read_state": false,
   #       "created_at": "2011-11-03T21:27:44Z" },
   #     {
   #       "id": 1014,
@@ -278,13 +313,12 @@ class DiscussionTopicsApiController < ApplicationController
   #       "user_name": "nobody@example.com",
   #       "message": "Older message",
   #       "read_state": "unread",
+  #       "forced_read_state": false,
   #       "created_at": "2011-11-03T21:26:44Z" } ]
   def replies
     @parent = root_entries(@topic).find(params[:entry_id])
-    if authorized_action(@topic, @current_user, :read)
-      @replies = Api.paginate(reply_entries(@parent).newest_first, self, reply_pagination_path(@parent))
-      render :json => discussion_entry_api_json(@replies, @context, @current_user, session)
-    end
+    @replies = Api.paginate(reply_entries(@parent).newest_first, self, reply_pagination_url(@parent))
+    render :json => discussion_entry_api_json(@replies, @context, @current_user, session)
   end
 
   # @API List entries
@@ -294,7 +328,9 @@ class DiscussionTopicsApiController < ApplicationController
   # If it is required, and the user has not posted, will respond with a 403
   # Forbidden status and the body 'require_initial_post'.
   #
-  # @argument ids[] A list of entry ids to retrieve. Entries will be returned in id order, smallest id first.
+  # @argument ids[] [String]
+  #   A list of entry ids to retrieve. Entries will be returned in id order,
+  #   smallest id first.
   #
   # @response_field id The unique identifier for the reply.
   #
@@ -306,6 +342,8 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @response_field read_state The read state of the entry, "read" or "unread".
   #
+  # @response_field forced_read_state Whether the read_state was forced (was set manually)
+  #
   # @response_field created_at The creation time of the reply, in ISO8601
   #   format.
   #
@@ -314,7 +352,7 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entry_list?ids[]=1&ids[]=2&ids[]=3' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entry_list?ids[]=1&ids[]=2&ids[]=3' \
   #        -H "Authorization: Bearer <token>"
   #
   # @example_response
@@ -324,12 +362,10 @@ class DiscussionTopicsApiController < ApplicationController
   #     { ... entry 3 ... },
   #   ]
   def entry_list
-    if authorized_action(@topic, @current_user, :read)
-      ids = Array(params[:ids])
-      entries = @topic.discussion_entries.find(ids, :order => :id)
-      @entries = Api.paginate(entries, self, entry_pagination_path(@topic))
-      render :json => discussion_entry_api_json(@entries, @context, @current_user, session, [])
-    end
+    ids = Array(params[:ids])
+    entries = @topic.discussion_entries.find(ids, :order => :id)
+    @entries = Api.paginate(entries, self, entry_pagination_url(@topic))
+    render :json => discussion_entry_api_json(@entries, @context, @current_user, session, [])
   end
 
   # @API Mark topic as read
@@ -341,7 +377,7 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read.json' \
   #        -X PUT \ 
   #        -H "Authorization: Bearer <token>" \ 
   #        -H "Content-Length: 0"
@@ -358,7 +394,7 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read.json' \
   #        -X DELETE \ 
   #        -H "Authorization: Bearer <token>"
   def mark_topic_unread
@@ -370,19 +406,20 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # No request fields are necessary.
   #
+  # @argument forced_read_state [Optional, Boolean]
+  #   A boolean value to set all of the entries' forced_read_state. No change
+  #   is made if this argument is not specified.
+  # 
   # On success, the response will be 204 No Content with an empty body.
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read_all.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read_all.json' \
   #        -X PUT \ 
   #        -H "Authorization: Bearer <token>" \ 
   #        -H "Content-Length: 0"
   def mark_all_read
-    if authorized_action(@topic, @current_user, :read)
-      @topic.change_all_read_state("read", @current_user)
-      render :json => {}, :status => :no_content
-    end
+    change_topic_all_read_state('read')
   end
 
   # @API Mark all entries as unread
@@ -390,18 +427,19 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # No request fields are necessary.
   #
+  # @argument forced_read_state [Optional, Boolean]
+  #   A boolean value to set all of the entries' forced_read_state. No change is
+  #   made if this argument is not specified.
+  # 
   # On success, the response will be 204 No Content with an empty body.
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read_all.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/read_all.json' \
   #        -X DELETE \ 
   #        -H "Authorization: Bearer <token>"
   def mark_all_unread
-    if authorized_action(@topic, @current_user, :read)
-      @topic.change_all_read_state("unread", @current_user)
-      render :json => {}, :status => :no_content
-    end
+    change_topic_all_read_state('unread')
   end
 
   # @API Mark entry as read
@@ -409,11 +447,15 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # No request fields are necessary.
   #
+  # @argument forced_read_state [Optional, Boolean]
+  #   A boolean value to set the entry's forced_read_state. No change is made if
+  #   this argument is not specified.
+  #
   # On success, the response will be 204 No Content with an empty body.
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries/<entry_id>/read.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries/<entry_id>/read.json' \
   #        -X PUT \ 
   #        -H "Authorization: Bearer <token>"\ 
   #        -H "Content-Length: 0"
@@ -426,24 +468,51 @@ class DiscussionTopicsApiController < ApplicationController
   #
   # No request fields are necessary.
   #
+  # @argument forced_read_state [Optional, Boolean]
+  #   A boolean value to set the entry's forced_read_state. No change is made if
+  #   this argument is not specified.
+  #
   # On success, the response will be 204 No Content with an empty body.
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries/<entry_id>/read.json' \ 
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/entries/<entry_id>/read.json' \
   #        -X DELETE \ 
   #        -H "Authorization: Bearer <token>"
   def mark_entry_unread
     change_entry_read_state("unread")
   end
 
+  # @API Subscribe to a topic
+  # Subscribe to a topic to receive notifications about new entries
+  #
+  # On success, the response will be 204 No Content with an empty body
+  #
+  # @example_request
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/subscribed.json' \
+  #        -X PUT \ 
+  #        -H "Authorization: Bearer <token>" \ 
+  #        -H "Content-Length: 0"
+  def subscribe_topic
+    render_state_change_result @topic.subscribe(@current_user)
+  end
+  
+  # @API Unsubscribe from a topic
+  # Unsubscribe from a topic to stop receiving notifications about new entries
+  #
+  # On success, the response will be 204 No Content with an empty body
+  #
+  # @example_request
+  #   curl 'https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id>/subscribed.json' \
+  #        -X DELETE \ 
+  #        -H "Authorization: Bearer <token>" 
+  def unsubscribe_topic
+    render_state_change_result @topic.unsubscribe(@current_user)
+  end
+  
   protected
   def require_topic
-    if params[:topic_id] == "self" && @context.is_a?(CollectionItem)
-      @topic = @context.discussion_topic
-    else
-      @topic = @context.all_discussion_topics.active.find(params[:topic_id])
-    end
+    @topic = @context.all_discussion_topics.active.find(params[:topic_id])
     return authorized_action(@topic, @current_user, :read)
   end
 
@@ -457,6 +526,7 @@ class DiscussionTopicsApiController < ApplicationController
   end
 
   def build_entry(association)
+    params[:message] = process_incoming_html_content(params[:message])
     @topic.save! if @topic.new_record?
     association.build(:message => params[:message], :user => @current_user, :discussion_topic => @topic)
   end
@@ -471,7 +541,7 @@ class DiscussionTopicsApiController < ApplicationController
       log_asset_access(@topic, 'topics', 'topics', 'participate')
       @entry.context_module_action
       if has_attachment
-        @attachment = @context.attachments.create(:uploaded_data => params[:attachment])
+        @attachment = (@current_user || @context).attachments.create(:uploaded_data => params[:attachment])
         @entry.attachment = @attachment
         @entry.save
       end
@@ -484,8 +554,8 @@ class DiscussionTopicsApiController < ApplicationController
   def visible_topics(topic)
     # conflate entries from all child topics for groups the user can access
     topics = [topic]
-    if topic.for_group_assignment? && !topic.child_topics.empty?
-      groups = topic.assignment.group_category.groups.active.select do |group|
+    if topic.for_group_discussion? && !topic.child_topics.empty?
+      groups = topic.group_category.groups.active.select do |group|
         group.grants_right?(@current_user, session, :read)
       end
       topic.child_topics.each{ |t| topics << t if groups.include?(t.context) }
@@ -506,27 +576,43 @@ class DiscussionTopicsApiController < ApplicationController
   end
 
   def change_topic_read_state(new_state)
-    if authorized_action(@topic, @current_user, :read)
-      topic_participant = @topic.change_read_state(new_state, @current_user)
-      if topic_participant.present? && (topic_participant == true || topic_participant.errors.blank?)
-        render :nothing => true, :status => :no_content
-      else
-        error_json = topic_participant.errors.to_json rescue {}
-        render :json => error_json, :status => :bad_request
-      end
-    end
+    render_state_change_result @topic.change_read_state(new_state, @current_user)
+  end
+
+  def get_forced_option()
+    opts = {}
+    opts[:forced] = value_to_boolean(params[:forced_read_state]) if params.has_key?(:forced_read_state)    
+    opts
+  end
+
+  def change_topic_all_read_state(new_state)
+    opts = get_forced_option
+
+    @topic.change_all_read_state(new_state, @current_user, opts)
+    render :json => {}, :status => :no_content
   end
 
   def change_entry_read_state(new_state)
     @entry = @topic.discussion_entries.find(params[:entry_id])
+    opts = get_forced_option
+
     if authorized_action(@entry, @current_user, :read)
-      entry_participant = @entry.change_read_state(new_state, @current_user)
-      if entry_participant.present? && (entry_participant == true || entry_participant.errors.blank?)
-        render :nothing => true, :status => :no_content
-      else
-        error_json = entry_participant.errors.to_json rescue {}
-        render :json => error_json, :status => :bad_request
-      end
+      render_state_change_result @entry.change_read_state(new_state, @current_user, opts)
     end
   end
+
+  # the result of several state change functions are the following:
+  #  nil - no current user
+  #  true - state is already set to the requested state
+  #  participant with errors - something went wrong with the participant
+  #  participant with no errors - the change went through
+  # this function renders a 204 No Content for a success, or a Bad Request
+  # for failure with participant errors if there are any
+  def render_state_change_result(result)
+    if result == true || result.try(:errors).blank?
+      render :nothing => true, :status => :no_content
+    else
+      render :json => result.try(:errors) || {}, :status => :bad_request
+    end
+  end 
 end

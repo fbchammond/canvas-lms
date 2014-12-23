@@ -12,8 +12,8 @@ define [
     dateAttributes: ['created_at', 'end_at', 'start_at', 'updated_at']
 
     _filterAttributes: (obj) ->
-      filtered = _(obj).pick 'start_at', 'end_at', 'title',
-                             'description', 'context_code'
+      filtered = _(obj).pick 'start_at', 'end_at', 'title', 'description',
+        'context_code', 'remove_child_events', 'location_name', 'location_address'
       if obj.use_section_dates && obj.child_event_data
         filtered.child_event_data = _.chain(obj.child_event_data)
           .compact()
@@ -26,12 +26,11 @@ define [
       # has a date, and either has both a start and end time or neither
       o.start_date && (!!o.start_time == !!o.end_time)
 
-    toJSON: (forView) ->
-      json = super
-      if forView
-        json
-      else
-        {calendar_event: @_filterAttributes(json)}
+    toJSON: ->
+      {calendar_event: @_filterAttributes(super)}
+
+    present: ->
+      Backbone.Model::toJSON.call(this)
 
     fetch: (options = {}) ->
       options =  _.clone(options)
@@ -40,7 +39,7 @@ define [
       success = options.success
       delete options.success
 
-      error = Backbone.wrapError(options.error, model, options)
+      error = options.error ? ->
       delete options.error
 
       if @get('id')
@@ -51,8 +50,8 @@ define [
       combinedSuccess = (syncArgs=[], sectionArgs=[]) ->
         [syncResp, syncStatus, syncXhr] = syncArgs
         [sectionsResp] = sectionArgs
-        calEventData = CalendarEvent.mergeSectionsIntoCalendarEvent(syncResp, sectionsResp)
-        return false unless model.set(model.parse(calEventData, syncXhr), options)
+        calEventData = CalendarEvent.mergeSectionsIntoCalendarEvent(syncResp, _.sortBy(sectionsResp, 'id'))
+        return false unless model.set(model.parse(calEventData), options)
         success?(model, calEventData)
 
       $.when(syncDfd, sectionsDfd)

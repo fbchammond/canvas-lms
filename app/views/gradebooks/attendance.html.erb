@@ -88,7 +88,7 @@
   <div style="display: none;">
     <div id="new_assignment_dialog">
       <h3><%= t('headers.new_column', "New Attendance Column") %></h3>
-      <% form_for :assignment, :url => context_url(@context, :context_assignments_url), :html => {:id => "add_assignment_form"} do |f| %>
+      <%= form_for :assignment, :url => context_url(@context, :context_assignments_url), :html => {:id => "add_assignment_form"} do |f| %>
       <%= f.hidden_field :submission_types, :value => "attendance" %>
       <table class="formtable">
         <tr>
@@ -112,8 +112,8 @@
         <tr>
           <td colspan="2">
             <div class="button-container">
-              <button type="submit" class="button submit_button"><%= t('buttons.add_assignment', "Add Assignment") %></button>
-              <button type="button" class="button button-secondary cancel_button"><%= t('#buttons.cancel', "Cancel") %></button>
+              <button type="submit" class="btn submit_button"><%= t('buttons.add_assignment', "Add Assignment") %></button>
+              <button type="button" class="btn btn button-secondary cancel_button"><%= t('#buttons.cancel', "Cancel") %></button>
             </div>
           </td>
         </tr>

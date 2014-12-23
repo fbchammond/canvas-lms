@@ -17,19 +17,36 @@
 #
 
 class LearningOutcomeResult < ActiveRecord::Base
+  include PolymorphicTypeOverride
+  override_polymorphic_types association_type: {'Quiz' => 'Quizzes::Quiz'},
+                             associated_asset_type: {'Quiz' => 'Quizzes::Quiz'},
+                             artifact_type: {'QuizSubmission' => 'Quizzes::QuizSubmission'}
+
   belongs_to :user
   belongs_to :learning_outcome
-  belongs_to :content_tag
-  belongs_to :association, :polymorphic => true
+  belongs_to :alignment, :class_name => 'ContentTag', :foreign_key => :content_tag_id
+  belongs_to :association_object, :polymorphic => true, :foreign_type => :association_type, :foreign_key => :association_id
+  validates_inclusion_of :association_type, :allow_nil => true, :in => ['Quizzes::Quiz', 'RubricAssociation', 'Assignment', 'LiveAssessments::Assessment']
   belongs_to :artifact, :polymorphic => true
+  validates_inclusion_of :artifact_type, :allow_nil => true, :in => ['Quizzes::QuizSubmission', 'RubricAssessment', 'Submission', 'LiveAssessments::Submission']
   belongs_to :associated_asset, :polymorphic => true
+  validates_inclusion_of :associated_asset_type, :allow_nil => true, :in => ['AssessmentQuestion', 'Quizzes::Quiz', 'LiveAssessments::Assessment']
   belongs_to :context, :polymorphic => true
+  validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course']
   simply_versioned
+
+  EXPORTABLE_ATTRIBUTES = [
+    :id, :context_id, :context_type, :context_code, :association_id, :association_type, :content_tag_id, :learning_outcome_id, :mastery, :user_id, :score, :created_at, :updated_at,
+    :attempt, :possible, :comments, :original_score, :original_possible, :original_mastery, :artifact_id, :artifact_type, :assessed_at, :title, :percent, :associated_asset_id, :associated_asset_type
+  ]
+
+  EXPORTABLE_ASSOCIATIONS = [:user, :learning_outcome, :association_object, :artifact, :associated_asset, :context]
   before_save :infer_defaults
 
-  attr_accessible :learning_outcome, :user, :association, :content_tag, :associated_asset
+  attr_accessible :learning_outcome, :user, :association_object, :alignment, :associated_asset
   
   def infer_defaults
+    self.learning_outcome_id = self.alignment.learning_outcome_id
     self.context_code = "#{self.context_type.underscore}_#{self.context_id}" rescue nil
     self.original_score ||= self.score
     self.original_possible ||= self.possible
@@ -40,21 +57,15 @@ class LearningOutcomeResult < ActiveRecord::Base
   end
   
   def assignment
-    if self.association.is_a?(Assignment)
-      self.association
+    if self.association_object.is_a?(Assignment)
+      self.association_object
     elsif self.artifact.is_a?(RubricAssessment)
-      self.artifact.rubric_association.association
+      self.artifact.rubric_association.association_object
     else
       nil
     end
   end
-  
-  def changes_worth_versioning?
-    !(self.changes.keys - [
-      "updated_at",
-    ]).empty?
-  end
-  
+
   def save_to_version(attempt)
     current_version = self.versions.current.try(:model)
     if current_version.try(:attempt) && attempt < current_version.attempt
@@ -78,27 +89,25 @@ class LearningOutcomeResult < ActiveRecord::Base
     end
   end
   
-  named_scope :for_context_codes, lambda{|codes| 
+  scope :for_context_codes, lambda { |codes|
     if codes == 'all'
-      {}
+      scoped
     else
-      {:conditions => {:context_code => Array(codes)} }
+      where(:context_code => codes)
     end
   }
-  named_scope :for_user, lambda{|user|
-    {:conditions => {:user_id => user.id} }
-  }
-  named_scope :custom_ordering, lambda{|param|
+  scope :for_user, lambda { |user| where(:user_id => user) }
+  scope :custom_ordering, lambda { |param|
     orders = {
       'recent' => "assessed_at DESC",
       'highest' => "score DESC",
       'oldest' => "score ASC",
       'default' => "assessed_at DESC"
     }
-    order = orders[param] || orders['default']
-    {:order => order }
+    order_clause = orders[param] || orders['default']
+    order(order_clause)
   }
-  named_scope :for_outcome_ids, lambda{|ids|
-    {:conditions => {:learning_outcome_id => ids} }
-  }
+  scope :for_outcome_ids, lambda { |ids| where(:learning_outcome_id => ids) }
+  scope :for_association, lambda { |association| where(:association_type => association.class.to_s, :association_id => association.id) }
+  scope :for_associated_asset, lambda { |associated_asset| where(:associated_asset_type => associated_asset.class.to_s, :associated_asset_id => associated_asset.id) }
 end

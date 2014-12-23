@@ -23,6 +23,7 @@ class ZipFileImport < ActiveRecord::Base
   belongs_to :attachment
   belongs_to :folder
   belongs_to :context, :polymorphic => true
+  validates_inclusion_of :context_type, :allow_nil => true, :in => ['Group', 'User', 'Course']
   validates_presence_of :context
 
   serialize :data
@@ -81,5 +82,5 @@ class ZipFileImport < ActiveRecord::Base
     self.workflow_state = "failed"
     self.save
   end
-  handle_asynchronously :process, :strand => proc { |zip_file_import| Shard.default.activate { "zip_file_import:#{zip_file_import.context.asset_string}" } }
+  handle_asynchronously :process, :strand => proc { |zip_file_import| Shard.birth.activate { "zip_file_import:#{zip_file_import.context.asset_string}" } }
 end

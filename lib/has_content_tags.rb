@@ -29,7 +29,7 @@ module HasContentTags
   def check_if_associated_content_tags_need_updating
     @associated_content_tags_need_updating = false
     return if self.new_record?
-    return if self.respond_to?(:context_type) && self.context_type == 'SisBatch'
+    return if self.respond_to?(:context_type) && %w{SisBatch Folder}.include?(self.context_type)
     @associated_content_tags_need_updating = true if self.respond_to?(:title_changed?) && self.title_changed?
     @associated_content_tags_need_updating = true if self.respond_to?(:name_changed?) && self.name_changed?
     @associated_content_tags_need_updating = true if self.respond_to?(:display_name_changed?) && self.display_name_changed?
@@ -38,12 +38,12 @@ module HasContentTags
   end
   
   def self.included(klass)
-    klass.send(:after_save, :update_associated_content_tags_later)
+    klass.send(:after_save, :update_associated_content_tags)
     klass.send(:before_save, :check_if_associated_content_tags_need_updating)
   end
   
   def locked_cache_key(user)
-    ['_locked_for', self, user].cache_key
+    ['_locked_for2', self, user].cache_key
   end
   
   def clear_locked_cache(user)

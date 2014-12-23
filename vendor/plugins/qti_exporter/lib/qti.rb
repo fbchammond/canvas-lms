@@ -5,8 +5,8 @@ require 'qti/qti_plugin_validator'
 
 module Qti
   PYTHON_MIGRATION_EXECUTABLE = 'migrate.py'
-  EXPECTED_LOCATION = File.join(::RAILS_ROOT,'vendor', 'QTIMigrationTool', PYTHON_MIGRATION_EXECUTABLE) rescue nil
-  EXPECTED_LOCATION_ALT = File.join(::RAILS_ROOT,'vendor', 'qti_migration_tool', PYTHON_MIGRATION_EXECUTABLE) rescue nil
+  EXPECTED_LOCATION = Rails.root.join('vendor', 'QTIMigrationTool', PYTHON_MIGRATION_EXECUTABLE).to_s rescue nil
+  EXPECTED_LOCATION_ALT = Rails.root.join('vendor', 'qti_migration_tool', PYTHON_MIGRATION_EXECUTABLE).to_s rescue nil
   @migration_executable = nil
 
   if File.exists?(EXPECTED_LOCATION)
@@ -54,7 +54,7 @@ module Qti
   def self.convert_assessments(manifest_path, opts={})
     assessments = []
     doc = Nokogiri::XML(open(manifest_path))
-    doc.css('manifest resources resource[type=imsqti_assessment_xmlv2p1]').each do |item|
+    doc.css('manifest resources resource[type=imsqti_assessment_xmlv2p1], manifest resources resource[type=imsqti_test_xmlv2p1]').each do |item|
       a = AssessmentTestConverter.new(item, File.dirname(manifest_path), opts).create_instructure_quiz
       assessments << a if a
     end
@@ -76,7 +76,7 @@ module Qti
       if $?.exitstatus == 0
         manifest = File.join(dest_dir_2_1, "imsmanifest.xml")
         questions = convert_questions(manifest, opts)
-        assessments = convert_assessments(manifest)
+        assessments = convert_assessments(manifest, opts)
       else
         raise "Error running python qti converter"
       end

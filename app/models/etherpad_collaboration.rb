@@ -35,7 +35,7 @@ class EtherpadCollaboration < Collaboration
   # /ep/pad/view/PAD_ID/latest  read-only view (still reveals pad id)
 
   def initialize_document
-    self.url = "http://#{EtherpadCollaboration.config[:domain]}/i-#{self.uuid}"
+    self.url ||= "http://#{EtherpadCollaboration.config[:domain]}/i-#{self.uuid}"
   end
 
   def user_can_access_document_type?(user)
@@ -43,6 +43,6 @@ class EtherpadCollaboration < Collaboration
   end
 
   def self.config
-    Canvas::Plugin.find(:etherpad).try(:settings) || (YAML.load_file(RAILS_ROOT + "/config/etherpad.yml")[RAILS_ENV] rescue nil)
+    Canvas::Plugin.find(:etherpad).try(:settings) || (YAML.load_file(Rails.root+"config/etherpad.yml")[Rails.env] rescue nil)
   end
 end

@@ -16,11 +16,9 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require 'lib/sis/csv/base_importer'
-
 module SIS
   module CSV
-    class UserImporter < BaseImporter
+    class UserImporter < CSVBaseImporter
 
       def self.is_user_csv?(row)
         row.include?('user_id') && row.include?('login_id')
@@ -35,7 +33,7 @@ module SIS
             update_progress
 
             begin
-              importer.add_user(row['user_id'], row['login_id'], row['status'], row['first_name'], row['last_name'], row['email'], row['password'], row['ssha_password'])
+              importer.add_user(row['user_id'], row['login_id'], row['status'], row['first_name'], row['last_name'], row['email'], row['password'], row['ssha_password'], nil, row['short_name'], row['full_name'], row['sortable_name'])
             rescue ImportError => e
               messages << "#{e}"
             end

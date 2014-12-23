@@ -4,13 +4,6 @@ module Canvas
   # this to :raise to raise an exception.
   mattr_accessor :protected_attribute_error
 
-  # defines the behavior around casting arguments passed into dynamic finders.
-  # Arguments are coerced to the appropriate type (if the column exists), so
-  # things like find_by_id('123') become find_by_id(123). The default (:log)
-  # logs a warning if the cast isn't clean (e.g. '123a' -> 123 or '' -> 0).
-  # Set this to :raise to raise an error on unclean casts.
-  mattr_accessor :dynamic_finder_type_cast_error
-
   # defines the behavior when nil or empty array arguments passed into dynamic
   # finders. The default (:log) logs a warning if the finder is not scoped and
   # if *all* arguments are nil/[], e.g.
@@ -28,92 +21,117 @@ module Canvas
   end
 
   def self.redis
-    return @redis if @redis
-    # create the redis cluster connection using config/redis.yml
-    redis_settings = Setting.from_config('redis')
-    raise("Redis is not enabled for this install") if redis_settings.blank?
-    Bundler.require 'redis'
-    if redis_settings.is_a?(Array)
-      redis_settings = { :servers => redis_settings }
+    raise "Redis is not enabled for this install" unless Canvas.redis_enabled?
+    @redis ||= begin
+      settings = ConfigFile.load('redis')
+      Canvas::RedisConfig.from_settings(settings).redis
     end
-    # convert string addresses to options hash, and disable redis-cache's built-in marshalling code
-    redis_settings[:servers].map! { |s|
-      ::Redis::Factory.convert_to_redis_client_options(s).merge(:marshalling => false)
-    }
-    @redis = ::Redis::Factory.create(redis_settings[:servers])
-    if redis_settings[:database].present?
-      @redis.select(redis_settings[:database])
-    end
-    @redis
+  end
+
+  # Builds a redis object using a config hash in the format used by a couple
+  # different config/*.yml files, like redis.yml, cache_store.yml and
+  # delayed_jobs.yml
+  def self.redis_from_config(redis_settings)
+    RedisConfig.from_settings(redis_settings).redis
   end
 
   def self.redis_enabled?
-    @redis_enabled ||= Setting.from_config('redis').present?
+    @redis_enabled ||= ConfigFile.load('redis').present?
   end
 
   def self.reconnect_redis
     @redis = nil
     if Rails.cache && Rails.cache.respond_to?(:reconnect)
-      Canvas::Redis.handle_redis_failure(nil) do
+      Canvas::Redis.handle_redis_failure(nil, "none") do
         Rails.cache.reconnect
       end
     end
   end
 
-  def self.cache_store_config
-    cache_store_config = {
-      'cache_store' => 'mem_cache_store',
-    }.merge(Setting.from_config('cache_store') || {})
-    config = nil
-    case cache_store_config.delete('cache_store')
-    when 'mem_cache_store'
-      cache_store_config['namespace'] ||= cache_store_config['key']
-      servers = cache_store_config['servers'] || (Setting.from_config('memcache'))
-      if servers
-        config = :mem_cache_store, servers, cache_store_config
+  def self.cache_store_config(rails_env = :current, nil_is_nil = true)
+    rails_env = Rails.env if rails_env == :current
+    cache_stores[rails_env]
+  end
+
+  def self.cache_stores
+    unless @cache_stores
+      # this method is called really early in the bootup process, and
+      # autoloading might not be available yet, so we need to manually require
+      # Config
+      require_dependency 'lib/config_file'
+      @cache_stores = {}
+      configs = ConfigFile.load('cache_store', nil) || {}
+
+      # sanity check the file
+      unless configs.is_a?(Hash)
+        raise "Invalid config/cache_store.yml: Root is not a hash. See comments in config/cache_store.yml.example"
       end
-    when 'redis_store'
-      Bundler.require 'redis'
-      Canvas::Redis.patch
-      # merge in redis.yml, but give precedence to cache_store.yml
-      #
-      # the only options currently supported in redis-cache are the list of
-      # servers, not key prefix or database names.
-      cache_store_config = (Setting.from_config('redis') || {}).merge(cache_store_config)
-      cache_store_config['key_prefix'] ||= cache_store_config['key']
-      servers = cache_store_config['servers']
-      config = :redis_store, servers
+
+      unless configs.values.all? { |cfg| cfg.is_a?(Hash) }
+        broken = configs.keys.select{ |k| !configs[k].is_a?(Hash) }.map(&:to_s).join(', ')
+        raise "Invalid config/cache_store.yml: Some keys are not hashes: #{broken}. See comments in config/cache_store.yml.example"
+      end
+
+      configs.each do |env, config|
+        config = {'cache_store' => 'mem_cache_store'}.merge(config)
+        case config.delete('cache_store')
+        when 'mem_cache_store'
+          config['namespace'] ||= config['key']
+          servers = config['servers'] || (ConfigFile.load('memcache', env))
+          if servers
+            @cache_stores[env] = :mem_cache_store, servers, config
+          end
+        when 'redis_store'
+          Bundler.require 'redis'
+          require_dependency 'canvas/redis'
+          Canvas::Redis.patch
+          # merge in redis.yml, but give precedence to cache_store.yml
+          #
+          # the only options currently supported in redis-cache are the list of
+          # servers, not key prefix or database names.
+          config = (ConfigFile.load('redis', env) || {}).merge(config)
+          config['key_prefix'] ||= config['key']
+          servers = config['servers']
+          @cache_stores[env] = :redis_store, servers
+        when 'memory_store'
+          @cache_stores[env] = :memory_store
+        when 'nil_store'
+          if CANVAS_RAILS2
+            require 'nil_store'
+            @cache_stores[env] = NilStore.new
+          else
+            @cache_stores[env] = :null_store
+          end
+        end
+      end
+      @cache_stores[Rails.env] ||= if CANVAS_RAILS2
+        require 'nil_store'
+        NilStore.new
+      else
+        :null_store
+      end
     end
-    unless config
-      config = :nil_store
-    end
-    config
+    @cache_stores
   end
 
   # `sample` reports KB, not B
   if File.directory?("/proc")
     # linux w/ proc fs
     LINUX_PAGE_SIZE = (size = `getconf PAGESIZE`.to_i; size > 0 ? size : 4096)
-    LINUX_HZ = 100.0 # this isn't always true, but it usually is
     def self.sample_memory
       s = File.read("/proc/#{Process.pid}/statm").to_i rescue 0
       s * LINUX_PAGE_SIZE / 1024
     end
-    # returns [ utime, stime ], both in seconds
-    def self.sample_cpu_time
-      a = File.read("/proc/#{Process.pid}/stat").split(" ") rescue nil
-      [ a[13].to_f / LINUX_HZ, a[14].to_f / LINUX_HZ] if a && a.length >= 15
-    end
   else
     # generic unix solution
     def self.sample_memory
-      # hmm this is actually resident set size, doesn't include swapped-to-disk
-      # memory.
-      `ps -o rss= -p #{Process.pid}`.to_i
-    end
-    def self.sample_cpu_time
-      # TODO: use ps to grab this
-      [ 0, 0 ]
+      if Rails.env.test?
+        0
+      else
+        # hmm this is actually resident set size, doesn't include swapped-to-disk
+        # memory.
+        `ps -o rss= -p #{Process.pid}`.to_i
+      end
     end
   end
 
@@ -124,7 +142,7 @@ module Canvas
   def self.reloadable_plugin(dirname)
     return unless Rails.env.development?
     base_path = File.expand_path(dirname)
-    ActiveSupport::Dependencies.load_once_paths.reject! { |p|
+    ActiveSupport::Dependencies.autoload_once_paths.reject! { |p|
       p[0, base_path.length] == base_path
     }
   end
@@ -134,7 +152,7 @@ module Canvas
     if File.file?(Rails.root+"VERSION")
       @revision = File.readlines(Rails.root+"VERSION").first.try(:strip)
     end
-    @revision ||= false
+    @revision ||= I18n.t(:canvas_revision_unknown, "Unknown")
   end
 
   # protection against calling external services that could timeout or misbehave.
@@ -147,30 +165,49 @@ module Canvas
   #
   # all the configurable params have service-specific Settings with fallback to
   # generic Settings.
-  def self.timeout_protection(service_name)
-    redis_key = "service:timeouts:#{service_name}"
-    if Canvas.redis_enabled?
-      cutoff = (Setting.get_cached("service_#{service_name}_cutoff", nil) || Setting.get_cached("service_generic_cutoff", 3.to_s)).to_i
-      error_count = Canvas.redis.get(redis_key)
-      if error_count.to_i >= cutoff
-        Rails.logger.error("Skipping service call due to error count: #{service_name} #{error_count}")
-        return
-      end
-    end
+  def self.timeout_protection(service_name, options={}, &block)
+    timeout = (Setting.get("service_#{service_name}_timeout", nil) || options[:fallback_timeout_length] || Setting.get("service_generic_timeout", 15.seconds.to_s)).to_f
 
-    timeout = (Setting.get_cached("service_#{service_name}_timeout", nil) || Setting.get_cached("service_generic_timeout", 15.seconds.to_s)).to_f
-    Timeout.timeout(timeout) do
-      yield
+    if Canvas.redis_enabled?
+      redis_key = "service:timeouts:#{service_name}"
+      cutoff = (Setting.get("service_#{service_name}_cutoff", nil) || Setting.get("service_generic_cutoff", 3.to_s)).to_i
+      error_ttl = (Setting.get("service_#{service_name}_error_ttl", nil) || Setting.get("service_generic_error_ttl", 1.minute.to_s)).to_i
+      short_circuit_timeout(Canvas.redis, redis_key, timeout, cutoff, error_ttl, &block)
+    else
+      Timeout.timeout(timeout, &block)
     end
+  rescue TimeoutCutoff => e
+    Rails.logger.error("Skipping service call due to error count: #{service_name} #{e.error_count}")
+    raise if options[:raise_on_timeout]
+    return nil
   rescue Timeout::Error => e
     ErrorReport.log_exception(:service_timeout, e)
-    if Canvas.redis_enabled?
-      error_ttl = (Setting.get_cached("service_#{service_name}_error_ttl", nil) || Setting.get_cached("service_generic_error_ttl", 1.minute.to_s)).to_i
-      Canvas.redis.pipelined do
-        Canvas.redis.incrby(redis_key, 1)
-        Canvas.redis.expire(redis_key, error_ttl)
-      end
-    end
+    raise if options[:raise_on_timeout]
     return nil
+  end
+
+  def self.short_circuit_timeout(redis, redis_key, timeout, cutoff, error_ttl)
+    error_count = redis.get(redis_key)
+    if error_count.to_i >= cutoff
+      raise TimeoutCutoff.new(error_count)
+    end
+
+    begin
+      Timeout.timeout(timeout) do
+        yield
+      end
+    rescue Timeout::Error => e
+      redis.incrby(redis_key, 1)
+      redis.expire(redis_key, error_ttl)
+      raise
+    end
+  end
+
+  class TimeoutCutoff < Timeout::Error
+    attr_accessor :error_count
+
+    def initialize(error_count)
+      @error_count = error_count
+    end
   end
 end

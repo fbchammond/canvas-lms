@@ -1,16 +1,15 @@
 define [
+  'jquery'
   'underscore'
   'compiled/xhr/RemoteSelect'
-  'helpers/loadFixture'
-], (_, RemoteSelect, loadFixture) ->
-  module 'RemoteSelect'
+], ($, _, RemoteSelect) ->
+  module 'RemoteSelect',
     setup: ->
       @response = [200, { 'Content-Type': 'application/json' }, '[{ "label": "one", "value": 1 }, {"label": "two", "value": 2 }]']
-      @fixture  = loadFixture 'RemoteSelect'
-      @el       = @fixture.find('#test-select')
+      @el       = $('<select id="test-select"></select>').appendTo('body')
 
     teardown: ->
-      @fixture.detach()
+      @el.remove()
 
   test 'should load results into a select', ->
     server = @sandbox.useFakeServer()
@@ -21,6 +20,7 @@ define [
 
     server.respond()
     equal @el.children().length, 2
+    server.restore()
 
   test 'should load an object as <optgroup>', ->
     @response.pop()
@@ -42,6 +42,7 @@ define [
     server.respond()
     equal @el.children('optgroup').length, 2
     equal @el.find('option').length, 4
+    server.restore()
 
   test 'should cache responses', ->
     server = @sandbox.useFakeServer()
@@ -53,6 +54,7 @@ define [
 
     ok $.getJSON.calledOnce
     equal _.keys(rs.cache.store).length, 1
+    server.restore()
 
   test 'should accept a formatter', ->
     server = @sandbox.useFakeServer()
@@ -79,6 +81,7 @@ define [
 
     equal @el.children('optgroup').length, 2
     equal @el.find('option').length, 4
+    server.restore()
 
   test 'should take params', ->
     server = @sandbox.useFakeServer()
@@ -90,6 +93,7 @@ define [
 
     ok $.getJSON.calledWith '/test/url.json', { param: 'value' }, rs.onResponse
     rs.spinner.remove()
+    server.restore()
 
   test 'should include original options in select', ->
     server = @sandbox.useFakeServer()
@@ -100,3 +104,4 @@ define [
     server.respond()
 
     equal @el.children().length, 3
+    server.restore()

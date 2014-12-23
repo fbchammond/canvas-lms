@@ -1,26 +1,29 @@
 define [
+  'jquery'
   'underscore'
   'i18n!registration'
   'compiled/fn/preventDefault'
-  'compiled/models/User'
-  'compiled/models/Pseudonym'
+  'compiled/registration/registrationErrors'
   'jst/registration/teacherDialog'
   'jst/registration/studentDialog'
-  'jst/registration/studentHigherEdDialog'
   'jst/registration/parentDialog'
-  'compiled/object/flatten'
+  'compiled/util/addPrivacyLinkToDialog'
+  'compiled/jquery/validate'
   'jquery.instructure_forms'
   'jquery.instructure_date_and_time'
-], (_, I18n, preventDefault, User, Pseudonym, teacherDialog, studentDialog, studentHigherEdDialog, parentDialog, flatten) ->
+], ($, _, I18n, preventDefault, registrationErrors, teacherDialog, studentDialog, parentDialog, addPrivacyLinkToDialog) ->
 
   $nodes = {}
-  templates = {teacherDialog, studentDialog, studentHigherEdDialog, parentDialog}
+  templates = {teacherDialog, studentDialog, parentDialog}
 
   signupDialog = (id, title) ->
     return unless templates[id]
     $node = $nodes[id] ?= $('<div />')
     $node.html templates[id](
-      terms_url: "http://www.instructure.com/terms-of-use"
+      account: ENV.ACCOUNT.registration_settings
+      terms_required: ENV.ACCOUNT.terms_required
+      terms_url: ENV.ACCOUNT.terms_of_use_url
+      privacy_url: ENV.ACCOUNT.privacy_policy_url
     )
     $node.find('.date-field').datetime_field()
 
@@ -30,25 +33,15 @@ define [
 
     $form = $node.find('form')
     $form.formSubmit
-      disableWhileLoading: true
+      required: (el.name for el in $form.find(':input[name]').not('[type=hidden]'))
+      disableWhileLoading: 'spin_on_success'
+      errorFormatter: registrationErrors
       success: (data) =>
         # they should now be authenticated (either registered or pre_registered)
-        window.location = "/?login_success=1&registration_success=1"
-      formErrors: false
-      error: (errors) ->
-        if _.any(errors.user.birthdate ? [], (e) -> e.type is 'too_young')
-          $node.find('.registration-dialog').html I18n.t('too_young_error', 'You must be at least %{min_years} years of age to use Canvas without a course join code.', min_years: ENV.USER.MIN_AGE)
-          $node.dialog buttons: [
-            text: I18n.t('ok', "OK")
-            click: -> $node.dialog('close')
-            class: 'btn-primary'
-          ]
-          return
-        $form.formErrors flatten
-          user: User::normalizeErrors(errors.user)
-          pseudonym: Pseudonym::normalizeErrors(errors.pseudonym)
-          observee: Pseudonym::normalizeErrors(errors.observee)
-        , arrays: false
+        if data.course
+          window.location = "/courses/#{data.course.course.id}?registration_success=1"
+        else
+          window.location = "/?registration_success=1"
 
     $node.dialog
       resizable: false
@@ -57,5 +50,13 @@ define [
       open: ->
         $(this).find('a').eq(0).blur()
         $(this).find(':input').eq(0).focus()
-      close: -> $('.error_box').filter(':visible').remove()
+        signupDialog.afterRender?()
+      close: ->
+        signupDialog.teardown?()
+        $('.error_box').filter(':visible').remove()
     $node.fixDialogButtons()
+    unless ENV.ACCOUNT.terms_required # term verbiage has a link to PP, so this would be redundant
+      addPrivacyLinkToDialog($node)
+
+  signupDialog.templates = templates
+  signupDialog

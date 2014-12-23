@@ -18,6 +18,8 @@
 
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 
+require 'csv'
+
 describe GradebookImporter do
   context "construction" do
 
@@ -60,7 +62,7 @@ describe GradebookImporter do
           'Student,ID,Section,Assignment 1,Final Score',
           '"Blend, Bill",6,My Course,-,',
           'Points Possible,,,10,',
-          'Muted assignments do not impact Current and Final score columns,,,Muted,',
+          ', ,,Muted,',
           '"Farner, Todd",4,My Course,-,')
       @gi.assignments.length.should == 1
       @gi.assignments.first.points_possible.should == 10
@@ -96,7 +98,7 @@ describe GradebookImporter do
       student_in_course(:user => @user)
       @u5 = @user
 
-      uploaded_csv = FasterCSV.generate do |csv|
+      uploaded_csv = CSV.generate do |csv|
         csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Section", "Assignment 1"]
         csv << ["    Points Possible", "", "","", ""]
         csv << [@u1.name , "", "", "", "", 99]
@@ -108,29 +110,55 @@ describe GradebookImporter do
       end
 
       importer_with_rows(uploaded_csv)
-      hash = ActiveSupport::JSON.decode(@gi.to_json)
+      hash = @gi.as_json
 
-      hash['students'][0]['id'].should == @u1.id
-      hash['students'][0]['original_id'].should == @u1.id
-      hash['students'][0]['name'].should eql(@u1.name)
+      hash[:students][0][:id].should == @u1.id
+      hash[:students][0][:previous_id].should == @u1.id
+      hash[:students][0][:name].should eql(@u1.name)
 
-      hash['students'][1]['id'].should == @u2.id
-      hash['students'][1]['original_id'].should == @u2.id
+      hash[:students][1][:id].should == @u2.id
+      hash[:students][1][:previous_id].should == @u2.id
 
-      hash['students'][2]['id'].should == @u3.id
-      hash['students'][2]['original_id'].should == @u3.id
+      hash[:students][2][:id].should == @u3.id
+      hash[:students][2][:previous_id].should == @u3.id
 
       # Looking up by login, but there are no active pseudonyms for u4
-      hash['students'][3]['id'].should < 0
-      hash['students'][3]['original_id'].should be_nil
+      hash[:students][3][:id].should < 0
+      hash[:students][3][:previous_id].should be_nil
 
-      hash['students'][4]['id'].should == @u5.id
-      hash['students'][4]['original_id'].should == @u5.id
+      hash[:students][4][:id].should == @u5.id
+      hash[:students][4][:previous_id].should == @u5.id
 
-      hash['students'][5]['id'].should <  0
-      hash['students'][5]['original_id'].should be_nil
+      hash[:students][5][:id].should <  0
+      hash[:students][5][:previous_id].should be_nil
     end
-    
+
+    it "should Lookup by root account" do
+      course_model
+
+      student_in_course(:name => "Some Name")
+      @u1 = @user
+
+      account2 = Account.create!
+      p = @u1.pseudonyms.create!(account: account2, unique_id: 'uniqueid')
+      p.sis_user_id = 'SISUSERID'
+      p.save!
+      Account.expects(:find_by_domain).with('account2').returns(account2)
+
+      uploaded_csv = CSV.generate do |csv|
+        csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Root Account", "Section", "Assignment 1"]
+        csv << ["    Points Possible", "", "","", "", ""]
+        csv << ["" , "",  @u1.pseudonym.sis_user_id, "", "account2", "", 99]
+      end
+
+      importer_with_rows(uploaded_csv)
+      hash = @gi.as_json
+
+      hash[:students][0][:id].should == @u1.id
+      hash[:students][0][:previous_id].should == @u1.id
+      hash[:students][0][:name].should eql(@u1.name)
+    end
+
     it "should allow ids that look like numbers" do
       course_model
 
@@ -147,7 +175,7 @@ describe GradebookImporter do
       student_in_course(:user => @user)
       @u1 = @user
 
-      uploaded_csv = FasterCSV.generate do |csv|
+      uploaded_csv = CSV.generate do |csv|
         csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Section", "Assignment 1"]
         csv << ["    Points Possible", "", "","", ""]
         csv << ["" , "", "0123456", "", "", 99]
@@ -155,13 +183,13 @@ describe GradebookImporter do
       end
 
       importer_with_rows(uploaded_csv)
-      hash = ActiveSupport::JSON.decode(@gi.to_json)
+      hash = @gi.as_json
 
-      hash['students'][0]['id'].should == @u0.id
-      hash['students'][0]['original_id'].should == @u0.id
+      hash[:students][0][:id].should == @u0.id
+      hash[:students][0][:previous_id].should == @u0.id
 
-      hash['students'][1]['id'].should == @u1.id
-      hash['students'][1]['original_id'].should == @u1.id
+      hash[:students][1][:id].should == @u1.id
+      hash[:students][1][:previous_id].should == @u1.id
     end
   end
 
@@ -215,6 +243,17 @@ describe GradebookImporter do
     @gi.assignments.first.points_possible.should == 20
   end
 
+  it "should not try to create assignments for the totals columns" do
+    course_model
+    @assignment1 = @course.assignments.create!(:name => 'Assignment 1', :points_possible => 10)
+    importer_with_rows(
+        "Student,ID,Section,Assignment 1,Current Points,Final Points,Current Score,Final Score,Final Grade",
+        "Points Possible,,,20,,,,,"
+    )
+    @gi.assignments.should == [@assignment1]
+    @gi.missing_assignments.should be_empty
+  end
+
   it "should parse new and existing users" do
     course_with_student
     @student2 = user
@@ -264,20 +303,20 @@ describe GradebookImporter do
     end
 
     it "should have a simplified json output" do
-      hash = ActiveSupport::JSON.decode(@gi.to_json)
-      hash.keys.sort.should eql(["assignments", "missing_objects", "original_submissions", "students", "unchanged_assignments"])
-      students = hash["students"]
+      hash = @gi.as_json
+      hash.keys.sort.should eql([:assignments, :missing_objects, :original_submissions, :students, :unchanged_assignments])
+      students = hash[:students]
       students.should be_is_a(Array)
       student = students.first
-      student.keys.sort.should eql(["id", "last_name_first", "name", "original_id", "submissions"])
-      submissions = student["submissions"]
+      student.keys.sort.should eql([:id, :last_name_first, :name, :previous_id, :submissions])
+      submissions = student[:submissions]
       submissions.should be_is_a(Array)
       submission = submissions.first
       submission.keys.sort.should eql(["assignment_id", "grade", "original_grade"])
-      assignments = hash["assignments"]
+      assignments = hash[:assignments]
       assignments.should be_is_a(Array)
       assignment = assignments.first
-      assignment.keys.sort.should eql(["grading_type", "id", "original_id", "points_possible", "title"])
+      assignment.keys.sort.should eql([:grading_type, :id, :points_possible, :previous_id, :title])
     end
   end
 end

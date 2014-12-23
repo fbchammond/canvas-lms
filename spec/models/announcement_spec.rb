@@ -23,32 +23,73 @@ describe Announcement do
     @context = Course.create
     @context.announcements.create!(valid_announcement_attributes)
   end
+
+  describe "locking" do
+    it "should lock if its course has the lock_all_announcements setting" do
+      course = Course.new
+      course.lock_all_announcements = true
+      course.save!
+      announcement = course.announcements.create!(valid_announcement_attributes)
+
+      announcement.should be_locked
+    end
+
+    it "should not lock if its course does not have the lock_all_announcements setting" do
+      course = Course.create!
+      announcement = course.announcements.create!(valid_announcement_attributes)
+
+      announcement.should_not be_locked
+    end
+
+    it "should not automatically lock if it is a delayed post" do
+      course = Course.new
+      course.lock_all_announcements = true
+      course.save!
+      announcement = course.announcements.build(valid_announcement_attributes.merge(:delayed_post_at => Time.now + 1.week))
+      announcement.workflow_state = 'post_delayed'
+      announcement.save!
+
+      announcement.should be_post_delayed
+    end
+
+    it "should create a single job for delayed posting even though we do a double-save" do
+      course = Course.new
+      course.lock_all_announcements = true
+      course.save!
+      expect {
+        course.announcements.create!(valid_announcement_attributes.merge(delayed_post_at: 1.week.from_now))
+      }.to change(Delayed::Job, :count).by(1)
+    end
+  end
   
   context "broadcast policy" do
-    it "should sanitize message" do
-      announcement_model
-      @a.message = "<a href='#' onclick='alert(12);'>only this should stay</a>"
-      @a.save!
-      @a.message.should eql("<a href=\"#\">only this should stay</a>")
-    end
-    
-    it "should sanitize objects in a message" do
-      announcement_model
-      @a.message = "<object data=\"http://www.youtube.com/test\"></object>"
-      @a.save!
-      dom = Nokogiri(@a.message)
-      dom.css('object').length.should eql(1)
-      dom.css('object')[0]['data'].should eql("http://www.youtube.com/test")
-    end
-    
-    it "should sanitize objects in a message" do
-      announcement_model
-      @a.message = "<object data=\"http://www.youtuube.com/test\" othertag=\"bob\"></object>"
-      @a.save!
-      dom = Nokogiri(@a.message)
-      dom.css('object').length.should eql(1)
-      dom.css('object')[0]['data'].should eql("http://www.youtuube.com/test")
-      dom.css('object')[0]['othertag'].should eql(nil)
+    context "sanitization" do
+      before :once do
+        announcement_model
+      end
+
+      it "should sanitize message" do
+        @a.message = "<a href='#' onclick='alert(12);'>only this should stay</a>"
+        @a.save!
+        @a.message.should eql("<a href=\"#\">only this should stay</a>")
+      end
+
+      it "should sanitize objects in a message" do
+        @a.message = "<object data=\"http://www.youtube.com/test\"></object>"
+        @a.save!
+        dom = Nokogiri(@a.message)
+        dom.css('object').length.should eql(1)
+        dom.css('object')[0]['data'].should eql("http://www.youtube.com/test")
+      end
+
+      it "should sanitize objects in a message" do
+        @a.message = "<object data=\"http://www.youtuube.com/test\" othertag=\"bob\"></object>"
+        @a.save!
+        dom = Nokogiri(@a.message)
+        dom.css('object').length.should eql(1)
+        dom.css('object')[0]['data'].should eql("http://www.youtuube.com/test")
+        dom.css('object')[0]['othertag'].should eql(nil)
+      end
     end
 
     it "should broadcast to students and observers" do

@@ -1,0 +1,48 @@
+<div class="discussion-section discussion-assignment-section alert alert-info">
+  <div class="row-fluid">
+    <div class="span6">
+      <p class="discussion-title">
+        <%= t('graded_discussion_and_points',
+              { :one => 'This is a graded discussion: *1 point possible*',
+                :other => 'This is a graded discussion: *%{count} points possible*' },
+              :count => @assignment.points_possible || 0,
+              :wrapper => "<span class='discussion-points'>\\1</span>") %>
+      </p>
+    </div>
+
+    <div class="span6 right-align">
+      <div class="discussion-pubdate">
+        <% if @assignment.has_active_overrides? && @presenter.can_grade?  %>
+          <a href="#" class="toggle_due_dates"><%= t(:show_due_dates, 'Show Due Dates') %></a>
+
+        <% else %>
+          <b <%= context_sensitive_datetime_title(@assignment.due_at, @assignment.context) %> >
+            <%= t(:due_date, 'due %{date}', :date => OverrideListPresenter.new.due_at(@assignment)) %>
+          </b>
+        <% end %>
+      </div>
+    </div>
+  </div>
+
+  <% if @presenter.can_grade? %>
+    <div class="row-fluid">
+      <div class="span12 hidden due_date_wrapper">
+        <table class="discussion-topic-due-dates">
+          <thead>
+            <tr>
+              <th scope="col"><%= t(:due, 'Due') %></th>
+              <th scope="col"><%= t(:for, 'For') %></th>
+              <th scope="col"><%= t(:available_from, 'Available from') %></th>
+              <th scope="col"><%= t(:until, 'Until') %></th>
+            </tr>
+          </thead>
+
+          <%= render 'shared/override_list', :assignment => @assignment,
+            :user => @current_user %>
+
+        </table>
+      </div>
+    </div>
+  <% end %>
+
+</div>

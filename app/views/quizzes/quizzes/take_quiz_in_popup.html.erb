@@ -1,0 +1,11 @@
+<h1>
+  <%= t('headers.loading_in_lockdown', "Loading Quiz in Respondus LockDown Browser") %>
+</h1>
+<script type="text/javascript">
+  // open the quiz in a popup window with the plugin's given query param hash
+  window.open(<%= raw url_for(params.merge(@query_params).merge(:escape => false, :refresh_ldb => true)).to_json %>);
+</script>
+
+<p>
+  <%= mt('links.return_to_quiz_page', "[Click here](%{url}) to return to the quiz page.", :url => context_url(@context, :context_quiz_url, @quiz)) %>
+</p>

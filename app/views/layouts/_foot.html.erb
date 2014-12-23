@@ -1,15 +1,15 @@
 <script>
-  window.JSON || document.write('<%= (javascript_include_tag "#{js_base_url}/vendor/json2.js").gsub("</script>", "<\\/script>") %>');
-
   INST = <%= raw(inst_env.to_json) %>;
-  ENV = <%= raw js_env.to_json %>;
+  ENV = <%= raw Api.recursively_stringify_json_ids(js_env.clone).to_json %>;
 
   // TODO: move this out when we have a single require call
   require = {
-    translate: <%= use_optimized_js? %>,
+    translate: <%= include_js_translations? %>,
     baseUrl: '<%= js_base_url %>',
-    paths: <%= raw Canvas::RequireJs.paths %>,
-    use: <%= raw Canvas::RequireJs.shims %>
+    paths: <%= raw Canvas::RequireJs.paths(true) %>,
+    packages : <%= raw Canvas::RequireJs.packages %>,
+    shim: <%= raw Canvas::RequireJs.shims %>,
+    waitSeconds: 60
   };
 </script>
 
@@ -29,7 +29,7 @@
   var timeout = 10;
   var check = function() {
     attempts++;
-    var done = require.resourcesDone === true
+    var done = !window.requirejs.s.contexts._.defQueue.length
     var giveup = attempts === 100; // 1 second
     if (done || giveup) {
       var className = document.documentElement.className;

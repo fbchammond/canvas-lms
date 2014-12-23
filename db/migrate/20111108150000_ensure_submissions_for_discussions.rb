@@ -1,5 +1,3 @@
-require 'skip_callback'
-
 class EnsureSubmissionsForDiscussions < ActiveRecord::Migration
   def self.up
     # entries from graded topics where the poster is enrolled as a student in
@@ -32,11 +30,8 @@ class EnsureSubmissionsForDiscussions < ActiveRecord::Migration
     touched_course_ids = [].to_set
     touched_user_ids = [].to_set
 
-    # also, we already validated enrollment in the main query, don't need
-    # to validate again when saving new submission (especially not with
-    # what would amount to 4 more queries per record). also, don't touch
-    # the users per submission, we'll do them in bulk later
-    Submission.skip_callbacks(:validate_enrollment, :touch_user) do
+    # don't touch the user on each submission, we'll do them in bulk later
+    Submission.suspend_callbacks(:touch_user) do
       entries.each do |entry|
         # streamlined entry.discussiont_topic.ensure_submission(entry.user)
         assignment = Assignment.find_by_sql(<<-SQL).first
@@ -87,8 +82,8 @@ class EnsureSubmissionsForDiscussions < ActiveRecord::Migration
     end
 
     # touch all the courses and users
-    Course.update_all({:updated_at => Time.now.utc}, :id => touched_course_ids.to_a) unless touched_course_ids.empty?
-    User.update_all({:updated_at => Time.now.utc}, :id => touched_user_ids.to_a) unless touched_user_ids.empty?
+    Course.where(:id => touched_course_ids.to_a).update_all(:updated_at => Time.now.utc) unless touched_course_ids.empty?
+    User.where(:id => touched_user_ids.to_a).update_all(:updated_at => Time.now.utc) unless touched_user_ids.empty?
   end
 
   def self.down

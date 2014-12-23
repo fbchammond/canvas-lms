@@ -1,19 +1,26 @@
 <div class="submission_details_dialog">
   <h1 class="assignment-name">{{assignment.name}}</h1>
   <section class="submission-details">
-    <a class="more-details-link" target="_blank" href="{{speedGraderUrl}}">{{#t "more_details_in_the_speedgrader"}}More details in the SpeedGrader{{/t}}</a>
+    <form class="submission_details_grade_form form-inline">
+      <strong><label for="{{inputName}}">{{#t 'grade_form_label'}}Grade:{{/t}}</label></strong>
+      {{> grading_box}}
+      <button style="float: right;" class="btn" type="submit">{{#t "update_grade"}}Update Grade{{/t}}</button>
+    </form>
+    {{#if speedGraderUrl }}
+      <a class="more-details-link" target="_blank" href="{{speedGraderUrl}}">{{#t "more_details_in_the_speedgrader"}}More details in the SpeedGrader{{/t}}</a>
+    {{/if}}
     <div>
       <h2>
         {{#if moreThanOneSubmission}}
           <label for="submission_to_view">{{#t "this_was_submitted_multiple_times_choose_a_submission_to_view"}}Submitted multiple times, choose which to view:{{/t}}</label>
           <select id="submission_to_view">
             {{#each submission_history}}
-              <option>{{datetimeFormatted submitted_at}} {{#if submissionWasLate}} {{#t "late"}}LATE{{/t}} {{/if}}</option>
+              <option>{{datetimeFormatted submitted_at}} {{#if late}} {{#t "late"}}LATE{{/t}} {{/if}}</option>
             {{/each}}
           </select>
         {{else}}
           {{#if submitted_at}}
-            <strong>{{#t "submitted"}}Submitted:{{/t}} {{datetimeFormatted submitted_at}} {{#if submissionWasLate}} {{#t "late"}}LATE{{/t}} {{/if}}</strong>
+            <strong>{{#t "submitted"}}Submitted:{{/t}} {{datetimeFormatted submitted_at}} {{#if late}} {{#t "late"}}LATE{{/t}} {{/if}}</strong>
           {{/if}}
         {{/if}}
       </h2>
@@ -35,7 +42,7 @@
           {{#each submission_comments}}
             <article class="comment clearfix">
               {{friendlyDatetime created_at pubdate=true}}
-              <img class="photo" src="{{image_url}}" />
+              {{>avatar author}}
               <div class="middle">
                 <address class="vcard">
                   <a class="fn url" href="{{url}}">{{author_name}}</a>
@@ -63,10 +70,10 @@
     <textarea id="add_a_comment" name="comment[text_comment]"></textarea>
     {{#if assignment.group_category_id}}
     <span id="group-comment-container">
-      <input type="checkbox" id="group_comment" name="comment[group_comment]" />
+      {{checkbox "comment.group_comment" id="group_comment"}}
       <label for="group_comment">{{#t "labels.group_comment"}}Send Comment to the Whole Group{{/t}}</label>
     </span>
     {{/if}}
-    <button class="button" type="submit">{{#t "post_comment"}}Post Comment{{/t}}</button>
+    <button class="btn" type="submit">{{#t "post_comment"}}Post Comment{{/t}}</button>
   </form>
 </div>

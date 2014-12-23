@@ -17,31 +17,10 @@ define [
   'jquery.disableWhileLoading'
 ], (I18n, helpDialogTemplate, $, _, INST, htmlEscape, preventDefault) ->
 
-  showEmail = not ENV.current_user_id
-
   helpDialog =
-    defaultLinks: [
-      {
-        available_to: ['student']
-        text: I18n.t 'instructor_question', 'Ask Your Instructor a Question'
-        subtext: I18n.t 'instructor_question_sub', 'Questions are submitted to your instructor'
-        url: '#teacher_feedback'
-      },
-      {
-        available_to: ['user', 'student', 'teacher', 'admin']
-        text: I18n.t 'search_the_canvas_guides', 'Search the Canvas Guides'
-        subtext: I18n.t 'canvas_help_sub', 'Find answers to common questions'
-        url: 'http://guides.instructure.com'
-      },
-      {
-        available_to: ['user', 'student', 'teacher', 'admin']
-        text: I18n.t 'report_problem', 'Report a Problem'
-        subtext: I18n.t 'report_problem_sub', 'If Canvas misbehaves, tell us about it'
-        url: '#create_ticket'
-      }
-    ]
-
     defaultTitle: I18n.t 'Help', "Help"
+
+    showEmail: -> not ENV.current_user_id
 
     initDialog: ->
       @$dialog = $('<div style="padding:0; overflow: visible;" />').dialog
@@ -57,16 +36,17 @@ define [
 
       @helpLinksDfd = $.getJSON('/help_links').done (links) =>
         # only show the links that are available to the roles of this user
-        links = $.grep @defaultLinks.concat(links), (link) ->
+        links = $.grep links, (link) ->
           _.detect link.available_to, (role) ->
             role is 'user' or
             (ENV.current_user_roles and role in ENV.current_user_roles)
         locals =
-          showEmail: showEmail
+          showEmail: @showEmail()
           helpLinks: links
-          showBadBrowserMessage: INST.browser.ie
-          browserVersion: INST.browser.version
           url: window.location
+          contextAssetString: ENV.context_asset_string
+          userRoles: ENV.current_user_roles
+
 
         @$dialog.html(helpDialogTemplate locals)
         @initTicketForm()
@@ -77,9 +57,9 @@ define [
     initTicketForm: ->
       $form = @$dialog.find('#create_ticket').formSubmit
         disableWhileLoading: true
-        required: ->
+        required: =>
           requiredFields = ['error[subject]', 'error[comments]', 'error[user_perceived_severity]']
-          requiredFields.push 'error[email]' if showEmail
+          requiredFields.push 'error[email]' if @showEmail()
           requiredFields
         success: =>
           @$dialog.dialog('close')
@@ -88,8 +68,8 @@ define [
     switchTo: (panelId) ->
       toggleablePanels = "#teacher_feedback, #create_ticket"
       @$dialog.find(toggleablePanels).hide()
-
-      newHeight = @$dialog.find(panelId).show().outerHeight()
+      newPanel = @$dialog.find(panelId)
+      newHeight = newPanel.show().outerHeight()
       @$dialog.animate({
         left : if toggleablePanels.match(panelId) then -400 else 0
         height: newHeight
@@ -98,6 +78,8 @@ define [
           #reposition vertically to reflect current height
           @$dialog.dialog('option', 'position', 'center')
         duration: 100
+        complete: ->
+          newPanel.find(':input').not(':disabled').first().focus()
       })
 
       if newTitle = @$dialog.find("a[href='#{panelId}'] .text").text()

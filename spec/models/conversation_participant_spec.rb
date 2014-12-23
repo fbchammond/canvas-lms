@@ -16,13 +16,13 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper.rb')
 
 describe ConversationParticipant do
   it "should correctly set up conversations" do
     sender = user
     recipient = user
-    convo = sender.initiate_conversation([recipient.id])
+    convo = sender.initiate_conversation([recipient])
     convo.add_message('test')
 
     sender.conversations.should == [convo]
@@ -34,29 +34,40 @@ describe ConversationParticipant do
   it "should correctly manage messages" do
     sender = user
     recipient = user
-    convo = sender.initiate_conversation([recipient.id])
+    convo = sender.initiate_conversation([recipient])
     convo.add_message('test')
     convo.add_message('another')
     rconvo = recipient.conversations.first
     convo.messages.size.should == 2
     rconvo.messages.size.should == 2
 
-    convo.messages.delete(convo.messages.last)
+    convo.remove_messages(convo.messages.last)
     convo.messages.reload
     convo.messages.size.should == 1
-    # the recipient's messages are unaffected, since it's a has_many :through
+    convo.all_messages.size.should == 2
+    # the recipient's messages are unaffected, since removing a message
+    # only sets workflow state on the join table.
     rconvo.messages.size.should == 2
 
-    convo.messages.clear
+    convo.remove_messages(:all)
+    convo.messages.size.should == 0
+    convo.all_messages.size.should == 2
     rconvo.reload
     rconvo.messages.size.should == 2
+
+    convo.delete_messages(:all)
+    convo.all_messages.size.should == 0
+
+    rconvo.delete_messages(rconvo.messages.last)
+    rconvo.messages.size.should == 1
+    rconvo.all_messages.size.should == 1
   end
 
   it "should update the updated_at stamp of its user on workflow_state change" do
     sender       = user
     recipient    = user
     updated_at   = sender.updated_at
-    conversation = sender.initiate_conversation([recipient.id])
+    conversation = sender.initiate_conversation([recipient])
     conversation.update_attribute(:workflow_state, 'unread')
     sender.reload.updated_at.should_not eql updated_at
   end
@@ -64,7 +75,7 @@ describe ConversationParticipant do
   it "should support starred/starred=" do
     sender       = user
     recipient    = user
-    conversation = sender.initiate_conversation([recipient.id])
+    conversation = sender.initiate_conversation([recipient])
 
     conversation.starred = true
     conversation.save
@@ -80,7 +91,7 @@ describe ConversationParticipant do
   it "should support :starred in update_attributes" do
     sender       = user
     recipient    = user
-    conversation = sender.initiate_conversation([recipient.id])
+    conversation = sender.initiate_conversation([recipient])
 
     conversation.update_attributes(:starred => true)
     conversation.save
@@ -97,7 +108,7 @@ describe ConversationParticipant do
     def conversation_for(*tags_or_users)
       users, tags = tags_or_users.partition{ |u| u.is_a?(User) }
       users << user if users.empty?
-      c = @me.initiate_conversation(users.map(&:id))
+      c = @me.initiate_conversation(users)
       c.add_message("test")
       c.tags = tags
       c.save!
@@ -151,38 +162,51 @@ describe ConversationParticipant do
     it "should return conversations that match both the given course and user" do
       @me.conversations.tagged(@u1.asset_string, "course_1", :mode => :and).sort_by(&:id).should eql [@c8]
     end
+
+    context "sharding" do
+      specs_require_sharding
+
+      it "should find conversations for users on different shards" do
+        @shard1.activate do
+          @u3 = user
+          @c9 = conversation_for(@u3)
+        end
+        @me.conversations.tagged(@u3.asset_string).map(&:conversation).should == [@c9.conversation]
+      end
+    end
   end
 
   context "for_masquerading_user scope" do
-    before do
+    before :once do
       @a1 = Account.create
       @a2 = Account.create
       @a3 = Account.create
       @admin_user = user
-      @a1.add_user(@admin_user)
-      @a2.add_user(@admin_user)
-      @admin_user.associated_accounts << @a3 # in the account, but not an admin
+      @a1.account_users.create!(user: @admin_user)
+      @a2.account_users.create!(user: @admin_user)
+      @a3.pseudonyms.create!(:user => @admin_user, :unique_id => 'a3') # in the account, but not an admin
 
       @target_user = user
       # visible to @user
-      @c1 = @target_user.initiate_conversation([user.id])
+      @c1 = @target_user.initiate_conversation([user])
       @c1.add_message("hey man", :root_account_id => @a1.id)
-      @c2 = @target_user.initiate_conversation([user.id])
+      @c2 = @target_user.initiate_conversation([user])
       @c2.add_message("foo", :root_account_id => @a1.id)
       @c2.add_message("bar", :root_account_id => @a2.id)
       # invisible to @user, unless @user is a site admin
-      @c3 = @target_user.initiate_conversation([user.id])
+      @c3 = @target_user.initiate_conversation([user])
       @c3.add_message("secret", :root_account_id => @a3.id)
-      @c4 = @target_user.initiate_conversation([user.id])
+      @c4 = @target_user.initiate_conversation([user])
       @c4.add_message("super", :root_account_id => @a1.id)
       @c4.add_message("sekrit", :root_account_id => @a3.id)
     end
 
     it "should let site admins see everything" do
-      Account.site_admin.add_user(@admin_user)
+      Account.site_admin.account_users.create!(user: @admin_user)
+      Account.site_admin.stubs(:grants_right?).with(@admin_user, :become_user).returns(false)
       convos = @target_user.conversations.for_masquerading_user(@admin_user)
       convos.size.should eql 4
-      convos.should eql @target_user.conversations.to_a
+      convos.should == @target_user.conversations.to_a
     end
 
     it "should limit others to their associated root accounts" do
@@ -193,17 +217,17 @@ describe ConversationParticipant do
   end
 
   context "participants" do
-    before do
+    before :once do
       @me = course_with_student(:active_all => true).user
       @u1 = student_in_course(:active_all => true).user
       @u2 = student_in_course(:active_all => true).user
       @u3 = student_in_course(:active_all => true).user
-      @convo = @me.initiate_conversation([@u1.id, @u2.id, @u3.id])
+      @convo = @me.initiate_conversation([@u1, @u2, @u3])
       @convo.add_message "ohai"
       @u3.destroy
       @u4 = student_in_course(:active_all => true).user
 
-      other_convo = @u4.initiate_conversation([@me.id])
+      other_convo = @u4.initiate_conversation([@me])
       message = other_convo.add_message "just between you and me"
       @convo.add_message("haha i forwarded it", :forwarded_message_ids => [message.id])
     end
@@ -211,8 +235,8 @@ describe ConversationParticipant do
     it "should not include shared contexts by default" do
       users = @convo.reload.participants
       users.each do |user|
-        user.common_groups.should be_nil
-        user.common_courses.should be_nil
+        user.common_groups.should be_empty
+        user.common_courses.should be_empty
       end
     end
 
@@ -240,30 +264,30 @@ describe ConversationParticipant do
   end
 
   context "move_to_user" do
-    before do
+    before :once do
       @user1 = user_model
       @user2 = user_model
     end
 
     it "should move a group conversation to the new user" do
-      c = @user1.initiate_conversation([user.id, user.id])
+      c = @user1.initiate_conversation([user, user])
       c.add_message("hello")
       c.update_attribute(:workflow_state, 'unread')
 
       c.move_to_user @user2
 
       c.reload.user_id.should eql @user2.id
-      c.conversation.participant_ids.should_not include(@user1.id)
+      c.conversation.participants.map(&:id).should_not include(@user1.id)
       @user1.reload.unread_conversations_count.should eql 0
       @user2.reload.unread_conversations_count.should eql 1
     end
 
     it "should clean up group conversations having both users" do
-      c = @user1.initiate_conversation([@user2.id, user.id, user.id])
+      c = @user1.initiate_conversation([@user2, user, user])
       c.add_message("hello")
       c.update_attribute(:workflow_state, 'unread')
       rconvo = c.conversation
-      rconvo.participant_ids.size.should eql 4
+      rconvo.participants.size.should eql 4
 
       c.move_to_user @user2
 
@@ -271,14 +295,14 @@ describe ConversationParticipant do
 
       rconvo.reload
       rconvo.participants.size.should eql 3
-      rconvo.participant_ids.should_not include(@user1.id)
-      rconvo.participant_ids.should include(@user2.id)
+      rconvo.participants.map(&:id).should_not include(@user1.id)
+      rconvo.participants.map(&:id).should include(@user2.id)
       @user1.reload.unread_conversations_count.should eql 0
       @user2.reload.unread_conversations_count.should eql 1
     end
 
     it "should move a private conversation to the new user" do
-      c = @user1.initiate_conversation([user.id])
+      c = @user1.initiate_conversation([user])
       c.add_message("hello")
       c.update_attribute(:workflow_state, 'unread')
       rconvo = c.conversation
@@ -296,10 +320,10 @@ describe ConversationParticipant do
 
     it "should merge a private conversation into the existing private conversation" do
       other_guy = user
-      c = @user1.initiate_conversation([other_guy.id])
+      c = @user1.initiate_conversation([other_guy])
       c.add_message("hello")
       c.update_attribute(:workflow_state, 'unread')
-      c2 = @user2.initiate_conversation([other_guy.id])
+      c2 = @user2.initiate_conversation([other_guy])
       c2.add_message("hola")
 
       c.reload.move_to_user @user2
@@ -318,7 +342,7 @@ describe ConversationParticipant do
     end
 
     it "should change a private conversation between the two users into a monologue" do
-      c = @user1.initiate_conversation([@user2.id])
+      c = @user1.initiate_conversation([@user2])
       c.add_message("hello self")
       c.update_attribute(:workflow_state, 'unread')
       @user2.mark_all_conversations_as_read!
@@ -336,10 +360,10 @@ describe ConversationParticipant do
     end
 
     it "should merge a private conversations between the two users into the existing monologue" do
-      c = @user1.initiate_conversation([@user2.id])
+      c = @user1.initiate_conversation([@user2])
       c.add_message("hello self")
       c.update_attribute(:workflow_state, 'unread')
-      c2 = @user2.initiate_conversation([@user2.id])
+      c2 = @user2.initiate_conversation([@user2])
       c2.add_message("monologue!")
       @user2.mark_all_conversations_as_read!
 
@@ -358,10 +382,10 @@ describe ConversationParticipant do
     end
 
     it "should merge a monologue into the existing monologue" do
-      c = @user1.initiate_conversation([@user1.id])
+      c = @user1.initiate_conversation([@user1])
       c.add_message("monologue 1")
       c.update_attribute(:workflow_state, 'unread')
-      c2 = @user2.initiate_conversation([@user2.id])
+      c2 = @user2.initiate_conversation([@user2])
       c2.add_message("monologue 2")
 
       c.reload.move_to_user @user2
@@ -380,17 +404,17 @@ describe ConversationParticipant do
 
     it "should not be adversely affected by an outer scope" do
       other_guy = user
-      c = @user1.initiate_conversation([other_guy.id])
+      c = @user1.initiate_conversation([other_guy])
       c.add_message("hello")
       c.update_attribute(:workflow_state, 'unread')
-      c2 = @user2.initiate_conversation([other_guy.id])
+      c2 = @user2.initiate_conversation([other_guy])
       c2.add_message("hola")
 
       c.reload
       ConversationParticipant.send :with_scope, :find => {:conditions => ["user_id = ?", @user1.id]} do
         c.move_to_user @user2
       end
-  
+
       lambda{ c.reload }.should raise_error # deleted
       lambda{ Conversation.find(c.conversation_id) }.should raise_error # deleted
 
@@ -402,6 +426,29 @@ describe ConversationParticipant do
       @user1.reload.unread_conversations_count.should eql 0
       @user2.reload.unread_conversations_count.should eql 1
       other_guy.reload.unread_conversations_count.should eql 1
+    end
+  end
+
+  context "move_to_user with sharding" do
+    specs_require_sharding
+
+    before do
+      @user1 = user_model
+      @user2 = user_model
+    end
+
+    it "should be able to move to a user on a different shard" do
+      u1 = User.create!
+      cp = u1.initiate_conversation([u1])
+      @shard1.activate do
+        u2 = User.create!
+        cp.move_to_user(u2)
+        cp.reload
+        cp.user.should == u2
+        cp2 = u2.all_conversations.first
+        cp2.should_not == cp
+        cp2.shard.should == @shard1
+      end
     end
   end
 end

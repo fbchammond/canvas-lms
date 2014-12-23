@@ -22,15 +22,14 @@
 #   into proper dialog buttons (look at fixDialogButtons to see what it does)
 #   <div class="button-container">
 #     <button type="submit">This will Submit the form</button>
-#     <a class="button dialog_closer">This will cause the dialog to close</a>
+#     <a class="btn dialog_closer">This will cause the dialog to close</a>
 #   </div>
 # </form>
 
 define [
   'jquery'
-  'compiled/fn/preventDefault'
   'compiled/jquery/fixDialogButtons'
-], ($, preventDefault) ->
+], ($) ->
 
   updateTextToState = (newStateOfRegion) ->
     return ->
@@ -45,15 +44,19 @@ define [
       # update the element with the new text
       $this.html(newHtml)
 
-  toggleRegion = ($region, showRegion) ->
+  toggleRegion = ($region, showRegion, $trigger) ->
     showRegion ?= ($region.is(':ui-dialog:hidden') || ($region.attr('aria-expanded') != 'true'))
-    $allElementsControllingRegion = $(".element_toggler[aria-controls=#{$region.attr('id')}]")
+    $allElementsControllingRegion = $("[aria-controls*=#{$region.attr('id')}]")
 
     # hide/un-hide .element_toggler's that point to this $region that were hidden because they have
     # the data-hide-while-target-shown attribute
     $allElementsControllingRegion.filter(-> $(this).data('hideWhileTargetShown')).toggle !showRegion
 
-    $region.attr('aria-expanded', '' + showRegion).toggle showRegion
+    if $trigger and $trigger.attr('aria-expanded') isnt undefined
+      $trigger.attr('aria-expanded', !($trigger.attr('aria-expanded') is 'true'))
+      $region.toggle($trigger.attr('aria-expanded') is 'true')
+    else
+      $region.attr('aria-expanded', '' + showRegion).toggle showRegion
 
     # behavior if $region is a dialog
     if $region.is(':ui-dialog') || dialogOpts = $region.data('turnIntoDialog')
@@ -68,21 +71,35 @@ define [
 
       if showRegion
         $region.dialog('open')
+
+        if $region.data('read-on-open')
+          $region.dialog('widget')
+            .attr('aria-live', 'assertive')
+            .attr('aria-atomic', 'true')
+
       else if $region.dialog('isOpen')
         $region.dialog('close')
 
-    # move focus to the region if tabbable (to make anything tabbable, just give it a tabindex)
-    $region.focus() if showRegion && $region.is(':focusable')
-
     $allElementsControllingRegion.each updateTextToState( if showRegion then 'Shown' else 'Hidden' )
 
-  $(document).delegate '.element_toggler[aria-controls]', 'click', preventDefault ->
+  $(document).on 'click change keyclick', '.element_toggler[aria-controls]', (event) ->
     $this = $(this)
+
+    if $this.is('input[type="checkbox"]')
+      return if event.type is 'click'
+      force = $this.prop('checked')
+
+    event.preventDefault() if event.type is 'click'
 
     # allow .links inside .user_content to be elementTogglers, but only for other elements inside of
     # that .user_content area
     $parent = $this.closest('.user_content')
     $parent = $(document.body) unless $parent.length
 
-    $region = $parent.find("##{$this.attr('aria-controls')}")
-    toggleRegion($region) if $region.length
+    $region = $parent.find("##{$this.attr('aria-controls').replace(/\s/g, ', #')}")
+    toggleRegion($region, force, $this) if $region.length
+
+    $icon = $this.find('i[class*="icon-mini-arrow"].auto_rotate')
+    if $icon.length
+      $icon.toggleClass('icon-mini-arrow-down')
+      $icon.toggleClass('icon-mini-arrow-right')

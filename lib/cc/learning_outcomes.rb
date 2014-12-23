@@ -18,11 +18,10 @@
 module CC
   module LearningOutcomes
     def create_learning_outcomes(document=nil)
-      return nil unless LearningOutcome.active.find_all_by_context_id_and_context_type(@course.id, 'Course').count > 0
-      return nil unless @course.learning_outcome_groups.find_by_learning_outcome_group_id(nil)
+      return nil unless @course.has_outcomes?
+      root_group = @course.root_outcome_group(false)
+      return nil unless root_group
 
-      root_group = @course.learning_outcome_groups.find_by_learning_outcome_group_id(nil)
-      
       if document
         outcomes_file = nil
         rel_path = nil
@@ -57,22 +56,41 @@ module CC
     end
 
     def process_outcome_group_content(node, group)
-      group.sorted_content.each do |item|
-        if item.is_a? LearningOutcome
-          next unless export_object?(item)
-          process_learning_outcome(node, item)
-        else
-          next unless export_object?(item) || item.sorted_content.any?{|i| export_object?(i)}
-          process_outcome_group(node, item)
-        end
+      group.child_outcome_groups.active.each do |item|
+        next unless export_object?(item, 'learning_outcomes') || export_object?(item, 'learning_outcome_groups')
+        process_outcome_group(node, item)
+      end
+      group.child_outcome_links.active.each do |item|
+        item = item.content
+        next unless export_object?(item, 'learning_outcomes')
+        process_learning_outcome(node, item, group)
       end
     end
-
-    def process_learning_outcome(node, item)
+    
+    def process_learning_outcome(node, item, group)
       migration_id = CCHelper.create_key(item)
       node.learningOutcome(:identifier=>migration_id) do |out_node|
         out_node.title item.short_description unless item.short_description.blank?
         out_node.description @html_exporter.html_content(item.description) unless item.description.blank?
+        if item.context != @course
+          out_node.is_global_outcome !item.context
+          out_node.external_identifier item.id
+        end
+
+        if item.alignments.exists?
+          out_node.alignments do |alignments_node|
+            item.alignments.each do |alignment|
+              alignments_node.alignment do |alignment_node|
+                alignment_node.content_type alignment.content_type
+                alignment_node.content_id CCHelper.create_key(alignment.content)
+                alignment_node.mastery_type alignment.tag
+                alignment_node.mastery_score alignment.mastery_score
+                alignment_node.position alignment.position
+              end
+            end
+          end
+        end
+
         if item.data && criterion = item.data[:rubric_criterion]
           out_node.points_possible criterion[:points_possible] if criterion[:points_possible]
           out_node.mastery_points criterion[:mastery_points] if criterion[:mastery_points]

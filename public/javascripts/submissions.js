@@ -17,16 +17,19 @@
  */
 
 define([
+  'compiled/util/round',
   'i18n!submissions',
   'jquery',
-  'jquery.ajaxJSON' /* ajaxJSONFiles, ajaxJSON */,
-  'jquery.instructure_date_and_time' /* parseFromISO */,
+  'jquery.ajaxJSON' /* ajaxJSON */,
+  'jquery.instructure_forms' /* ajaxJSONFiles */,
+  'jquery.instructure_date_and_time' /* datetimeString */,
   'jquery.instructure_misc_plugins' /* fragmentChange, showIf */,
   'jquery.loadingImg' /* loadingImg, loadingImage */,
   'jquery.templateData' /* fillTemplateData, getTemplateData */,
-  'media_comments' /* mediaComment, mediaCommentThumbnail */,
+  'media_comments' /* mediaComment */,
+  'compiled/jquery/mediaCommentThumbnail',
   'vendor/jquery.scrollTo' /* /\.scrollTo/ */
-], function(I18n, $) {
+], function(round, I18n, $) {
 
   $("#content").addClass('padless');
   var fileIndex = 1;
@@ -45,7 +48,7 @@ define([
         var comment = comments[idx].submission_comment;
         if($("#submission_comment_" + comment.id).length > 0) { continue; }
         var $comment = $("#comment_blank").clone(true).removeAttr('id');
-        comment.posted_at = $.parseFromISO(comment.created_at).datetime_formatted;
+        comment.posted_at = $.datetimeString(comment.created_at);
         $comment.fillTemplateData({
           data: comment,
           id: 'submission_comment_' + comment.id
@@ -71,6 +74,7 @@ define([
         $(".comments .comment_list").append($comment.show()).scrollTop(10000);
       }
       $(".comments .comment_list .play_comment_link").mediaCommentThumbnail('small');
+      $(".save_comment_button").attr('disabled',null);
       if(submission) {
         showGrade(submission);
         $(".submission_details").fillTemplateData({
@@ -84,8 +88,8 @@ define([
   }
   var showGrade = function(submission) {
     $(".grading_box").val(submission.grade != undefined && submission.grade !== null ? submission.grade : "");
-    $(".score").text(submission.score != undefined && submission.score !== null ? submission.score : "");
-    $(".published_score").text(submission.published_score != undefined && submission.published_score !== null ? submission.published_score : "");
+    $(".score").text(submission.score != undefined && submission.score !== null ? round(submission.score, round.DEFAULT) : "");
+    $(".published_score").text(submission.published_score != undefined && submission.published_score !== null ? round(submission.published_score, round.DEFAULT) : "");
   }
   $(document).ready(function() {
     $(".comments .comment_list .play_comment_link").mediaCommentThumbnail('small');
@@ -115,7 +119,7 @@ define([
       $(document).triggerHandler('grading_change');
     });
     $(document).bind('grading_change', function(event) {
-//    $(".grading_value,.grading_comment").bind('change', function(event) {
+      $(".save_comment_button").attr('disabled','disabled');
       $(".submission_header").loadingImage();
       var url = $(".update_submission_url").attr('href');
       var method = $(".update_submission_url").attr('title');
@@ -183,6 +187,9 @@ define([
           }
         }
         if(!found) {
+          if (!data.rubric_assessment) {
+            data = { rubric_assessment: data };
+          }
           rubricAssessments.push(data);
           var $option = $(document.createElement('option'));
           $option.val(assessment.id).text(assessment.assessor_name).attr('id', 'rubric_assessment_option_' + assessment.id);
@@ -202,12 +209,16 @@ define([
     $("#rubric_holder .rubric").css('width', 'auto').css('marginTop', 0);
     $(".hide_rubric_link").click(function(event) {
       event.preventDefault();
-      $("#rubric_holder").fadeOut();
+      $("#rubric_holder").fadeOut(function() {
+        $(".assess_submission_link").focus();
+      });
     });
     $(".assess_submission_link").click(function(event) {
       event.preventDefault();
       $("#rubric_assessments_select").change();
-      $("#rubric_holder").fadeIn();
+      $("#rubric_holder").fadeIn(function() {
+        $(this).find('.hide_rubric_link').focus();
+      });
     });
     $("#rubric_assessments_select").change(function() {
       var id = $(this).val();
@@ -248,7 +259,7 @@ define([
         event.preventDefault();
         var comment_id = $(this).parents(".comment_media").getTemplateData({textValues: ['media_comment_id']}).media_comment_id;
         if(comment_id) {
-          $(this).parents(".comment_media").find(".media_comment_content").mediaComment('show', comment_id, 'audio');
+          $(this).parents(".comment_media").find(".media_comment_content").mediaComment('show', comment_id, 'video');
         }
       })
 

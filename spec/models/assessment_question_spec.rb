@@ -19,16 +19,40 @@
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 
 describe AssessmentQuestion do
+
+  before :once do
+    course
+    @bank = @course.assessment_question_banks.create!(:title=>'Test Bank')
+  end
+
+  def attachment_in_course(course)
+    Attachment.create!(
+      :filename => 'test.jpg',
+      :display_name => "test.jpg",
+      :uploaded_data => StringIO.new('psych!'),
+      :folder => Folder.unfiled_folder(course),
+      :context => course
+    )
+  end
   
   it "should create a new instance given valid attributes" do
-    assessment_question_model
+    assessment_question_model(bank: AssessmentQuestionBank.create!(context: Course.create!))
+  end
+
+  it "should infer_defaults from question_data before validation" do
+    @question = assessment_question_model(bank: AssessmentQuestionBank.create!(context: Course.create!))
+    @question.name = "1" * 300
+    @question.save(validate: false)
+    @question.name.length.should == 300
+
+    @question.question_data[:question_name] = "valid name"
+    @question.save!
+    @question.should be_valid
+    @question.name.should == @question.question_data[:question_name]
   end
 
   it "should translate links to be readable when creating the assessment question" do
-    course
-    @bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
-
-    @attachment = attachment_with_context(@course)
+    @attachment = attachment_in_course(@course)
     data = {'name' => "Hi", 'question_text' => "Translate this: <img src='/courses/#{@course.id}/files/#{@attachment.id}/download'>", 'answers' => [{'id' => 1}, {'id' => 2}]}
     @question = @bank.assessment_questions.create!(:question_data => data)
 
@@ -39,10 +63,7 @@ describe AssessmentQuestion do
   end
 
   it "should translate links relative path url" do
-    course
-    @bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
-
-    @attachment = Attachment.create!(:filename => 'test.jpg', :display_name => "test.jpg", :uploaded_data => StringIO.new('psych!'), :folder => Folder.unfiled_folder(@course), :context => @course)
+    @attachment = attachment_in_course(@course)
     data = {'name' => "Hi", 'question_text' => "Translate this: <img src='/courses/#{@course.id}/file_contents/course%20files/unfiled/test.jpg'>", 'answers' => [{'id' => 1}, {'id' => 2}]}
     @question = @bank.assessment_questions.create!(:question_data => data)
 
@@ -53,11 +74,7 @@ describe AssessmentQuestion do
   end
 
   it "should handle existing query string parameters" do
-    course
-    @bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
-
-    @attachment = attachment_with_context(@course)
-    @attachment = Attachment.create!(:filename => 'test.jpg', :display_name => "test.jpg", :uploaded_data => StringIO.new('psych!'), :folder => Folder.unfiled_folder(@course), :context => @course)
+    @attachment = attachment_in_course(@course)
     data = {'name' => "Hi",
             'question_text' => "Translate this: <img src='/courses/#{@course.id}/files/#{@attachment.id}/download?wrap=1'> and this: <img src='/courses/#{@course.id}/file_contents/course%20files/unfiled/test.jpg?wrap=1'>",
             'answers' => [{'id' => 1}, {'id' => 2}]}
@@ -70,26 +87,18 @@ describe AssessmentQuestion do
   end
 
   it "should translate multiple links in same body" do
-    course
-    @bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
+    @attachment = attachment_in_course(@course)
 
-    @attachment = attachment_with_context(@course)
-    @attachment2 = @attachment = Attachment.create!(:filename => 'test.jpg', :display_name => "test.jpg", :uploaded_data => StringIO.new('psych!'), :folder => Folder.unfiled_folder(@course), :context => @course)
     data = {'name' => "Hi", 'question_text' => "Translate this: <img src='/courses/#{@course.id}/files/#{@attachment.id}/download'> and this: <img src='/courses/#{@course.id}/file_contents/course%20files/unfiled/test.jpg'>", 'answers' => [{'id' => 1}, {'id' => 2}]}
     @question = @bank.assessment_questions.create!(:question_data => data)
 
     @attachment.reload.cloned_item.attachments.length.should == 2
     @clone = @attachment.cloned_item.attachments.last
-    @attachment2.reload.cloned_item.attachments.length.should == 2
-    @clone2 = @attachment2.cloned_item.attachments.last
 
-    @question.reload.question_data['question_text'].should == "Translate this: <img src='/assessment_questions/#{@question.id}/files/#{@clone.id}/download?verifier=#{@clone.uuid}'> and this: <img src='/assessment_questions/#{@question.id}/files/#{@clone2.id}/download?verifier=#{@clone2.uuid}'>"
+    @question.reload.question_data['question_text'].should == "Translate this: <img src='/assessment_questions/#{@question.id}/files/#{@clone.id}/download?verifier=#{@clone.uuid}'> and this: <img src='/assessment_questions/#{@question.id}/files/#{@clone.id}/download?verifier=#{@clone.uuid}'>"
   end
 
   it "should translate links to be readable w/ verifier" do
-    course
-    @bank = @course.assessment_question_banks.create!(:title=>'Test Bank')
-
     @attachments = {}
     attachment_tag = lambda {|key|
       @attachments[key] ||= []
@@ -144,7 +153,6 @@ describe AssessmentQuestion do
   end
   
   it "should not drop non-string/array/hash data types when translate links" do
-    course
     bank = @course.assessment_question_banks.create!(:title=>'Test Bank')
     
     data = {
@@ -172,9 +180,6 @@ describe AssessmentQuestion do
   end
   
   it "should always return a HashWithIndifferentAccess and allow editing" do
-    course
-    bank = @course.assessment_question_banks.create!(:title=>'Test Bank')
-    
     data = {
             :name => 'mc question',
             :question_type => 'multiple_choice_question',
@@ -185,7 +190,7 @@ describe AssessmentQuestion do
             }
     }
 
-    question = bank.assessment_questions.create!(:question_data => data)
+    question = @bank.assessment_questions.create!(:question_data => data)
     question.question_data.class.should == HashWithIndifferentAccess
     
     question.question_data = data

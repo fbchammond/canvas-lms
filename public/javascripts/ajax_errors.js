@@ -20,8 +20,7 @@ define([
   'i18n!ajax_errors',
   'jquery', // $
   'str/htmlEscape',
-  'jquery.ajaxJSON', // ajaxJSON
-  'jquery.instructure_forms', // defaultAjaxError
+  'jquery.ajaxJSON', // ajaxJSON, defaultAjaxError
   'compiled/jquery.rails_flash_notifications', // flashError
   'jqueryui/effects/drop'
 ], function(INST, I18n, $, htmlEscape) {
@@ -46,13 +45,14 @@ define([
     }
     var txt = "?";
     params.url = params.url || location.href;
+    params.backtrace = params.backtrace || params.url;
     params.platform = params.platform || navigator.platform;
     params.action = params.action || location.href;
     params.user_name = username;
     params.user_agent = navigator.userAgent;
     params.parentPage = window.location;
     for(var idx in params) {
-      txt = txt + 'error[' + idx + "]=" + escape(params[idx]) + "&";
+      txt = txt + 'error[' + idx + "]=" + encodeURIComponent(params[idx]) + "&";
     }
     INST.errorCount += 1;
     
@@ -64,7 +64,7 @@ define([
     img.style.top= 0;
     document.body.appendChild(img);
   }
-  window.onerror = function (msg, url, line) {
+  window.onerror = function (msg, url, line, column, errorObj) {
     // these are errors that the actionScript in scrbd creates.
     var ignoredErrors = ["webkitSafeEl", "NPMethod called on non-NPObject wrapped JSObject!"];
     for(var idx in ignoredErrors) {
@@ -79,7 +79,8 @@ define([
       return true;
     }
 
-    INST.log_error({ message: msg, line: line, url: url });
+    var backtrace = errorObj && errorObj.stack;
+    INST.log_error({ message: msg, url: url, line: line, column: column, backtrace: backtrace});
     if(INST.environment == "production") {
       return true;
     }

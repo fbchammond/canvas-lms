@@ -20,13 +20,25 @@ class ExternalFeed < ActiveRecord::Base
   attr_accessible :url, :verbosity, :header_match
   belongs_to :user
   belongs_to :context, :polymorphic => true
+  validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course', 'Group']
   has_many :external_feed_entries, :dependent => :destroy
-  
-  before_save :infer_defaults
-  
+
+  before_validation :infer_defaults
+
+  include CustomValidations
+  validates_presence_of :url, :context_id, :context_type
+  validates_as_url :url
+
+  VERBOSITIES = %w(full link_only truncate)
+  validates_inclusion_of :verbosity, :in => VERBOSITIES, :allow_nil => true
+
   def infer_defaults
     self.consecutive_failures ||= 0
     self.refresh_at ||= Time.now.utc
+    unless VERBOSITIES.include?(self.verbosity)
+      self.verbosity = "full"
+    end
+    true
   end
   protected :infer_defaults
   
@@ -35,15 +47,17 @@ class ExternalFeed < ActiveRecord::Base
     res = self.title || (short ? t(:short_feed_title, "%{short_url} feed", :short_url => short_url) : self.url )
     
   end
+
+  def header_match=(str)
+    write_attribute(:header_match, str.to_s.strip.presence)
+  end
   
-  named_scope :to_be_polled, lambda {
-    { :conditions => ['external_feeds.consecutive_failures < ? and external_feeds.refresh_at < ?', 5, Time.now ], :order => :refresh_at }
+  scope :to_be_polled, -> {
+    where("external_feeds.consecutive_failures<5 AND external_feeds.refresh_at<?", Time.now.utc).order(:refresh_at)
   }
   
-  named_scope :for, lambda {|obj|
-    { :conditions => ['external_feeds.feed_purpose = ?', obj] }
-  }
-  
+  scope :for, lambda { |obj| where(:feed_purpose => obj) }
+
   def add_rss_entries(rss)
     items = rss.items.map{|item| add_entry(item, rss, :rss) }.compact
     self.context.add_aggregate_entries(items, self) if self.context && self.context.respond_to?(:add_aggregate_entries)
@@ -83,7 +97,7 @@ class ExternalFeed < ActiveRecord::Base
       entry ||= self.external_feed_entries.find_by_url(item.link)
       description = entry && entry.message
       if !description || description.empty?
-        description = "<a href='#{item.link}'>#{t :original_article, "Original article"}</a><br/><br/>"
+        description = "<a href='#{ERB::Util.h(item.link)}'>#{ERB::Util.h(t(:original_article, "Original article"))}</a><br/><br/>"
         description += format_description(item.description || item.title)
       end
       if entry
@@ -95,10 +109,9 @@ class ExternalFeed < ActiveRecord::Base
         return entry
       end
       date = (item.respond_to?(:date) && item.date) || Time.zone.today
-      return nil if self.header_match && !item.title.match(Regexp.new(self.header_match, true))
-      return nil if self.body_match && !item.description.match(Regexp.new(self.body_match, true))
+      return nil if self.header_match && !item.title.downcase.include?(self.header_match.downcase)
       return nil if (date && self.created_at > date rescue false)
-      description = "<a href='#{item.link}'>#{t :original_article, "Original article"}</a><br/><br/>"
+      description = "<a href='#{ERB::Util.h(item.link)}'>#{ERB::Util.h(t(:original_article, "Original article"))}</a><br/><br/>"
       description += format_description(item.description || item.title)
       entry = self.external_feed_entries.create(
         :title => item.title,
@@ -116,7 +129,7 @@ class ExternalFeed < ActiveRecord::Base
       entry ||= self.external_feed_entries.find_by_url(item.links.alternate.to_s)
       description = entry && entry.message
       if !description || description.empty?
-        description = "<a href='#{item.links.alternate.to_s}'>#{t :original_article, "Original article"}</a><br/><br/>"
+        description = "<a href='#{ERB::Util.h(item.links.alternate.to_s)}'>#{ERB::Util.h(t(:original_article, "Original article"))}</a><br/><br/>"
         description += format_description(item.content || item.title)
       end
       if entry
@@ -130,11 +143,10 @@ class ExternalFeed < ActiveRecord::Base
         )
         return entry
       end
-      return nil if self.header_match && !item.title.match(Regexp.new(self.header_match, true))
-      return nil if self.body_match && !item.content.match(Regexp.new(self.body_match, true))
+      return nil if self.header_match && !item.title.downcase.include?(self.header_match.downcase)
       return nil if (item.published && self.created_at > item.published rescue false)
       author = item.authors.first || OpenObject.new
-      description = "<a href='#{item.links.alternate.to_s}'>#{t :original_article, "Original article"}</a><br/><br/>"
+      description = "<a href='#{ERB::Util.h(item.links.alternate.to_s)}'>#{ERB::Util.h(t(:original_article, "Original article"))}</a><br/><br/>"
       description += format_description(item.content || item.title)
       entry = self.external_feed_entries.create(
         :title => item.title,
@@ -154,7 +166,7 @@ class ExternalFeed < ActiveRecord::Base
       entry ||= self.external_feed_entries.find_by_title_and_url(item.summary, item.url)
       description = entry && entry.message
       if !description || description.empty?
-        description = "<a href='#{item.url}'>#{t :original_article, "Original article"}</a><br/><br/>"
+        description = "<a href='#{ERB::Util.h(item.url)}'>#{ERB::Util.h(t(:original_article, "Original article"))}</a><br/><br/>"
         description += (item.description || item.summary).to_s
       end
       if entry
@@ -169,7 +181,7 @@ class ExternalFeed < ActiveRecord::Base
         return entry
       end
       description = (item.description || item.summary).to_s
-      description += "<br/><br/><a href='#{item.url}'>#{item.url}</a>"
+      description += "<br/><br/><a href='#{ERB::Util.h(item.url)}'>#{ERB::Util.h(item.url)}</a>"
       entry = self.external_feed_entries.create(
         :title => item.summary,
         :message => description,
@@ -182,37 +194,5 @@ class ExternalFeed < ActiveRecord::Base
         :user => self.user
       )
     end
-  end
-  
-  def self.process_migration(data, migration)
-    tools = data['external_feeds'] ? data['external_feeds']: []
-    to_import = migration.to_import 'external_feeds'
-    tools.each do |tool|
-      if tool['migration_id'] && (!to_import || to_import[tool['migration_id']])
-        begin
-          import_from_migration(tool, migration.context)
-        rescue
-          migration.add_warning("Couldn't import external feed \"#{tool[:title]}\"", $!)
-        end
-      end
-    end
-  end
-  
-  def self.import_from_migration(hash, context, item=nil)
-    hash = hash.with_indifferent_access
-    return nil if hash[:migration_id] && hash[:external_feeds_to_import] && !hash[:external_feeds_to_import][hash[:migration_id]]
-    item ||= find_by_context_id_and_context_type_and_migration_id(context.id, context.class.to_s, hash[:migration_id]) if hash[:migration_id]
-    item ||= context.external_feeds.new
-    item.migration_id = hash[:migration_id]
-    item.url = hash[:url]
-    item.title = hash[:title]
-    item.feed_type = hash[:feed_type]
-    item.feed_purpose = hash[:purpose]
-    item.verbosity = hash[:verbosity]
-    item.header_match = hash[:header_match] unless hash[:header_match].blank?
-    
-    item.save!
-    context.imported_migration_items << item if context.imported_migration_items && item.new_record?
-    item
   end
 end

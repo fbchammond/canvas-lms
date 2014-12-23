@@ -1,10 +1,11 @@
-require File.dirname(__FILE__) + '/cc_spec_helper'
+# encoding: utf-8
+require File.expand_path(File.dirname(__FILE__) + '/cc_spec_helper')
 
 describe CC::CCHelper do
   describe CC::CCHelper::HtmlContentExporter do
     before do
-      @kaltura = mock('Kaltura::ClientV3')
-      Kaltura::ClientV3.stubs(:new).returns(@kaltura)
+      @kaltura = mock('CanvasKaltura::ClientV3')
+      CanvasKaltura::ClientV3.stubs(:new).returns(@kaltura)
       @kaltura.stubs(:startSession)
       @kaltura.stubs(:flavorAssetGetByEntryId).with('abcde').returns([
       {
@@ -66,12 +67,21 @@ describe CC::CCHelper do
       translated.should == html
     end
 
+    it "should find media objects outside the context (because course copy)" do
+      other_course = course
+      @exporter = CC::CCHelper::HtmlContentExporter.new(other_course, @user)
+      @exporter.html_content(<<-HTML)
+      <p><a id='media_comment_abcde' class='instructure_inline_media_comment'>this is a media comment</a></p>
+      HTML
+      @exporter.used_media_objects.map(&:media_id).should eql(['abcde'])
+    end
+
     it "should export html with a utf-8 charset" do
       @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user)
       html = %{<div>My Title\302\240</div>}
       exported = @exporter.html_page(html, "my title page")
       doc = Nokogiri::HTML(exported)
-      doc.encoding.should == 'utf-8'
+      doc.encoding.upcase.should == 'UTF-8'
       doc.at_css('html body div').to_s.should == "<div>My Title\302\240</div>"
     end
 
@@ -89,6 +99,47 @@ describe CC::CCHelper do
       html = %{<a href="/courses/#{@course.id}/files">File page index</a>}
       translated = @exporter.html_content(html)
       translated.should match %r{\$CANVAS_COURSE_REFERENCE\$/files}
+    end
+
+    it "should prepend the domain to links outside the course" do
+      HostUrl.stubs(:protocol).returns('http')
+      HostUrl.stubs(:context_host).returns('www.example.com:8080')
+      @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user, :for_course_copy => false)
+      @othercourse = Course.create!
+      html = <<-HTML
+        <a href="/courses/#{@course.id}/wiki/front-page">This course's front page</a>
+        <a href="/courses/#{@othercourse.id}/wiki/front-page">Other course's front page</a>
+      HTML
+      doc = Nokogiri::HTML.parse(@exporter.html_content(html))
+      urls = doc.css('a').map{ |attr| attr[:href] }
+      urls[0].should == "%24WIKI_REFERENCE%24/wiki/front-page"
+      urls[1].should == "http://www.example.com:8080/courses/#{@othercourse.id}/wiki/front-page"
+    end
+
+    it "should copy pages correctly when the title starts with a number" do
+      HostUrl.stubs(:protocol).returns('http')
+      HostUrl.stubs(:context_host).returns('www.example.com:8080')
+      @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user, :for_course_copy => false)
+      page = @course.wiki.wiki_pages.create(:title => '9000, the level is over')
+      html = <<-HTML
+        <a href="/courses/#{@course.id}/wiki/#{page.url}">This course's wiki page</a>
+      HTML
+      doc = Nokogiri::HTML.parse(@exporter.html_content(html))
+      urls = doc.css('a').map{ |attr| attr[:href] }
+      urls[0].should == "%24WIKI_REFERENCE%24/wiki/#{page.url}"
+    end
+
+    it "should copy pages correctly when the title consists only of a number" do
+      HostUrl.stubs(:protocol).returns('http')
+      HostUrl.stubs(:context_host).returns('www.example.com:8080')
+      @exporter = CC::CCHelper::HtmlContentExporter.new(@course, @user, :for_course_copy => false)
+      page = @course.wiki.wiki_pages.create(:title => '9000')
+      html = <<-HTML
+        <a href="/courses/#{@course.id}/wiki/#{page.url}">This course's wiki page</a>
+      HTML
+      doc = Nokogiri::HTML.parse(@exporter.html_content(html))
+      urls = doc.css('a').map{ |attr| attr[:href] }
+      urls[0].should == "%24WIKI_REFERENCE%24/wiki/#{page.url}"
     end
   end
 end

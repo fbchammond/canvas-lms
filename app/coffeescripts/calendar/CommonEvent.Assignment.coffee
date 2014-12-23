@@ -1,9 +1,10 @@
 define [
-  'i18n!calendar',
+  'i18n!calendar'
+  'jquery'
   'compiled/calendar/CommonEvent'
   'jquery.instructure_date_and_time'
   'jquery.instructure_misc_helpers'
-], (I18n, CommonEvent) ->
+], (I18n, $, CommonEvent) ->
 
   deleteConfirmation = I18n.t('prompts.delete_assignment', "Are you sure you want to delete this assignment?")
 
@@ -15,40 +16,42 @@ define [
       @deleteURL = contextInfo.assignment_url
       @addClass 'assignment'
 
-      @copyDataFromObject(data)
-
     copyDataFromObject: (data) =>
       data = data.assignment if data.assignment
       @object = @assignment = data
-      @id = "assignment_#{data.id}"
+      @id = "assignment_#{data.id}" if data.id
       @title = data.title || data.name  || "Untitled" # due to a discrepancy between the legacy ajax API and the v1 API
       @lock_explanation = @object.lock_explanation
       @addClass "group_#{@contextCode()}"
-
-      @start = if data.due_at then $.parseFromISO(data.due_at, "due_date").time else null
-      if @isDueAtMidnight()
-        @midnightFudged = true
-        @start.setMinutes(30)
-
       @description = data.description
+      @start = @parseStartDate()
+      @end = null # in case it got set by midnight fudging
+
+      super
 
     fullDetailsURL: () ->
-      $.replaceTags(@contextInfo.assignment_url, 'id', @assignment.id)
+      @assignment.html_url
 
-    startDate: () ->
-      if @assignment.due_at then $.parseFromISO(@assignment.due_at, 'due_date').time else null
+    parseStartDate: () ->
+      if @assignment.due_at then $.fudgeDateForProfileTimezone(@assignment.due_at) else null
 
     displayTimeString: () ->
-      if !@assignment.due_at
+      unless datetime = @originalStart
         return "No Date" # TODO: i18n
 
-      date = $.parseFromISO @assignment.due_at, 'due_date'
       # TODO: i18n
-      time_string = "#{$.dateString(date.date)} at #{date.time_string}"
-      "Due: <time datetime='#{date.time.toISOString()}'>#{time_string}</time>"
+      datetime = $.unfudgeDateForProfileTimezone(datetime)
+      "Due: <time datetime='#{datetime.toISOString()}'>#{$.datetimeString(datetime)}</time>"
+
+    readableType: () ->
+      @readableTypes[@assignmentType()]
 
     saveDates: (success, error) =>
-      @save { 'assignment[due_at]': $.dateToISO8601UTC($.unfudgeDateForProfileTimezone(@start)) }, success, error
+      @save { 'assignment[due_at]': if @start then $.unfudgeDateForProfileTimezone(@start).toISOString() else '' }, success, error
+
+    save: (params, success, error) =>
+      $.publish('CommonEvent/assignmentSaved', this)
+      super(params, success, error)
 
     methodAndURLForSave: () ->
       if @isNewEvent()
@@ -58,6 +61,3 @@ define [
         method = 'PUT'
         url = $.replaceTags(@contextInfo.assignment_url, 'id', @assignment.id)
       [ method, url ]
-
-    isDueAtMidnight: () ->
-      @midnightFudged || @start && @start.getHours() == 23 && @start.getMinutes() == 59

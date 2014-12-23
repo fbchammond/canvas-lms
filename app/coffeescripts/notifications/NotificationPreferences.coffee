@@ -10,6 +10,7 @@ define [
   'jquery.disableWhileLoading'
   'jquery.ajaxJSON'
   'compiled/jquery.rails_flash_notifications'
+  'jqueryui/tooltip'
 ], (I18n, $, _, userSettings, NotificationGroupMappings, notificationPreferencesTemplate, policyCellTemplate) ->
 
   class NotificationPreferences
@@ -18,37 +19,39 @@ define [
       # Define the buttons for display. The 'code' must match up to the Notification::FREQ_* constants.
       @buttonData = [
         code: 'immediately'
-        image: 'ui-icon-check'
+        icon: 'icon-check'
         text: I18n.t('frequencies.immediately', 'ASAP')
         title: I18n.t('frequencies.title.right_away', 'Notify me right away')
       ,
         code: 'daily'
-        image: 'ui-icon-clock'
+        icon: 'icon-clock'
         text: I18n.t('frequencies.daily', 'Daily')
         title: I18n.t('frequencies.title.daily', 'Send daily summary')
       ,
         code: 'weekly'
-        image: 'ui-icon-calendar'
+        icon: 'icon-calendar-month'
         text: I18n.t('frequencies.weekly', 'Weekly')
         title: I18n.t('frequencies.title.weekly', 'Send weekly summary')
       ,
         code: 'never'
-        image: 'ui-icon-close'
+        icon: 'icon-x'
         text: I18n.t('frequencies.never', 'Never')
         title: I18n.t('frequencies.title.never', 'Do not send me anything')
       ]
+
+      @limitedButtonData = [_.first(@buttonData), _.last(@buttonData)]
 
       @updateUrl  = @options.update_url
       @channels   = @options.channels || []
       @categories = @options.categories || []
       @policies   = @options.policies || []
-      @touch      = @options.touch == true
 
       # Give each channel a 'name'
       for c in @channels
         c.name = switch c.type
           when 'email' then I18n.t('communication.email.display', 'Email Address')
           when 'sms' then I18n.t('communication.sms.display', 'Cell Number')
+          when 'push' then I18n.t('communication.push.display', 'Push Notification')
           when 'twitter' then I18n.t('communication.twitter.display', 'Twitter')
           when 'facebook' then I18n.t('communication.facebook.display', 'Facebook')
       # Setup the mappings
@@ -83,10 +86,10 @@ define [
     buildPolicyCellsHtml: (category) =>
       fragments = for c in @channels
         policy = _.find @policies, (p) ->
-          p.channel_id is c.id and p.category is category.category
+          p.communication_channel_id is c.id and p.category is category.category
         frequency = 'never'
         frequency = policy['frequency'] if policy
-        @policyCellHtml(category, c.id, frequency)
+        @policyCellHtml(category, c, frequency)
       fragments.join ''
 
     hideButtonsExceptCell: ($notCell) =>
@@ -147,24 +150,44 @@ define [
     # Build the HTML notifications table.
     buildTable: =>
       $('#notification-preferences').append(notificationPreferencesTemplate(
-        touch: @touch,
+        touch: INST.browser.touch,
         channels: @channels,
         eventGroups: @communicationEventGroups()
         ))
+      # Display Bootstrap-like popover tooltip on category names. Allow entire cell to trigger popup.
+      $('#notification-preferences .category-name.show-popover').tooltip(
+          position:
+            my: "left center"
+            at: "right+20 center"
+            collision: 'none none'
+          ,
+          tooltipClass: 'popover left middle horizontal'
+      )
+      # set min-width on row <th /> cells
+      $('tbody th[scope=row]').css('min-width', $('h3.group-name').width())
+
       @setupEventBindings()
+      null
 
     # Generate and return the HTML for an option cell with the with the sepecified value set/reflected.
-    policyCellHtml: (category, channelId, selectedValue = 'never') =>
+    policyCellHtml: (category, channel, selectedValue = 'never') =>
       # Reset all buttons to not be active by default. Set their ID to be unique to the data combination.
       _.each(@buttonData, (b) ->
         b['active'] = false
-        b['coordinate'] = "cat_#{category.id}_ch_#{channelId}"
+        b['coordinate'] = "cat_#{category.id}_ch_#{channel.id}"
         b['id'] = "#{b['coordinate']}_#{b['code']}"
       )
       selected = @findButtonDataForCode(selectedValue)
       selected['active'] = true
 
-      policyCellTemplate(touch: @touch, category: category.category, channelId: channelId, selected: selected, allButtons: @buttonData)
+      cellButtonData = if channel.type == 'push' then @limitedButtonData else @buttonData
+
+      policyCellTemplate
+        touch:      INST.browser.touch
+        category:   category.category
+        channelId:  channel.id
+        selected:   selected
+        allButtons: cellButtonData
 
     # Record and display the value for the cell.
     saveNewCellValue: ($cell, value) =>
@@ -172,7 +195,7 @@ define [
       btnData = @findButtonDataForCode(value)
       # Setup display
       $cell.attr('data-selection', value)
-      $cell.find('a.change-selection span.ui-icon').attr('class', 'ui-icon '+btnData['image'])
+      $cell.find('a.change-selection i').attr('class', btnData['icon'])
       $cell.find('a.change-selection span.img-text').text(btnData['text'])
       # Get category and channel values
       category = $cell.attr('data-category')
@@ -188,33 +211,28 @@ define [
 
     # Setup event bindings.
     setupEventBindings: =>
-      # Setup the individual buttons as a jQueryUI button with text hidden and using the desired image.
-      for data in @buttonData
-        $(".#{data['code']}-button").button
-          text: false
-          icons:
-            primary: data['image']
 
       $notificationPrefs = $('#notification-preferences')
 
       # Setup the buttons as a buttonset
       $notificationPrefs.find('.event-option-buttons').buttonset()
 
-      # Catch mouse over and auto-toggle for faster interactions.
-      $notificationPrefs.find('.notification-prefs-table.no-touch').on
-        mouseenter: (e) =>
-          @cellButtonsShow($(e.currentTarget), false)
-        mouseleave: (e) =>
-          @cellButtonsHide($(e.currentTarget), false)
-        , '.comm-event-option'
+      unless INST.browser.touch
+        # Catch mouse over and auto-toggle for faster interactions.
+        $notificationPrefs.find('.notification-prefs-table').on
+          mouseenter: (e) =>
+            @cellButtonsShow($(e.currentTarget), false)
+          mouseleave: (e) =>
+            @cellButtonsHide($(e.currentTarget), false)
+          , '.comm-event-option'
 
-      # Setup current selection click event to display selection changing buttons
-      $notificationPrefs.find('.notification-prefs-table.no-touch a.change-selection').on 'click', (e) =>
-        # Hide any/all other showing buttons
-        e.preventDefault()
-        cell = $(e.currentTarget).closest('td')
-        @hideButtonsExceptCell(cell)
-        @cellButtonsShow(cell, true)
+        # Setup current selection click event to display selection changing buttons
+        $notificationPrefs.find('.notification-prefs-table a.change-selection').on 'click', (e) =>
+          # Hide any/all other showing buttons
+          e.preventDefault()
+          cell = $(e.currentTarget).closest('td')
+          @hideButtonsExceptCell(cell)
+          @cellButtonsShow(cell, true)
 
       # When selection button is clicked, the hidden radio button is changed. React to that change. Hide the control and focus the selection
       $notificationPrefs.find('.frequency').on 'change', (e) =>
@@ -245,7 +263,7 @@ define [
             $.flashError(I18n.t('communication.errors.saving_preferences_failed', 'Oops! Something broke.  Please try again'))
           )
         ), @spinOpts
-        null
+      null
 
     # Options for the save spinner
     spinOpts: length: 4, radius: 5, width: 3

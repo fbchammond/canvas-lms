@@ -2,11 +2,12 @@
 <% add_crumb t('#crumbs.rubrics', "Rubrics") %>
 <% content_for :right_side do %>
   <div class="rs-margin-all">
-    <a href="<%= context_url(@context, :context_rubrics_url) %>" class="button button-sidebar-wide add_rubric_link"><%= image_tag "add.png" %> <%= t('buttons.add_rubric', 'Add Rubric') %></a>
+    <a href="<%= context_url(@context, :context_rubrics_url) %>" class="btn button-sidebar-wide add_rubric_link"><i class="icon-add"></i> <%= t('buttons.add_rubric', 'Add Rubric') %></a>
   </div>
 <% end %>
 
 <% js_bundle :edit_rubric %>
+<% jammit_css :learning_outcomes %>
 <% content_for :stylesheets do %>
 <style>
 #rubrics .find_rubric_link {
@@ -44,37 +45,7 @@
 }
 </style>
 <% end %>
-<% js_block do %>
-<script>
-require([
-  'i18nObj' /* I18n.t */,
-  'jquery' /* $ */,
-  'find_outcome',
-  'jquery.instructure_misc_plugins' /* confirmDelete */
-], function(I18n, $) {
-
-  $(document).ready(function() {
-    $("#rubrics ul .delete_rubric_link").click(function(event) {
-      event.preventDefault();
-      var $rubric = $(this).parents("li");
-      var message = <%= jt('prompts.are_you_sure_delete', "Are you sure you want to delete this rubric? Any course currently associated with this rubric will still have access to it, but, no new courses will be able to use it.") %>;
-      if($(this).hasClass('remove_link')) {
-        message = <%= jt('prompts.are_you_sure_remove', "Are you sure you want to remove this rubric from your list?") %>;
-      }
-      $rubric.confirmDelete({
-        url: $(this).attr('href'),
-        message: message,
-        success: function() {
-          $(this).slideUp(function() {
-            $(this).remove();
-          });
-        }
-      });
-    });
-  });
-});
-</script>
-<% end %>
+<% js_bundle :edit_rubric_user_index %>
 <h2><%= t 'headings.user_rubrics', 'User Rubrics' %></h2>
 <a href="<%= context_url(@context, :context_rubrics_url) %>" id="add_rubric_url" style="display: none;">&nbsp;</a>
 <div id="rubrics" class="raw_listing">

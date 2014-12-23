@@ -21,6 +21,7 @@ define([
   'jquery' /* $ */,
   'jquery.instructure_forms' /* formSubmit */,
   'jqueryui/dialog',
+  'compiled/jquery/fixDialogButtons' /* fix dialog formatting */,
   'jquery.instructure_misc_plugins' /* showIf */
 ], function(I18n, $) {
 
@@ -29,13 +30,13 @@ define([
   window.messageStudents = function(settings) {
     currentSettings = settings;
     $message_students_dialog.find(".message_types").empty();
-    for(var idx in settings.options) {
+    for(var idx=0, l=settings.options.length; idx < l; idx++) {
       var $option = $("<option/>");
       var option = settings.options[idx];
       $option.val(idx).text(option.text);
       $message_students_dialog.find(".message_types").append($option);
     }
-    
+
     var title = settings.title,
         $li = $message_students_dialog.find("ul li.blank:first"),
         $ul = $message_students_dialog.find("ul"),
@@ -43,31 +44,34 @@ define([
 
     $message_students_dialog.find("ul li:not(.blank)").remove();
 
-    for(var idx in settings.students) {
+    for (var i = 0; i < settings.students.length; i++) {
       var $student = $li.clone(true).removeClass('blank');
-      $student.find(".name").text(settings.students[idx].name);
-      $student.find(".score").text(settings.students[idx].score);
-      $student.data('id', settings.students[idx].id);
-      $student.user_data = settings.students[idx]
+
+      $student.find('.name').text(settings.students[i].name);
+      $student.find('.score').text(settings.students[i].score);
+      $student.data('id', settings.students[i].id);
+      $student.user_data = settings.students[i];
+
       $ul.append($student.show());
-      students_hash[settings.students[idx].id] = $student;
+      students_hash[settings.students[i].id] = $student;
     }
-    
+
     $ul.show();
-    
+
     $message_students_dialog.data('students_hash', students_hash),
     $message_students_dialog.find(".asset_title").text(title);
     $message_students_dialog.find(".out_of").showIf(settings.points_possible != null);
     $message_students_dialog.find(".send_button").text(I18n.t("send_message", "Send Message"));
     $message_students_dialog.find(".points_possible").text(settings.points_possible);
-    
+    $message_students_dialog.find("[name=context_code]").val(settings.context_code);
+
     $message_students_dialog.find("textarea").val("");
     $message_students_dialog.find("select")[0].selectedIndex = 0;
     $message_students_dialog.find("select").change();
     $message_students_dialog.dialog({
       width: 600,
       modal: true
-    }).dialog('open').dialog('option', 'title', I18n.t("message_student", "Message Students for %{course_name}", {course_name: title}));
+    }).fixDialogButtons().dialog('open').dialog('option', 'title', I18n.t("message_student", "Message Students for %{course_name}", {course_name: title}));
   };
   $(document).ready(function() {
     $message_students_dialog.find(".cutoff_score").bind('change blur keyup', function() {
@@ -111,7 +115,9 @@ define([
       }
       var student_ids = null;
       var students_list = [];
-      for(var idx in students_hash) { students_list.push(students_hash[idx]); }
+      for(var idx in students_hash) {
+        students_list.push(students_hash[idx]);
+      }
       if(students_hash) {
         if(option && option.callback) {
           student_ids = option.callback.call(window.messageStudents, cutoff, students_list);
@@ -120,14 +126,19 @@ define([
         }
       }
       student_ids = student_ids || [];
-      
+
+      if (currentSettings.subjectCallback) {
+        $message_students_dialog.find("[name=subject]").val(currentSettings.subjectCallback(option.text, cutoff));
+      }
       $message_students_dialog.find(".cutoff_holder").showIf(option.cutoff);
       $message_students_dialog.find(".student_list").toggleClass('show_score', option.cutoff || option.score);
       $message_students_dialog.find("button").attr('disabled', student_ids.length == 0);
 
       var student_ids_hash = {};
       for(var idx in student_ids) {
-        student_ids_hash[parseInt(student_ids[idx], 10) || 0] = true;
+        if (student_ids.hasOwnProperty(idx)) {
+          student_ids_hash[parseInt(student_ids[idx], 10) || 0] = true;
+        }
       }
       for(var idx in students_hash) {
         students_hash[idx].showIf(student_ids_hash[idx]);

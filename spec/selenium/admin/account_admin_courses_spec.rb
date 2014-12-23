@@ -1,8 +1,7 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
-require File.expand_path(File.dirname(__FILE__) + '/../helpers/basic/courses_specs')
 
 describe "account admin courses tab" do
-  it_should_behave_like "in-process server selenium tests"
+  include_examples "in-process server selenium tests"
 
   def add_course(course_name, has_student = false)
     Account.default.courses.create(:name => course_name).offer!
@@ -25,7 +24,29 @@ describe "account admin courses tab" do
     describe "shared course specs" do
       let(:account) { Account.default }
       let(:url) { "/accounts/#{Account.default.id}" }
-      it_should_behave_like "courses basic tests"
+
+      before (:each) do
+        course_with_admin_logged_in
+      end
+
+      it "should add a new course" do
+        pending('sub account course creation, failing at wait_for_dom_ready') if account != Account.default
+        course_name = 'course 1'
+        course_code = '12345'
+        get url
+
+        f(".add_course_link").click
+        wait_for_ajaximations
+        f("#add_course_form #course_name").send_keys(course_name)
+        f("#course_course_code").send_keys(course_code)
+        submit_form("#add_course_form")
+        refresh_page # we need to refresh the page so the course shows up
+        course = Course.find_by_name(course_name)
+        course.should be_present
+        course.course_code.should == course_code
+        f("#course_#{course.id}").should be_displayed
+        f("#course_#{course.id}").should include_text(course_name)
+      end
     end
   end
 
@@ -44,8 +65,7 @@ describe "account admin courses tab" do
       f("#course_name").send_keys(" "+name[1])
       ff(".ui-menu-item .ui-corner-all").count > 0
       keep_trying_until { fj(".ui-menu-item .ui-corner-all:visible").text.should include_text(course.name) }
-      f("#new_course button").click
-      wait_for_ajax_requests
+      expect_new_page_load { fj("#new_course button").click }
       f("#crumb_course_#{course.id}").should be_displayed
     end
 

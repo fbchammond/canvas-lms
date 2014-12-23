@@ -52,6 +52,23 @@ describe "enrollment_date_restrictions" do
     page.css(".past_enrollments li").should be_empty
   end
 
+  it "should not show deleted enrollments in past enrollments when course is completed" do
+    @student = user_with_pseudonym
+    e1 = student_in_course(:user => @student, :active_all => 1)
+
+    e1.destroy
+    e1.workflow_state.should == 'deleted'
+
+    @course.complete
+    @course.workflow_state.should == 'completed'
+
+    user_session(@student, @pseudonym)
+
+    get "/courses"
+    page = Nokogiri::HTML(response.body)
+    page.css(".past_enrollments li").should be_empty
+  end
+
   it "should not list groups from inactive enrollments in the menu" do
     @student = user_with_pseudonym
     @course1 = course(:course_name => "Course 1", :active_all => 1)
@@ -106,7 +123,7 @@ describe "enrollment_date_restrictions" do
     html = Nokogiri::HTML(response.body)
     html.css('.course').length.should == 2
 
-    Account.default.add_user(@user)
+    Account.default.account_users.create!(user: @user)
     get "/users/#{@user.id}"
     response.body.should match /Inactive/
     response.body.should match /Completed/
@@ -122,10 +139,10 @@ describe "enrollment_date_restrictions" do
     @course.conclude_at = 4.days.from_now
     @course.restrict_enrollments_to_course_dates = true
     @course.save!
-    @enrollment.state_based_on_date.should == :inactive
+    @enrollment.reload.state_based_on_date.should == :inactive
 
-    get '/calendar'
+    get '/calendar2'
     html = Nokogiri::HTML(response.body)
-    html.css("#group_course_#{@course.id}").length.should == 0
+    html.css(".group_course_#{@course.id}").length.should == 0
   end
 end

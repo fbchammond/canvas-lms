@@ -4,29 +4,64 @@ OAuth
 OAuth2 is a protocol designed to let third-party applications
 authenticate to perform actions as a user, without getting the user's
 password. Canvas uses OAuth2 for authentication and
-authorization of the Canvas API. HTTP Basic Auth is deprecated and will be removed.
+authorization of the Canvas API.
 
 Authenticating a Request
 ------------------------
 
 Once you have an OAuth access token, you can use it to make API
 requests. If possible, using the HTTP Authorization header is
-recommended. Sending the access token in the query string or POST
-parameters is also supported.
+recommended.
 
 OAuth2 Token sent in header:
 
     curl -H "Authorization: Bearer <ACCESS-TOKEN>" https://canvas.instructure.com/api/v1/courses
 
+Sending the access token in the query string or POST
+parameters is also supported, but discouraged as it increases the
+chances of the token being logged or leaked in transit.
+
 OAuth2 Token sent in query string:
 
     curl https://canvas.instructure.com/api/v1/courses?access_token=<ACCESS-TOKEN>
 
+Storing Tokens
+--------------
+
+When appropriate, applications should store the token locally, rather
+than requesting a new token for the same user each time the user uses the
+application. If the token is deleted or expires, the application will
+get a 401 Unauthorized error from the API, in which case the application should
+perform the OAuth flow again to receive a new token. You can differentiate this
+401 Unauthorized from other cases where the user simply does not have
+permission to access the resource by checking that the WWW-Authenticate header
+is set.
+
+Storing a token is in many ways equivalent to storing the user's
+password, so tokens should be stored and used in a secure manner,
+including but not limited to:
+
+  * Don't embed tokens in web pages.
+  * Don't pass tokens or session IDs around in URLs.
+  * Properly secure the database or other data store containing the
+    tokens.
+  * For web applications, practice proper techniques to avoid session
+    attacks such as cross-site scripting, request forgery, replay
+    attacks, etc.
+  * For native applications, take advantage of user keychain stores and
+    other operating system functionality for securely storing passwords.
+
 Manual Token Generation
 -----------------------
 
-If your application only needs to access the API as a single user, the
-simplest option is to generate an access token on the user's profile page.
+For testing your application before you've implemented OAuth, the
+simplest option is to generate an access token on your user's profile
+page. Note that asking any other user to manually generate a token and
+enter it into your application is a violation of Canvas' terms of
+service. Applications in use by multiple users *must* use OAuth to obtain
+tokens.
+
+To manually generate a token for testing:
 
   1. Click the "profile" link in the top right menu bar, or navigate to
      `/profile`
@@ -35,6 +70,45 @@ simplest option is to generate an access token on the user's profile page.
   3. Once the token is generated, you cannot view it again, and you'll
      have to generate a new token if you forget it. Remember that access
      tokens are password equivalent, so keep it secret.
+
+Logging Out
+-----------
+
+<div class="method_details">
+
+If your application supports logout functionality, you can revoke your own
+access token. This is useful for security reasons, as well as removing your
+application from the list of tokens on the user's profile page. Simply make
+an authenticated request to the following endpoint:
+
+<h3 class="endpoint">DELETE /login/oauth2/token</h3>
+
+<h4>Parameters</h4>
+
+<ul class="argument">
+  <li>
+    <span class="name">expire_sessions</span>
+    <div class="inline">
+      optional.  Set this to '1' if you want to end all of the user's
+Canvas web sessions.  Without this argument, the endpoint will leave web sessions intact.
+    </div>
+  </li>
+</ul>
+
+</div>
+
+Oauth2 Based Identity Service
+-----------------------------
+Your application can rely on canvas for a user's identity.  During step 1 of
+the web application flow below, specify the optional scopes parameter as
+scopes=/auth/userinfo.  When the user is asked to grant your application
+access in step 2 of the web application flow, they will also be given an
+option to remember their authorization.  If they grant access and remember
+the authorization, Canvas will skip step 2 of the request flow for future requests.
+
+Canvas will not give a token back as part of a userinfo request.  It will only
+provide the current user's name and id.
+
 
 OAuth2 Token Request Flow
 -------------------------
@@ -47,17 +121,13 @@ Performing the OAuth2 token request flow requires an application client
 ID and client secret. To obtain these application credentials, you will
 need to register your application.  The client secret should never be shared.
 
-For open source Canvas users, you will need to generate a client\_id and
-client\_secret for your application. There isn't yet any UI for
-generating these keys, so you will need to generate an API key from the Rails console:
+For Canvas Cloud, you can request a client ID and secret from
+http://www.instructure.com/partners , or contact your account
+representative.
 
-    $ script/console
-    > key = DeveloperKey.create! { |k|
-        k.email = 'your_email'
-        k.user_name = 'your name'
-        k.account = Account.default
-      }
-    > puts "client_id: #{key.global_id} client_secret: #{key.api_key}"
+For open source Canvas users, you can generate a client ID and secret in
+the Site Admin account of your Canvas install. There will be a
+"Developer Keys" tab on the left navigation sidebar.
 
 Web Application Flow
 --------------------
@@ -68,7 +138,7 @@ This is the OAuth flow for third-party web applications.
 
 <div class="method_details">
 
-<h3>GET https://&lt;canvas-install-url&gt;/login/oauth2/auth</h3>
+<h3 class="endpoint">GET https://&lt;canvas-install-url&gt;/login/oauth2/auth?client_id=XXX&response_type=code&redirect_uri=https://example.com/oauth_complete&state=YYY</h3>
 
 <h4>Parameters</h4>
 
@@ -91,8 +161,47 @@ currently supported value is <code>code</code>.
     <div class="inline">
       required. The URL where the user will be redirected after
 authorization. The domain of this URL must match the domain of the
-redirect_uri stored on the developer key, though the rest of the path
-may differ.
+redirect_uri stored on the developer key, or it must be a subdomain of
+that domain.
+    </div>
+  </li>
+  <li>
+    <span class="name">state</span>
+    <div class="inline">
+      optional. Your application can pass Canvas an arbitrary piece of
+state in this parameter, which will be passed back to your application
+in Step 2. It's strongly encouraged that your application pass a unique
+identifier in the state parameter, and then verify in Step 2 that the
+state you receive back from Canvas is the same expected value. Failing
+to do this opens your application to the possibility of logging the
+wrong person in, as <a href="http://homakov.blogspot.com/2012/07/saferweb-most-common-oauth2.html">described here</a>.
+    </div>
+  </li>
+  <li>
+    <span class="name">scopes</span>
+    <div class="inline">
+      optional. This can be used to specify what information the access token
+      will provide access to.  By default an access token will have access to
+      all api calls that a user can make.  The only other accepted value
+      for this at present is '/auth/userinfo', which can be used to obtain
+      the current canvas user's identity
+    </div>
+  </li>
+  <li>
+    <span class="name">purpose</span>
+    <div class="inline">
+      optional. This can be used to help the user identify which instance
+      of an application this token is for. For example, a mobile device
+      application could provide the name of the device.
+    </div>
+  </li>
+  <li>
+    <span class="name">force_login</span>
+    <div class="inline">
+      optional. Set to '1' if you want to force the user to enter their
+      credentials, even if they're already logged into Canvas. By default,
+      if a user already has an active Canvas web session, they will not be
+      asked to re-enter their credentials.
     </div>
   </li>
 </ul>
@@ -106,11 +215,15 @@ request\_uri with a specific query string, containing the OAuth2
 response:
 
 <div class="method_details">
-<h3>http://www.example.com/oauth2response?code=&lt;code&gt;</h3>
+<h3>http://www.example.com/oauth2response?code=XXX&state=YYY</h3>
 </div>
 
 The app can then extract the code, and use it along with the
 client_id and client_secret to obtain the final access_key.
+
+If your application passed a state parameter in step 1, it will be
+returned here in step 2 so that your app can tie the request and
+response together.
 
 If the user doesn't accept the request for access, or if another error
 occurs, Canvas redirects back to your request\_uri with an `error`
@@ -126,7 +239,7 @@ parameter, rather than a `code` parameter, in the query string.
 
 <div class="method_details">
 
-<h3>POST /login/oauth2/token</h3>
+<h3 class="endpoint">POST /login/oauth2/token</h3>
 
 <h4>Parameters</h4>
 
@@ -191,7 +304,7 @@ read the out-of-band code response.
 
 <div class="method_details">
 
-<h3>GET https://&lt;canvas-install-url&gt;/login/oauth2/auth</h3>
+<h3 class="endpoint">GET https://&lt;canvas-install-url&gt;/login/oauth2/auth</h3>
 
 <h4>Parameters</h4>
 
@@ -215,6 +328,24 @@ currently supported value is <code>code</code>.
       required. For native applications, currently the only supported value is
 <code>urn:ietf:wg:oauth:2.0:oob</code>, signifying that the credentials will be
 retrieved out-of-band using an embedded browser or other functionality.
+    </div>
+  </li>
+  <li>
+    <span class="name">scopes</span>
+    <div class="inline">
+      optional. This can be used to specify what information the access token
+      will provide access to.  By default an access token will have access to
+      all api calls that a user can make.  The only other accepted value
+      for this at present is '/auth/userinfo', which can be used to obtain
+      the current canvas user's identity
+    </div>
+  </li>
+  <li>
+    <span class="name">purpose</span>
+    <div class="inline">
+      optional. This can be used to help the user identify which instance
+      of an application this token is for. For example, a mobile device
+      application could provide the name of the device.
     </div>
   </li>
 </ul>
@@ -251,7 +382,7 @@ parameter, rather than a `code` parameter, to the query string.
 
 <div class="method_details">
 
-<h3>POST /login/oauth2/token</h3>
+<h3 class="endpoint">POST /login/oauth2/token</h3>
 
 <h4>Parameters</h4>
 

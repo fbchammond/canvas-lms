@@ -45,13 +45,13 @@ describe "student interactions links" do
   it "should show the student link on the student's page" do
     get "/courses/#{@course.id}/users/#{@student.id}"
     response.should be_success
-    response.body.should match(/Your Interactions Report with #{@student.name}/)
+    response.body.should match(/Interactions with You/)
   end
 
   it "should show the teacher link on the teacher's page" do
     get "/courses/#{@course.id}/users/#{@teacher.id}"
     response.should be_success
-    response.body.should match(/Student Interactions Report for #{@teacher.name}/)
+    response.body.should match(/Student Interactions Report/)
   end
 
   it "should show mail link for teachers" do
@@ -80,7 +80,7 @@ describe "student interactions links" do
 
   it "should not show mail link for admins" do
     user_model
-    Account.site_admin.add_user(@user)
+    Account.site_admin.account_users.create!(user: @user)
     user_session(@user)
     get "/users/#{@teacher.id}/teacher_activity/course/#{@course.id}"
     response.should be_success

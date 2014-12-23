@@ -1,7 +1,7 @@
 require 'json'
 require 'time'
 require 'set'
-require 'zip/zip'
+require 'zip'
 require 'net/http'
 require 'uri'
 require 'cgi'
@@ -13,6 +13,10 @@ module Canvas::Migration
   end
   def logger
     Rails.logger
+  end
+
+  def self.valid_converter_classes
+    @converter_classes ||= Canvas::Plugin.all_for_tag(:export_system).map {|p| p.meta["settings"]["provides"].try(:values) }.flatten.compact.uniq.map(&:name)
   end
 end
 

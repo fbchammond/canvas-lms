@@ -19,14 +19,35 @@
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
 describe QuestionBanksController do
-  describe "move_questions" do
-    before do
-      course_with_teacher_logged_in
-      @bank1 = @course.assessment_question_banks.create!
-      @bank2 = @course.assessment_question_banks.create!
-      @question1 = @bank1.assessment_questions.create!
-      @question2 = @bank1.assessment_questions.create!
+
+  def create_course_with_two_question_banks!
+    course_with_teacher_logged_in(active_all: true)
+    @bank1 = @course.assessment_question_banks.create!
+    @bank2 = @course.assessment_question_banks.create!
+    @question1 = @bank1.assessment_questions.create!
+    @question2 = @bank1.assessment_questions.create!
+  end
+
+  describe "GET / (#index)" do
+
+    before { create_course_with_two_question_banks! }
+
+    it "only includes active question banks" do
+      @bank3 = @course.account.assessment_question_banks.create!
+      @bank3.destroy
+      res = get 'index', controller: :question_banks, inherited: '1',course_id: @course.id, format: 'json'
+      response.should be_success
+      json = json_parse(response.body)
+      json.size.should == 2
+      json.detect { |bank|
+        bank["assessment_question_bank"]["id"] == @bank3.id
+      }.should be_nil
     end
+  end
+
+  describe "move_questions" do
+
+    before { create_course_with_two_question_banks! }
 
     it "should copy questions" do
       post 'move_questions', :course_id => @course.id, :question_bank_id => @bank1.id, :assessment_question_bank_id => @bank2.id, :questions => { @question1.id => 1, @question2.id => 1 }
@@ -44,6 +65,34 @@ describe QuestionBanksController do
       @bank1.reload
       @bank1.assessment_questions.count.should == 0
       @bank2.assessment_questions.count.should == 2
+    end
+  end
+
+  describe "bookmark" do
+    before do
+      course_with_teacher_logged_in
+      @bank = @course.assessment_question_banks.create!
+    end
+
+    it "bookmarks" do
+      post 'bookmark', :course_id => @course.id,
+                       :question_bank_id => @bank.id
+      response.should be_success
+      @teacher.reload.assessment_question_banks.should include @bank
+    end
+
+    it "unbookmarks" do
+      @teacher.assessment_question_banks << @bank
+      @teacher.save!
+
+      # should work even if the bank's context is destroyed
+      @course.destroy
+
+      post 'bookmark', :course_id => @course.id,
+                       :question_bank_id => @bank.id,
+                       :unbookmark => 1
+      response.should be_success
+      @teacher.reload.assessment_question_banks.should_not include @bank
     end
   end
 end

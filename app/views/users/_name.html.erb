@@ -26,7 +26,7 @@
           <th><%= before_label('profile_picture', 'Profile Picture') %></th>
           <td>
             <span class="avatar_image">
-              <img src="<%= @user.avatar_url(50, @domain_root_account && @domain_root_account.settings[:avatars], "#{request.protocol}#{request.host_with_port}/images/dotted_pic.png") %>"/>
+              <%= avatar @user, url: nil %>
             </span>
             <% if can_do(@user, @current_user, :remove_avatar) %>
               <a href="<%= update_avatar_image_url(@user.id) %>" class="remove_avatar_picture_link"><%= t('remove_avatar', 'Remove avatar picture') %></a>
@@ -42,7 +42,7 @@
       </tr>
       <tr>
         <th><%= before_label('time_zone', 'Time Zone') %></th>
-        <td class="time_zone"><%= @user.time_zone || t('none', "None") %></td>
+        <td class="time_zone"><%= @user.time_zone.try(:name) || t('none', "None") %></td>
       </tr>
       <% if can_manage_admin_users || (!@enrollments.any?(&:admin?) && !@user.sis_pseudonym_for(@context.root_account) && can_do(@context, @current_user, :manage_students)) %>
         <td class="links" colspan="2" style="text-align: right; font-size: 0.8em; padding-top: 10px;">
@@ -57,7 +57,7 @@
           <% end %>
           <% if @user.associated_root_accounts.active.any?{|a| can_do(a, @current_user, :manage_user_logins) }  %>
             | 
-            <a href="<%= user_admin_merge_url(@user.id) %>"><%= t('merge_with_another_user', 'Merge with Another User') %></a>
+            <a class="merge_user_link" href="<%= user_admin_merge_url(@user.id) %>"><%= t('merge_with_another_user', 'Merge with Another User')%></a>
           <% end %>
           <% if ((@context.is_a?(User) || @context.is_a?(Account)) && root_account) && @user.grants_right?(@current_user, session, :manage_logins) %>
             |
@@ -69,7 +69,8 @@
   </fieldset>
 <div title="<%= t 'titles.edit_user_details', 'Edit User Details' %>" id="edit_student_dialog" style="display: none;">
   <p><%= t('update_instructions', "You can update some of this user's information, but they can change it back if they choose.") %></p>
-  <% form_for @user, :url => user_url(@user), :html => {:id => "edit_student_form"} do |f| %>
+  <%= form_for @user, :url => user_url(@user),
+               :html => {:id => "edit_student_form", :class => 'form-dialog form-horizontal'} do |f| %>
     <table class="formtable">
       <tr>
         <td><%= f.blabel :name, :en => "Full Name" %></td>
@@ -87,13 +88,10 @@
           <td><%= f.time_zone_select :time_zone, ActiveSupport::TimeZone.us_zones, :default => ((@domain_root_account && @domain_root_account.default_time_zone) || "Mountain Time (US & Canada)") %></td>
         </tr>
       <% end %>
-      <tr>
-        <td colspan="2">
-          <div class="button-container">
-            <button class="button submit_button" type="submit"><%= t('buttons.update_details', 'Update Details') %></button>
-            <button class="button button-secondary cancel_button" type="button"><%= t('#buttons.cancel', 'Cancel') %></button>
-          </div>
-        </td>
     </table>
+    <div class='form-controls'>
+      <button class="btn cancel_button"><%= t('#buttons.cancel', 'Cancel') %></button>
+      <button type="submit" class="btn btn-primary submit_button"><%= t('buttons.update_details', 'Update Details') %></button>
+    </div>
   <% end %>
 </div>

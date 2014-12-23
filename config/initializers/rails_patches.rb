@@ -1,6 +1,60 @@
-if Rails::VERSION::MAJOR == 3 && Rails::VERSION::MINOR >= 1
-  raise "This patch has been merged into rails 3.1, remove it from our repo"
-else
+if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
+  ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.class_eval do
+    # Force things with (approximate) integer representations (Floats,
+    # BigDecimals, Times, etc.) into those representations. Raise
+    # ActiveRecord::StatementInvalid for any other non-integer things.
+    def quote_with_integer_enforcement(value, column = nil)
+      if column && column.type == :integer && !value.respond_to?(:quoted_id)
+        case value
+          when String, ActiveSupport::Multibyte::Chars, nil, true, false
+            # these already have branches for column.type == :integer (or don't
+            # need one)
+            quote_without_integer_enforcement(value, column)
+          else
+            if value.respond_to?(:to_i)
+              # quote the value in its integer representation
+              value.to_i.to_s
+            else
+              # doesn't have a (known) integer representation, can't quote it
+              # for an integer column
+              raise ActiveRecord::StatementInvalid, "#{value.inspect} cannot be interpreted as an integer"
+            end
+        end
+      else
+        quote_without_integer_enforcement(value, column)
+      end
+    end
+    alias_method_chain :quote, :integer_enforcement
+
+    if Rails.version < '4'
+      # Handle quoting properly for Infinity and NaN. This fix exists in Rails 4.0
+      # and can be safely removed once we upgrade.
+      #
+      # This patch is covered by tests in spec/initializers/active_record_quoting_spec.rb
+      def quote_with_infinity_and_nan(value, column = nil) #:nodoc:
+        if value.kind_of?(Float)
+          if value.infinite? && column && column.type == :datetime
+            "'#{value.to_s.downcase}'"
+          elsif value.infinite? || value.nan?
+            "'#{value.to_s}'"
+          else
+            quote_without_infinity_and_nan(value, column)
+          end
+        else
+          quote_without_infinity_and_nan(value, column)
+        end
+      end
+      alias_method_chain :quote, :infinity_and_nan
+    end
+  end
+end
+
+if CANVAS_RAILS2
+
+  module ActiveSupport
+    HashWithIndifferentAccess = ::HashWithIndifferentAccess
+  end
+
   # bug submitted to rails: https://rails.lighthouseapp.com/projects/8994/tickets/5802-activerecordassociationsassociationcollectionload_target-doesnt-respect-protected-attributes#ticket-5802-1
   # This fix has been merged into rails trunk and will be in the rails 3.1 release.
   class ActiveRecord::Associations::AssociationCollection
@@ -35,39 +89,6 @@ else
       target
     end
   end
-
-  # https://github.com/rails/rails/commit/0e17cf17ebeb70490d7c7cd25c6bf8f9401e44b3
-  # https://github.com/rails/rails/commit/63cd9432265a32d222353b535d60333c2a6a5125
-  # Backport from Rails 3.1
-  ERB::Util.module_eval do
-    # Detect whether 1.9 can transcode with XML escaping.
-    if '"&gt;&lt;&amp;&quot;"' == ('><&"'.encode('utf-8', :xml => :attr) rescue false)
-      def html_escape(s)
-        s = s.to_s
-        if s.html_safe?
-          s
-        else
-          s.encode(s.encoding, :xml => :attr)[1...-1].html_safe
-        end
-      end
-    else
-      def html_escape(s)
-        s = s.to_s
-        if s.html_safe?
-          s
-        else
-          s.gsub(/[&"><]/n) { |special| ERB::Util::HTML_ESCAPE[special] }.html_safe
-        end
-      end
-    end
-
-    remove_method(:h)
-    alias h html_escape
-
-    module_function :h
-    module_function :html_escape
-  end
-
 
   # Fix for has_many :through where the through and target reflections are the
   # same table (the through table needs to be aliased)
@@ -121,6 +142,48 @@ else
     end
   end
 
+  # Patch for CVE-2013-0155
+  # https://groups.google.com/d/topic/rubyonrails-security/c7jT-EeN9eI/discussion
+  # Also fixes problem with nested conditions containing ?
+  class ActiveRecord::Base
+    class << self
+      def sanitize_sql_hash_for_conditions(attrs, default_table_name = quoted_table_name, top_level = true)
+        attrs = expand_hash_conditions_for_aggregates(attrs)
+
+        # This is the one modified line
+        raise(ActiveRecord::StatementInvalid, "non-top-level hash is empty") if !top_level && attrs.is_a?(Hash) && attrs.empty?
+
+        nested_conditions = []
+        conditions = attrs.map do |attr, value|
+          table_name = default_table_name
+
+          if not value.is_a?(Hash)
+            attr = attr.to_s
+
+            # Extract table name from qualified attribute names.
+            if attr.include?('.') and top_level
+              attr_table_name, attr = attr.split('.', 2)
+              attr_table_name = connection.quote_table_name(attr_table_name)
+            else
+              attr_table_name = table_name
+            end
+
+            attribute_condition("#{attr_table_name}.#{connection.quote_column_name(attr)}", value)
+          elsif top_level
+            nested_conditions << sanitize_sql_hash_for_conditions(value, connection.quote_table_name(attr.to_s), false)
+            nil
+          else
+            raise ActiveRecord::StatementInvalid
+          end
+        end.compact.join(' AND ').presence
+
+        conditions = replace_bind_variables(conditions, expand_range_bind_variables(attrs.values)) if conditions
+        [conditions, *nested_conditions].compact.join(' AND ')
+      end
+      alias_method :sanitize_sql_hash, :sanitize_sql_hash_for_conditions
+    end
+  end
+
   # ensure that the query cache is cleared on inserts, even if there's a db
   # error. this is fixed in rails 3.1. unfortunately we have to reproduce
   # whole method here and can't just alias it, since it calls super :(
@@ -159,39 +222,66 @@ else
       end
     end
   end
-end
 
-if Rails::VERSION::MAJOR == 2
-  # So far a new version of rails 2.3 has not been released to patch this.
-  # Hopefully the next minor version (if there is one) will incorporate it
-  # and we can add another && Rails::VERSION::MINOR < condition to above
-  class ActiveRecord::Base
-    def self.sanitize_sql_hash_for_conditions(attrs, default_table_name = quoted_table_name, top_level = true)
-      attrs = expand_hash_conditions_for_aggregates(attrs)
+  # This change allows us to use whatever is in the latest tzinfo gem
+  # (like the Moscow change to always be on daylight savings)
+  # instead of the hard-coded list in ActiveSupport::TimeZone.zones_map
+  #
+  # Fixed in Rails 3
+  ActiveSupport::TimeZone.class_eval do
+    instance_variable_set '@zones', nil
+    instance_variable_set '@zones_map', nil
+    instance_variable_set '@us_zones', nil
 
-      conditions = attrs.map do |attr, value|
-        table_name = default_table_name
-
-        if not value.is_a?(Hash)
-          attr = attr.to_s
-
-          # Extract table name from qualified attribute names.
-          if attr.include?('.') and top_level
-            attr_table_name, attr = attr.split('.', 2)
-            attr_table_name = connection.quote_table_name(attr_table_name)
-          else
-            attr_table_name = table_name
-          end
-
-          attribute_condition("#{attr_table_name}.#{connection.quote_column_name(attr)}", value)
-        elsif top_level
-          sanitize_sql_hash_for_conditions(value, connection.quote_table_name(attr.to_s), false)
-        else
-          raise ActiveRecord::StatementInvalid
-        end
-      end.join(' AND ')
-
-      replace_bind_variables(conditions, expand_range_bind_variables(attrs.values))
+    def self.zones_map
+      @zones_map ||= begin
+        zone_names = ActiveSupport::TimeZone::MAPPING.keys
+        Hash[zone_names.map { |place| [place, create(place)] }]
+      end
     end
   end
+
+else
+  ActiveSupport::Cache::Entry.class_eval do
+    def value_with_untaint
+      @value.untaint if @value
+      value_without_untaint
+    end
+    alias_method_chain :value, :untaint
+  end
+
+  # Fix the behavior of association scope chaining off of a new record.
+  # Without this fix, rails3 will happily generate "WHERE fk IS NULL" queries such as:
+  #
+  # ContextModule.new.content_tags.not_deleted.count
+  # => SELECT COUNT(*) FROM "content_tags" WHERE "content_tags"."context_module_id" IS NULL AND (content_tags.workflow_state<>'deleted')
+  #
+  # (This is fixed in rails4, see https://github.com/rails/rails/commit/aae4f357b5dae389b91129258f9d6d3043e7631e)
+  if Rails.version < '4'
+    ActiveRecord::Associations::CollectionAssociation.class_eval do
+      def target_scope
+        scope = super
+        scope = scope.none if null_scope?
+        scope
+      end
+
+      def null_scope?
+        owner.new_record? && !foreign_key_present?
+      end
+    end
+  end
+
+  # Extend the query logger to add "SQL" back to the front, like it was in
+  # rails2, to make it easier to pull out those log lines for analysis.
+  ActiveRecord::LogSubscriber.class_eval do
+    def sql_with_tag(event)
+      name = event.payload[:name]
+      if name != 'SCHEMA'
+        event.payload[:name] = "SQL #{name}"
+      end
+      sql_without_tag(event)
+    end
+    alias_method_chain :sql, :tag
+  end
+
 end

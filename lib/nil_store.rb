@@ -16,20 +16,23 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-# This is a fix for the fact that, in development environment,
-# unmarshalling ActiveRecord objects across multiple requests
-# will result in serious sadness
-class NilStore < ActiveSupport::Cache::Store
-    
-  def initialize(location='//myloc'); end
- 
-  def read(name, options = nil); nil; end
- 
-  def write(name, value, options = nil); super; end
- 
-  def delete(name, options = nil); super; end
-    
-  def delete_matched(matcher, options = nil); super; end
-    
+if CANVAS_RAILS2
+  # This is a fix for the fact that, in development environment,
+  # unmarshalling ActiveRecord objects across multiple requests
+  # will result in serious sadness
+  class NilStore < ActiveSupport::Cache::Store
+
+    def initialize(location='//myloc'); end
+
+    def read(name, options = nil); nil; end
+
+    def read_multi(*names); {}; end
+
+    def write(name, value, options = nil); value; end
+
+    def delete(name, options = nil); nil; end
+
+    def delete_matched(matcher, options = nil); nil; end
+
+  end
 end
- 

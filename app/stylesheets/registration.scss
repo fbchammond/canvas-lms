@@ -1,7 +1,8 @@
 @import 'environment';
+@import 'registration_dialog';
 
 body {
-  background: #fff url(/images/registration/blue-tile.png) 0 0 repeat;
+  background: #333;
 }
 
 a {
@@ -9,29 +10,6 @@ a {
   &:hover {
     color: #1873c8;
   }
-}
-
-.registration-dialog {
-  margin-top: 2em;
-  font-size: 1.1em;
-}
-
-.registration-dialog .spinner {
-  width: 100px
-}
-
-.help-block-small {
-  display: block;
-  font-size: $baseFontSize - 2;
-  margin-bottom: -5px;
-}
-
-.extra-info {
-  font-size: 0.9em;
-  text-align: center;
-  border-top: 1px solid #ccc;
-  margin: 1em 2em;
-  color: #aaa;
 }
 
 .registration-content {
@@ -44,12 +22,12 @@ a {
   background: #fff;
   height: 122px;
   padding-top: 12px;
-  h1 {
+  h1, .h1 {
     padding: 50px 0 0 0px;
     a {
       display: block;
-      width: 194px;
-      height: 32px;
+      width: 175px;
+      height: 41px;
       background: transparent url(/images/registration/logo.png) 0 0 no-repeat;
       text-indent: -9999em;
     }
@@ -66,6 +44,7 @@ a {
   }
 }
 #registration_video {
+  margin: 0;
   a {
     position: relative;
     z-index: 1;
@@ -86,7 +65,7 @@ a {
   height: 90px;
   background: transparent url(/images/registration/signup_bg.png) 0 0 no-repeat;
   position: relative;
-  h2 {
+  h2, .h2 {
     text-indent: -9999em;
     margin: 0;
     height: 30px;
@@ -102,6 +81,35 @@ a {
   @include gradient-vertical(#ffffff, rgba(255, 255, 255, 0));
   background-color: transparent;
   opacity: 0.5;
+}
+
+#registration_content {
+  background: #fff url(/images/registration/page-background.png) 0 0 repeat;
+  padding-bottom: 40px;
+}
+
+#registration_footer {
+  border-top: 1px solid rgba(0, 0, 0, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  min-height: 30px;
+  padding: 10px 0 40px;
+  color: #999;
+  font-size: 11px;
+  a {
+    margin-left: 5px;
+    color: #999;
+    &:hover, &:active {
+      color: #2ca4e9;
+    }
+  }
+}
+
+.left {
+  float: left;
+}
+
+.right {
+  float: right;
 }
 
 #signup_teacher, #signup_student {

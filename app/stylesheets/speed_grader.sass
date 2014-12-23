@@ -2,23 +2,25 @@
 #content
   padding: 0
 
-#gradebook_header a.ui-selectmenu:hover, 
+#gradebook_header a.ui-selectmenu:hover,
 #gradebook_header a.ui-selectmenu:focus
   :background-color white
   :text-decoration none
 .ui-selectmenu-menu a:focus
   :background-color inherit
-  
+
 #speed_grader_loading
   padding: 5px
   font-size: 24px
 #gradebook_header
+  form
+    margin: 0
   background: url("/images/canvas/header_bg.png") repeat-x left -28px
-  :padding 8px 25px 2px 8px
+  :padding 8px 25px 5px 8px
   :font-size 11px
   :text-align center
   color: #fff
-  height: 31px
+  line-height: 15px
   position: relative
   min-width: 960px
   .ui-icon
@@ -69,7 +71,7 @@
       :float left
       :outline none
       &:hover, &:focus
-        :background-position     left -31px 
+        :background-position     left -31px
       &:active
         :background-position     bottom left
     .next
@@ -86,7 +88,7 @@
   height: 26px
   width: 135px
   display: block
-        
+
 #settings_link, #mute_link
   position: relative
   .ui-icon
@@ -127,6 +129,7 @@
 #left_side
   width: 75%
   float: left
+  position: relative
   #submissions_container, #left_side_inner, iframe, #doc_preview_holder, #iframe_holder, #resize_overlay
     height: 100%
     width: 100%
@@ -135,7 +138,7 @@
     position: relative
     top: -100%
     z-index: 1
-  h3
+  h3, .h3
     margin: 0
     padding: 2em
     text-align: center
@@ -146,7 +149,7 @@
 
 
 #width_resizer
-  background: #bbb url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50% 
+  background: #bbb url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50%
   cursor: pointer
   height: 100%
   width: 7px
@@ -174,17 +177,17 @@
 
   #rubric_summary_holder
     border-top: 1px dashed #bbb
-        
+
   #rubric_summary_container
     border-top: 1px solid #aaa
     overflow: auto
-    
-  #rugric_assessments_list_and_edit_button_holder
+
+  #rubric_assessments_list_and_edit_button_holder
     padding-top: 0
     .button-container
       display: inline
-    
-    
+
+
 
   div.comment
     margin: 3px
@@ -194,19 +197,18 @@
       color: #888888
       font-size: 0.8em
       text-align: right
-    .delete_comment_link 
+    .delete_comment_link
       float: right
-      .ui-icon
-        opacity: 0.2
+      color: #666
+      opacity: 0.5
       &:hover, &:focus
-        background-color: none
-        .ui-icon
-          opacity: 1
+        opacity: 1
 
-  h2
+  h2, .h2
     background: #E3E3E3 url('/images/h2_bg.png') repeat-x scroll 0% 36%
     border-bottom: 1px solid #838383
     border-top: 1px solid #999
+    line-height: 25px
     color: #555
     font-size: 1.25em
     margin: 0
@@ -218,7 +220,7 @@
     padding: 6px 3px
 
 
-  
+
 
   #rightside_inner
     position: relative
@@ -228,7 +230,7 @@
       margin-left: 0 /*for some reason webkit leaves a gap next to the scroll bar if this has margin-left: 8px but it works fine without it */
 
 
-#rubric_full h2, #grading h2
+#rubric_full h2, #rubric_full .h2, #grading h2, #grading .h2
   margin-top: 0 !important
   border-top: 0px none !important
 
@@ -238,13 +240,13 @@
   top: 0px
   border-left: 7px solid #bbb
   border-bottom: 7px solid #bbb
-  +border-bottom-left-radius(5px)
+  border-bottom-left-radius: 5px
   background-color: #E9E9E9
   z-index: 1000
-  
+
   .content_box
     padding-right: 24px
-  
+
   #rubric_full_resizer
     position: absolute
     top: 0
@@ -256,11 +258,11 @@
       position: absolute
       top: 50%
       left: 0px
-      background: transparent url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50% 
+      background: transparent url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50%
       cursor: pointer
       height: 20px
       width: 7px
-    
+
   a.big_link
     display: none
 
@@ -278,7 +280,7 @@
     .avatar
       height: 30px
       max-width: 30px
-        
+
 
 #add_a_comment
   background-color: #f0f0f0
@@ -318,7 +320,7 @@
         display: block
         border: 1px solid #F0F0F0
         padding: 2px 3px
-        +border-radius(2px)
+        border-radius: 2px
         img
           vertical-align: bottom
       a:hover .icon, a:focus .icon
@@ -350,17 +352,17 @@
       outline: none
   textarea
     border: 1px solid #aaa
-    +border-radius(4px)
+    border-radius: 4px
     padding: 2px
     width: 94% /*hack for IE6 */
     max-height: 200px
     font-size: 13px
-    
+
 html > body #add_a_comment textarea
   width: 97% /* for everyone else */
 
 body .ui-selectmenu-dropdown
-  +border-radius(0)
+  border-radius: 0
   color: #222 !important
   height: 21px
   background-color: #fff
@@ -407,26 +409,49 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
       margin-top: -1px
       font-size: 10px
       line-height: 1em
-      +opacity(0)
+      opacity: 0
   .ui-selectmenu-item-focus .ui-selectmenu-item-footer
-    +opacity(0.9)
+    opacity: 0.9
 
 .ui-selectmenu-item-icon
   top: 2px !important
   margin-top: 0 !important
   left: -3px
-  // +opacity(0.8)
-  background:  no-repeat
-  background-image: url("/images/three_state_checkbox.gif") !important
+  // opacity: 0.8
 
-  .graded &
-    background-position: 0 -120px
+.ui-selectmenu-item-icon.speedgrader-selectmenu-icon
+  position: absolute
+  left: 0px
+
+  .ui-selectmenu-status &
+    top: -0.5px !important
+    left: 4px
+
   .not_graded &
-    background-position: 0 -65px
-  .not_submitted &
-    background-position: 0 -12px
+    font-size: 1.7em
+    color: $orange
   .resubmitted &
-    background-position: 0 -175px
+    font-size: 1.7em
+    color: $orange
+  .graded &
+    color: $green
+
+    i
+      width: 14px
+      height: 14px
+      line-height: 14px
+      &:before
+        font-size: 14px
+
+.ui-selectmenu-item-header
+  .not_submitted &
+    color: $grayLight
+  .ui-selectmenu-status &
+    margin-top: 1px
+
+.speedgrader-selectmenu-icon + .ui-selectmenu-item-header
+  margin-left: 5px
+
 .turnitin_info
   margin-top: 3px
   border-top: 1px solid #999999
@@ -449,6 +474,9 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
   #submission_not_newest_notice
     color: #EB9A00
     font-weight: bold
+  .see-all-attempts
+    display: block
+    font-weight: bold
   select
     width: 99%
   label
@@ -467,10 +495,10 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
         &.submission_error, &.submission_pending
           padding: 1px
         &:hover
-          font-size: 9px 
+          font-size: 9px
       .submission-file-download
         display: block
-        +opacity(0.5)
+        opacity: 0.5
         background: url("/images/download.png") no-repeat top right
         width: 16px
         height: 16px
@@ -482,7 +510,7 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
         background-color: #DCECFB
         .submission-file-download
           display: block
-          +opacity(1.0)
+          opacity: 1
     .submission-file-selected
       background: #DCECFB url("/images/pass.png") no-repeat center left
       font-weight: bold
@@ -507,12 +535,19 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
     top: 0
     background-color: #fff
     padding: 0
-    +border-radius(0) 
+    border-radius: 0
     li
       padding: 0
       margin: 0
-      border: 0 none  
+      border: 0 none
       a
         line-height: 21px
         &.selected
           font-weight: bold
+
+#no_annotation_warning
+  position: absolute
+  left: 50%
+  margin-left: -150px
+  width: 300px
+  text-align: center

@@ -35,7 +35,7 @@ define([
       "application/vnd.sun.xml.writer":                                            [1, 1],
       "application/excel":                                                         [1, 1],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         [1, 1],
-      "text/rtf":                                                                  [1, false],
+      "text/rtf":                                                                  [1, 1],
       "application/vnd.openxmlformats-officedocument.spreadsheetml.template":      [1, 1],
       "application/vnd.sun.xml.impress":                                           [1, 1],
       "application/vnd.sun.xml.calc":                                              [1, 1],
@@ -57,7 +57,11 @@ define([
   };
 
   $.filePreviewsEnabled = function(){
-    return !(INST.disableScribdPreviews && INST.disableGooglePreviews);
+    return !(
+      INST.disableCrocodocPreviews &&
+      INST.disableScribdPreviews &&
+      INST.disableGooglePreviews
+    );
   }
 
   // check to see if a file of a certan mimeType is previewable inline in the browser by either scribd or googleDocs
@@ -73,11 +77,13 @@ define([
   $.fn.loadDocPreview = function(options) {
     // if it is a scribd doc and flash is available
     var flashVersion = swfobject.getFlashPlayerVersion(),
-        hasGoodEnoughFlash = flashVersion && flashVersion.major > 9;
+        hasGoodEnoughFlash = flashVersion && flashVersion.major > 9,
+        scribdHtml5 = INST.enableScribdHtml5;
 
     return this.each(function(){
       var $this = $(this),
           opts = $.extend({
+            width: '100%',
             height: '400px'
           }, $this.data(), options);
 
@@ -85,43 +91,94 @@ define([
         // if I have a url to ping back to the app that I viewed this file inline, ping it.
         if (opts.attachment_view_inline_ping_url) {
           $.ajaxJSON(opts.attachment_view_inline_ping_url, 'POST', {}, function() { }, function() { });
-          $.trackEvent('Doc Previews', serviceUsed, JSON.stringify(opts));
+          $.trackEvent('Doc Previews', serviceUsed, JSON.stringify(opts, ['attachment_id', 'submission_id', 'mimetype', 'crocodoc_session_url', 'canvadoc_session_url', 'scribd_doc_id']));
         }
       }
 
-      // if doc is scribdable, and the browser can show it.
-      if (!INST.disableScribdPreviews && opts.scribd_doc_id && opts.scribd_access_key && hasGoodEnoughFlash && scribd) {
-        var scribdDoc = scribd.Document.getDoc( opts.scribd_doc_id, opts.scribd_access_key ),
-            id = $this.attr('id'),
-            // see http://www.scribd.com/developers/api?method_name=Javascript+API for an explaination of these options
-            scribdParams = $.extend({
-              'jsapi_version': 1,
-              'disable_related_docs': true, //Disables the related documents tab in List Mode.
-              'auto_size' : false, //When false, this parameter forces Scribd Reader to use the provided width and height rather than using a width multiplier of 85/110.
-              'height' : opts.height,
-              'use_ssl' : 'https:' == document.location.protocol
+      if (!INST.disableCrocodocPreviews && opts.crocodoc_session_url) {
+        var iframe = $('<iframe/>', {
+            src: opts.crocodoc_session_url,
+            width: opts.width,
+            height: opts.height
+        });
+        iframe.appendTo($this);
+        iframe.load(function() {
+          tellAppIViewedThisInline('crocodoc');
+          if ($.isFunction(opts.ready))
+            opts.ready();
+        });
+      }
+      else if (opts.canvadoc_session_url) {
+        var iframe = $('<iframe/>', {
+            src: opts.canvadoc_session_url,
+            width: opts.width,
+            height: opts.height,
+            allowfullscreen: "1",
+            css: {border: 0}
+        });
+        iframe.appendTo($this);
+        iframe.load(function() {
+          tellAppIViewedThisInline('canvadocs');
+          if ($.isFunction(opts.ready))
+            opts.ready();
+        });
+      }
+      else if (!INST.disableScribdPreviews && opts.scribd_doc_id && opts.scribd_access_key &&
+          (scribdHtml5 || scribd && hasGoodEnoughFlash)) {
+        if (scribdHtml5) {
+          var scribdParams = $.extend({
+              'auto_size': false,
+              'height': opts.height,
+              'jsapi_version': 2
             }, opts.scribdParams);
 
-        if (!id) {
-          id = _.uniqueId("scribd_preview_");
-          $this.attr('id', id);
-        }
-        $.each(scribdParams, function(key, value){
-          scribdDoc.addParam(key, value);
-        });
-        if ($.isFunction(opts.ready)) {
-          scribdDoc.addEventListener('iPaperReady', opts.ready);
-        }
-        scribdDoc.write( id );
+          var scribdIframeUrl = '//www.scribd.com/embeds/' + opts.scribd_doc_id + '/content?' + $.param({
+              start_page: 1,
+              view_mode: 'list',
+              access_key: opts.scribd_access_key
+            });
 
-        // this is a hack so that the <embed> doesn't throw a bunch of these errors after it is .remove()d:
-        // Uncaught TypeError: Object #<HTMLEmbedElement> has no method 'keyboardShortcut(Up/Down)'
-        // They come from the actionscript running in their viewer:
-        // see: http://dragstudio.com/app/ScribdViewer/javascript/_-0j.as
-        // and http://groups.google.com/group/scribd-platform-developers/msg/46a4f12db73d02d8
-        this.childNodes[0].keyboardShortcutDown = this.childNodes[0].keyboardShortcutUp = function(){};
+          $('<iframe class="scribd_iframe_embed" src="' + scribdIframeUrl + '" height="' + scribdParams.height  +
+              '" data-auto-height="' + scribdParams.auto_size + '" width="100%" />')
+            .appendTo($this)
+            .load(function() {
+                tellAppIViewedThisInline('scribd');
+                if ($.isFunction(opts.ready)) opts.ready();
+              });
 
-        tellAppIViewedThisInline('scribd');
+        } else if (scribd && hasGoodEnoughFlash){
+          var scribdDoc = scribd.Document.getDoc( opts.scribd_doc_id, opts.scribd_access_key ),
+              id = $this.attr('id'),
+              // see http://www.scribd.com/developers/api?method_name=Javascript+API for an explaination of these options
+              scribdParams = $.extend({
+                'jsapi_version': 1,
+                'disable_related_docs': true, //Disables the related documents tab in List Mode.
+                'auto_size' : false, //When false, this parameter forces Scribd Reader to use the provided width and height rather than using a width multiplier of 85/110.
+                'height' : opts.height,
+                'use_ssl' : 'https:' == document.location.protocol
+              }, opts.scribdParams);
+
+          if (!id) {
+            id = _.uniqueId("scribd_preview_");
+            $this.attr('id', id);
+          }
+          $.each(scribdParams, function(key, value){
+            scribdDoc.addParam(key, value);
+          });
+          if ($.isFunction(opts.ready)) {
+            scribdDoc.addEventListener('iPaperReady', opts.ready);
+          }
+          scribdDoc.write( id );
+
+          // this is a hack so that the <embed> doesn't throw a bunch of these errors after it is .remove()d:
+          // Uncaught TypeError: Object #<HTMLEmbedElement> has no method 'keyboardShortcut(Up/Down)'
+          // They come from the actionscript running in their viewer:
+          // see: http://dragstudio.com/app/ScribdViewer/javascript/_-0j.as
+          // and http://groups.google.com/group/scribd-platform-developers/msg/46a4f12db73d02d8
+          this.childNodes[0].keyboardShortcutDown = this.childNodes[0].keyboardShortcutUp = function(){};
+
+          tellAppIViewedThisInline('scribd');
+        }
       } else if (!INST.disableGooglePreviews && (!opts.mimeType || $.isPreviewable(opts.mimeType, 'google')) && opts.attachment_id || opts.public_url){
         // else if it's something google docs preview can handle and we can get a public url to this document.
         function loadGooglePreview(){
@@ -130,19 +187,21 @@ define([
             embedded: true,
             url: opts.public_url
           });
-          $('<iframe src="' + googleDocPreviewUrl + '" height="' + opts.height  + '" width="100%" />')
-            .appendTo($this)
-            .load(function(){
-              tellAppIViewedThisInline('google');
-              if ($.isFunction(opts.ready)) {
-                opts.ready();
-              }
-            });
+          if (!opts.ajax_valid || opts.ajax_valid()){
+            $('<iframe src="' + googleDocPreviewUrl + '" height="' + opts.height  + '" width="100%" />')
+              .appendTo($this)
+              .load(function(){
+                tellAppIViewedThisInline('google');
+                if ($.isFunction(opts.ready)) {
+                  opts.ready();
+                }
+              });
+          }
         }
         if (opts.public_url) {
           loadGooglePreview()
         } else if (opts.attachment_id) {
-          var url = '/files/'+opts.attachment_id+'/public_url.json';
+          var url = '/api/v1/files/'+opts.attachment_id+'/public_url.json';
           if (opts.submission_id) {
             url += '?' + $.param({ submission_id: opts.submission_id });
           }
@@ -155,9 +214,16 @@ define([
             }
           });
         }
-      } else {
+      } else if ($.filePreviewsEnabled()) {
         // else fall back with a message that the document can't be viewed inline
-        $this.html('<p>' + htmlEscape(I18n.t('errors.cannot_view_document_inline', 'This document cannot be viewed inline, you might not have permission to view it or it might have been deleted.')) + '</p>');
+        if (opts.attachment_preview_processing) {
+          $this.html('<p>' + htmlEscape(I18n.t('errors.document_preview_processing', 'The document preview is currently being processed. Please try again later.')) + '</p>');
+        } else if (opts.attachment_scribd_render_url) {
+          $this.html('<p>' + htmlEscape(I18n.t('errors.document_preview_processing', 'The document preview is currently being processed. Please try again later.')) + '</p>');
+          $.ajaxJSON(opts.attachment_scribd_render_url, 'POST', {}, function() {}, function() {});
+        } else {
+          $this.html('<p>' + htmlEscape(I18n.t('errors.cannot_view_document_in_canvas', 'This document cannot be displayed within Canvas.')) + '</p>');
+        }
       }
     });
   };

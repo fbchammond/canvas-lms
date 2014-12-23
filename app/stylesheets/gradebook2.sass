@@ -1,4 +1,10 @@
 @import environment.sass
+@import learning_outcome_gradebook.scss
+
+#footer
+  display: none
+#main
+  margin-bottom: 0
 
 $cell_height: 33px
 
@@ -7,7 +13,7 @@ $cell_height: 33px
   position: absolute
   bottom: 4px
   left: 0px
-#gradebook_grid
+.container_1
   .slick-cell
     border: 0
     padding: 0
@@ -15,6 +21,9 @@ $cell_height: 33px
     &.editable
       background: transparent
       border: none
+#gradebook_grid .slick-cell.meta-cell
+  padding: 0
+  border-width: 0 1px
 // ******* END overrides of the default slick.grid.css styles ********
 
 .gradebook2 #content
@@ -24,38 +33,46 @@ $cell_height: 33px
 #gradebook-grid-wrapper
   position: relative
 
-#gradebook_students_grid
-  float: left
-  width: 250px
+.student-name
+  color: #1b7eda
+  text-shadow: #fbf8f8 0 0 1px
 
-  // put some space at the bottom of the student names slickgrid to compensate
-  // for the lack of a scrollbar like the main grade grid so when you scroll
-  // to the bottom it can match the same scrollTop as the main grid.
-  .grid-canvas
-    padding-bottom: 50px
-  .student-name
-    color: #1b7eda
-    text-shadow: #fbf8f8 0 0 1px
-  .avatar
-    float: left
-    width: 34px
-    img
-      max-width: 30px
-      height: 30px
-  .student-section
-    font-size: 10px
-    color: #aaa
+.meta-cell .avatar
+  width: 25px
+  height: 25px
+  margin-top: 3px
+  margin-right: 4px
+  float: left
+  position: relative
+  z-index: 1
+
+.student-placeholder
+  display: none
+.student-section
+  margin-top: -7px
+  font-size: 10px
+  color: #aaa
+.secondary_identifier_cell, .custom_column
+  color: #333
+  font-size: 10px
+  text-align: center
+  line-height: 35px
+
+// show and hide student names using a parent css class.
+.hide-students
+  .student-name, .avatar
+    display: none
+  .student-placeholder
+    display: block
   .secondary_identifier_cell
-    color: #333
-    font-size: 10px
-    text-align: center
-    line-height: 35px
+    text-indent: -9999em
 
 // override the default jquery ui top border
 .slick-header.ui-state-default
   border-top: 0
 .slick-header-column
-  +vertical-gradient(#f3f4f8, #dbdcde)
+  background-color: #f3f4f8
+  background-image: none
   padding: 10px
   font-size: 12px
   text-align: center
@@ -63,7 +80,9 @@ $cell_height: 33px
   // override jqueryUI style
   &.ui-state-default
     height: 30px
-  &.hovered-column
+  &.hovered-column,
+  &.slick-header-column-active,
+  &.ui-state-hover
     +vertical-gradient(#e0ecf9, #bdd2e3)
 
   .slick-column-name
@@ -81,13 +100,13 @@ $cell_height: 33px
     text-overflow: ellipsis
     white-space: nowrap
   .muted
-    background: url('/images/sound_mute.png') no-repeat center right
-    padding-right: 16px
+    background: url('/images/sound_mute.png') no-repeat center left
+    padding-left: 16px
   .assignment-points-possible
     font-weight: normal
     text-shadow: #84848a 0 0 1px
     font-size: 10px
-    +opacity(0.5)
+    opacity: 0.5
     color: #2f2a34
     margin:
       left: 10px
@@ -102,18 +121,17 @@ $cell_height: 33px
     bottom: 3px
     right: 3px
     text-indent: 999px
-    +opacity(0)
+    opacity: 0
+
+    //override jqueryui blue border
+    border: 0 none
+
     &:hover, &.ui-menu-trigger-menu-is-open
       background-position: bottom left
-      +opacity(1)
+      opacity: 1
   &:hover .gradebook-header-drop
-    +opacity(1)
+    opacity: 1
 
-
-
-#sort_rows_dialog
-  .button
-    margin-bottom: 5px
 
 .odd .slick-cell
   background-color: #f5f6f7
@@ -157,9 +175,9 @@ $cell_height: 33px
   display: none
   background-color: #444
   color: #fff
-  +border-radius(3px)
+  border-radius: 3px
   padding: 5px 10px
-  z-index: 5
+  z-index: 7
   position: absolute
   font-size: 0.8em
   left: 0
@@ -173,20 +191,26 @@ $cell_height: 33px
     width: 0
     left: 15px
     content: ""
-
-  // make the tooltips for the top row pop-under so they fit in the grid
-  .slick-row[row="0"] &
-    bottom: -30px
-    top: auto
-    &:after
-      border-width: 0 5px 5px
-      bottom: auto
-      top: -5px
   .slick-cell.hover &, .gradebook-cell.focus &, .slick-cell.selected &
     display: block
+  &.first-row
+    top: 30px
+    &:after
+      border-top-color: transparent
+      border-left-color: transparent
+      border-right-color: transparent
+      border-bottom: 5px solid #444
+      bottom: 30px
+
 .slick-cell.completely-hidden
   display: none
 
+.gradebook-tooltip-last
+  left: auto
+  right: 0
+  &:after
+    left: auto
+    right: 15px
 
 .gradebook-cell
   padding-top: 8px
@@ -200,11 +224,32 @@ $cell_height: 33px
 
   &.late
     background-image: url("/images/gradebook-late-indicator.png")
-  &.dropped
-    background-image: url("/images/gradebook-dropped-indicator.png")
   &.resubmitted
     background-image: url("/images/gradebook-resubmitted-indicator.png")
 
+.slick-cell.dropped
+  background-image: url("/images/gradebook-dropped-indicator.png")
+  background-repeat: repeat
+
+.gradebook-cell-turnitin
+  position: absolute
+  top: 2px
+  right: 2px
+  z-index: 1
+  width: 20px
+  height: 16px
+  &.no-score
+    background-image: url(/images/turnitin_no_score.png)
+  &.none-score
+    background-image: url(/images/turnitin_none_score.png)
+  &.acceptable-score
+    background-image: url(/images/turnitin_acceptable_score.png)
+  &.warning-score
+    background-image: url(/images/turnitin_warning_score.png)
+  &.problem-score
+    background-image: url(/images/turnitin_problem_score.png)
+  &.failure-score
+    background-image: url(/images/turnitin_failure_score.png)
 
 .gradebook-cell-comment
   position: absolute
@@ -214,11 +259,11 @@ $cell_height: 33px
   height: 12px
   width: 12px
   visibility: hidden
-  z-index: 1 //needs to be above "normal but below tooltips"
+  z-index: 2 //needs to be above "normal but below tooltips"
   overflow: hidden
 
-  &:hover,
-  &:focus
+  #gradebook_grid.editable &:hover,
+  #gradebook_grid.editable &:focus
     visibility: visible
     background-position: 100% -88px !important
     width: 17px
@@ -226,25 +271,38 @@ $cell_height: 33px
 
   .slick-cell.with-comments &
     visibility: visible
-  .slick-cell.focus &,
-  .slick-cell.hover &
+  #gradebook_grid.editable .slick-cell.focus &,
+  #gradebook_grid.editable .slick-cell.hover &,
+  #gradebook_grid.editable .slick-cell.active &
     visibility: visible
     background-position: 100% -41px
     width: 25px
     height: 25px
 
 .gradebook-cell-comment-label
-  +accessible_text_replacement
-
+  +hide-text
+  display: inline-block
 
 .gradebook-cell-editable
   height: $cell_height - 1px -8px
   padding-top: 8px
   margin: 0
-  border: 0
   border: 1px solid #35a5e5
   background-color: #fff
   box-shadow: 0 0 5px rgba(81, 203, 238, 1)
+
+#gradebook_grid .slick-cell
+  z-index: auto
+  &.active
+    background-color: inherit
+    z-index: 5
+    border: 1px solid #35a5e5
+    top: -1px
+    &.editable
+      top: 0
+      border: 0
+
+
 .gradebook-cell
   .grade
     border: none
@@ -255,7 +313,10 @@ $cell_height: 33px
     padding: 0
     margin: 0
     background: none
+    box-shadow: none !important
   .grade::-webkit-outer-spin-button
+    display: none
+  .grade::-ms-clear
     display: none
 .gradebook-cell-out-of-formatter
   padding-top: 0
@@ -279,7 +340,7 @@ $cell_height: 33px
       display: inline-block
       background: transparent
     .outof
-      +unselectable
+      +user-select(none)
 
       text-align: left
       color: #888
@@ -293,7 +354,7 @@ $cell_height: 33px
 
 $gradebook_checkbox_width: 16px
 .gradebook-checkbox
-  +accessible_text_replacement
+  +hide-text
   display: block
   position: absolute
   left: 50%
@@ -314,6 +375,9 @@ $gradebook_checkbox_width: 16px
     &.gradebook-checkbox-fail
       background-position: -32px 0
 
+#hide_warning
+  vertical-align: top
+
 .minimized
   background-image: url("/images/4_percent_opacity.png")
   .gradebook-cell
@@ -325,16 +389,37 @@ $gradebook_checkbox_width: 16px
 
 // STUFF FOR HEADER
 #gradebook-toolbar
-  background: url('/images/black-header-bg.png') repeat-x
   height: 28px
-  padding: 8px 20px
+  padding: 6px 10px
+  position: relative
+  border-left: none
+  border-right: none
+
+.gradebook_filter
+  position: absolute
+  right: 10px
+  top: 6px
+
+.gradebook_filter input
+  width: 300px
+
+=gradebook_menu_label($fontsize)
+  font-size: $fontsize
+  font-weight: bold
+  margin-bottom: 0
+  vertical-align: 0px !important
+  position: relative
+  line-height: 1.5
 
 #section-to-show-menu
   width: 200px
-  &.scrolling
-    overflow-x: hidden
-    overflow-y: auto
-    max-height: 550px
+  overflow-x: hidden
+  overflow-y: auto
+  max-height: 275px
+  label
+    +gradebook_menu_label(12px)
+  .ui-state-focus:last-child
+    margin: 0 !important
 
 .submission_type_icon
   display: block
@@ -350,14 +435,22 @@ $gradebook_checkbox_width: 16px
     background-image: url('/images/file.png')
   .pending_review &
     background-image: url('/images/pending_review.png')
-  .media_comment &
+  .media_comment &, .media_recording &
     background-image: url('/images/media_comment.gif')
   .quiz &
     background-image: url('/images/quiz.png')
 
-.letter-grade-points
-  +opacity(0.4)
+.letter-grade-points,
+.gpa-scale-points
+  opacity: 0.4
   position: absolute
   font-size: 11px
   padding-left: 8px
   line-height: 19px
+
+.final-warning
+  margin-left: -16px
+
+.gradebook_drop_down
+  li, label
+    +gradebook_menu_label(13px)

@@ -1,14 +1,10 @@
 <%
-  js_bundle :learning_outcome
   jammit_css :learning_outcomes
   content_for :page_title, @outcome.short_description
 %>
 <% content_for :right_side do %>
   <div class="rs-margin-all">
-    <% if LearningOutcome.non_rubric_outcomes? && @context.is_a?(Course) %>
-    <a href="#" class="add_outcome_alignment_link button button-sidebar-wide"><%= image_tag "add.png" %> <%= t "#buttons.align_to_this_outcome", "Align to this Outcome" %></a>
-    <% end %>
-    <a class="button button-sidebar-wide" href="<%= context_url(@context, :context_outcomes_url) %>"><%= image_tag "back.png" %> <%= t "#buttons.back_to_outcomes", "Back to Outcomes" %></a>
+    <a class="btn button-sidebar-wide" href="<%= context_url(@context, :context_outcomes_url) %>"><%= image_tag "back.png" %> <%= t "#buttons.back_to_outcomes", "Back to Outcomes" %></a>
   </div>
 <% end %>
 
@@ -20,10 +16,10 @@
     <%= render :partial => "shared/select_content_dialog" %>
   <% end %>
 </div>
-<%= t(:no_aligned_items, "No aligned items") if @tags.empty? %>
+<%= t(:no_aligned_items, "No aligned items") if @alignments.empty? %>
 <ul id="alignments" class="<%= 'orderable' if @context.is_a?(Course) %>">
-<% @tags.each do |tag| %>
-  <%= render :partial => "outcome_alignment", :object => tag %>
+<% @alignments.each do |alignment| %>
+  <%= render :partial => "outcome_alignment", :object => alignment %>
 <% end %>
 </ul>
 <h2 style="margin-top: 20px;"><%= t("#titles.outcome_artifacts", "Outcome Artifacts") %></h2>
@@ -31,7 +27,24 @@
 <div id="outcome_results">
   <ul id="outcome_results_list">
   <% @results.each do |result| %>
-    <%= render :partial => "outcome_result", :object => result %>
+    <%#
+      There are a few old LearningOutcomeResults that have a nil artifact, and
+      many that have a Submission as an artifact.  We want to get rid of these
+      because they come from bad data, and step 1 toward that goal is to stop
+      creating them and hide them in the UI.
+
+      The LORs with a nil artifact are very old and I believe came from a very
+      early incarnation of outcomes.  The LORs with a Submission as an artifact
+      came from a combination of two code problems.  The first was old code
+      that allowed an assignment that was aligned with an outcome but did not
+      have a rubric to create LORs directly based on it's submission.  The
+      second was a bug that prevented the assignment <-> outcome link from
+      being destroyed when a rubric with an outcome was removed from an
+      assignment.
+    %>
+    <% if result.artifact_type.present? && result.artifact_type != 'Submission' %>
+      <%= render :partial => "outcome_result", :object => result %>
+    <% end %>
   <% end %>
   </ul>
   <%= will_paginate(@results) %>

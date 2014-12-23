@@ -11,7 +11,7 @@ namespace :db do
     abcs = ActiveRecord::Base.configurations
     ["development"].each do |db|
       case abcs[db]["adapter"]
-        when "mysql"
+        when 'mysql', 'mysql2'
           ActiveRecord::Base.establish_connection(db.to_sym)
           conn = ActiveRecord::Base.connection
           conn.execute("DROP DATABASE #{abcs[db]["database"]}")
@@ -30,7 +30,7 @@ namespace :db do
         else
           raise "Task not supported by '#{abcs[db]["adapter"]}'"
       end
-      ENV['RAILS_ENV'] = db
+      Rails.env = db
       Rake::Task["db:migrate"].dup.invoke
       Rake::Task["db:load_initial_data"].dup.invoke
       # Rake::Task["db:fixtures:load"].dup.invoke

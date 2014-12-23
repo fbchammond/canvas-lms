@@ -5,11 +5,11 @@
   content_for :right_side, render(:partial => 'wiki_pages/wiki_right_side')
 %>
 
-<% if reason = @page.locked_for?(@context, @current_user) %>
+<% if reason = @page.locked_for?(@current_user, :context => @context) %>
   <h2><%= @page.title %></h2>
   <%= lock_explanation(reason, 'page', @context) %>
 <% else %>
   <%= render :partial => "wiki_pages/content" %>
 <% end %>
 
-<%= render :partial => "shared/sequence_footer", :locals => {:asset => @page} if @page.context_module_tag_for(@context, @current_user) %>
+<%= render :partial => "shared/sequence_footer", :locals => {:asset => @page} if @page.context_module_tag_for(@context) %>

@@ -16,164 +16,6 @@
 # based on http://henrik.nyh.se/2008/01/rails-truncate-html-helper
 
 module TextHelper
-  def strip_and_truncate(text, options={})
-    truncate_text(strip_tags(text), options)
-  end
-  module_function :strip_and_truncate
-
-  def strip_tags(text)
-    text ||= ""
-    text.gsub(/<\/?[^>\n]*>/, "").gsub(/&#\d+;/) {|m| puts m; m[2..-1].to_i.chr rescue '' }.gsub(/&\w+;/, "")
-  end
-
-  # Converts a string of html to plain text, preserving as much of the
-  # formatting and information as possible
-  #
-  # This is still a pretty basic implementation, I'm sure we'll find ways to
-  # tweak and improve it as time goes on.
-  def html_to_text(html_str)
-    doc = Nokogiri::HTML::DocumentFragment.parse(html_str.squeeze(" ").squeeze("\n"))
-    # translate anchor tags into a markdown-style name/link combo
-    doc.css('a').each { |node| next if node.text.strip == node['href']; node.replace("[#{node.text}](#{node['href']})") }
-    # translate img tags into just a url to the image
-    doc.css('img').each { |node| node.replace(node['src']) }
-    # append a line break to br and p tags, so they retain a line break after stripping tags
-    doc.css('br, p').each { |node| node.after("\n\n") }
-    doc.text.strip
-  end
-
-  def quote_clump(quote_lines)
-    txt = "<div class='quoted_text_holder'><a href='#' class='show_quoted_text_link'>#{TextHelper.escape_html(I18n.t('lib.text_helper.quoted_text_toggle', "show quoted text"))}</a><div class='quoted_text' style='display: none;'>"
-    txt += quote_lines.join("\n")
-    txt += "</div></div>"
-    txt
-  end
-
-  # http://daringfireball.net/2010/07/improved_regex_for_matching_urls
-  # released to the public domain
-  AUTO_LINKIFY_PLACEHOLDER = "LINK-PLACEHOLDER"
-  AUTO_LINKIFY_REGEX = %r{
-    \b
-    (                                            # Capture 1: entire matched URL
-      (?:
-        https?://                                # http or https protocol
-        |                                        # or
-        www\d{0,3}[.]                            # "www.", "www1.", "www2." … "www999."
-        |                                        # or
-        [a-z0-9.\-]+[.][a-z]{2,4}/               # looks like domain name followed by a slash
-      )
-      (?:                                        # One or more:
-        [^\s()<>]+                               # Run of non-space, non-()<>
-        |                                        # or
-        \(([^\s()<>]+|(\([^\s()<>]+\)))*\)       # balanced parens, up to 2 levels
-      )+
-      (?:                                        # End with:
-        \(([^\s()<>]+|(\([^\s()<>]+\)))*\)       # balanced parens, up to 2 levels
-        |                                        # or
-        [^\s`!()\[\]{};:'".,<>?«»“”‘’]           # not a space or one of these punct chars
-      )
-    ) | (
-      #{AUTO_LINKIFY_PLACEHOLDER}
-    )
-  }xi
-
-  # Converts a plaintext message to html, with newlinification, quotification, and linkification
-  def format_message(message, url=nil, notification_id=nil)
-    # insert placeholders for the links we're going to generate, before we go and escape all the html
-    links = []
-    placeholder_blocks = []
-    message ||= ''
-    message = message.gsub(AUTO_LINKIFY_REGEX) do |match|
-      placeholder_blocks << if match == AUTO_LINKIFY_PLACEHOLDER
-        AUTO_LINKIFY_PLACEHOLDER
-      else
-        s = $1
-        link = s
-        link = "http://#{link}" if link[0,3] == 'www'
-        link = add_notification_to_link(link, notification_id) if notification_id
-        link = URI.escape(link).gsub("'", "%27")
-        links << link
-        "<a href='#{ERB::Util.h(link)}'>#{ERB::Util.h(s)}</a>"
-      end
-      AUTO_LINKIFY_PLACEHOLDER
-    end
-
-    # now escape any html
-    message = TextHelper.escape_html(message)
-
-    # now put the links back in
-    message = message.gsub(AUTO_LINKIFY_PLACEHOLDER) do |match|
-      placeholder_blocks.shift
-    end
-
-    message = message.gsub(/\r?\n/, "<br/>\r\n")
-    processed_lines = []
-    quote_block = []
-    message.split("\n").each do |line|
-      # check for lines starting with '>'
-      if /^(&gt;|>)/ =~ line
-        quote_block << line
-      else
-        processed_lines << quote_clump(quote_block) if !quote_block.empty?
-        quote_block = []
-        processed_lines << line
-      end
-    end
-    processed_lines << quote_clump(quote_block) if !quote_block.empty?
-    message = processed_lines.join("\n")
-    if url
-      url = add_notification_to_link(url, notification_id) if notification_id
-      links.unshift url
-    end
-    links.unshift message
-  end
-
-  def add_notification_to_link(url, notification_id)
-    parts = "#{url}".split("#", 2)
-    link = parts[0]
-    link += link.match(/\?/) ? "&" : "?"
-    link += "clear_notification_id=#{notification_id}"
-    link += parts[1] if parts[1]
-    link
-  rescue
-    return ""
-  end
-
-  def truncate_text(text, options={})
-    truncated = text || ""
-
-    # truncate words
-    if options[:max_words]
-      word_separator = options[:word_separator] || I18n.t('lib.text_helper.word_separator', ' ')
-      truncated = truncated.split(word_separator)[0,options[:max_words]].join(word_separator)
-    end
-
-    max_length = options[:max_length] || 30
-    return truncated if truncated.length <= max_length
-
-    ellipsis = options[:ellipsis] || I18n.t('lib.text_helper.ellipsis', '...')
-    actual_length = max_length - ellipsis.length
-
-    # First truncate the text down to the bytes max, then lop off any invalid
-    # unicode characters at the end.
-    truncated = truncated[0,actual_length][/.{0,#{actual_length}}/mu]
-    truncated + ellipsis
-  end
-
-  def self.escape_html(text)
-    CGI::escapeHTML text
-  end
-
-  def self.unescape_html(text)
-    CGI::unescapeHTML text
-  end
-
-  def indent(text, spaces=2)
-    text = text.to_s rescue ""
-    indentation = " " * spaces
-    text.gsub(/\n/, "\n#{indentation}")
-  end
-
   def force_zone(time)
     (time.in_time_zone(@time_zone || Time.zone) rescue nil) || time
   end
@@ -213,13 +55,14 @@ def self.date_component(start_date, style=:normal)
     TextHelper.date_string(*args)
   end
 
-  def time_string(start_time, end_time=nil)
-    start_time = start_time.in_time_zone rescue start_time
-    end_time = end_time.in_time_zone rescue end_time
+  def time_string(start_time, end_time=nil, zone=nil)
+    zone ||= ::Time.zone
+    start_time = start_time.in_time_zone(zone) rescue start_time
+    end_time = end_time.in_time_zone(zone) rescue end_time
     return nil unless start_time
     result = I18n.l(start_time, :format => start_time.min == 0 ? :tiny_on_the_hour : :tiny)
     if end_time && end_time != start_time
-      result = I18n.t('time.ranges.times', "%{start_time} to %{end_time}", :start_time => result, :end_time => time_string(end_time))
+      result = I18n.t('time.ranges.times', "%{start_time} to %{end_time}", :start_time => result, :end_time => time_string(end_time, nil, zone))
     end
     result
   end
@@ -233,26 +76,27 @@ def self.date_component(start_date, style=:normal)
     end
   end
 
-  def datetime_string(start_datetime, datetime_type=:event, end_datetime=nil, shorten_midnight=false)
-    start_datetime = start_datetime.in_time_zone rescue start_datetime
+  def datetime_string(start_datetime, datetime_type=:event, end_datetime=nil, shorten_midnight=false, zone=nil)
+    zone ||= ::Time.zone
+    start_datetime = start_datetime.in_time_zone(zone) rescue start_datetime
     return nil unless start_datetime
-    end_datetime = end_datetime.in_time_zone rescue end_datetime
+    end_datetime = end_datetime.in_time_zone(zone) rescue end_datetime
     if !datetime_type.is_a?(Symbol)
       datetime_type = :event
       end_datetime = nil
     end
     end_datetime = nil if datetime_type == :due_date
 
-    def datetime_component(date_string, time, type)
+    def datetime_component(date_string, time, type, zone)
       if type == :due_date
-        I18n.t('time.due_date', "%{date} by %{time}", :date => date_string, :time => time_string(time))
+        I18n.t('time.due_date', "%{date} by %{time}", :date => date_string, :time => time_string(time, nil, zone))
       else
-        I18n.t('time.event', "%{date} at %{time}", :date => date_string, :time => time_string(time))
+        I18n.t('time.event', "%{date} at %{time}", :date => date_string, :time => time_string(time, nil, zone))
       end
     end
 
     start_date_string = date_string(start_datetime, datetime_type == :verbose ? :long : :no_words)
-    start_string = datetime_component(start_date_string, start_datetime, datetime_type)
+    start_string = datetime_component(start_date_string, start_datetime, datetime_type, zone)
 
     if !end_datetime || end_datetime == start_datetime
       if shorten_midnight && ((datetime_type == :due_date  && start_datetime.hour == 23 && start_datetime.min == 59) || (datetime_type == :event && start_datetime.hour == 0 && start_datetime.min == 0))
@@ -262,13 +106,22 @@ def self.date_component(start_date, style=:normal)
       end
     else
       if start_datetime.to_date == end_datetime.to_date
-        I18n.t('time.ranges.same_day', "%{date} from %{start_time} to %{end_time}", :date => start_date_string, :start_time => time_string(start_datetime), :end_time => time_string(end_datetime))
+        I18n.t('time.ranges.same_day', "%{date} from %{start_time} to %{end_time}", :date => start_date_string, :start_time => time_string(start_datetime, nil, zone), :end_time => time_string(end_datetime, nil, zone))
       else
         end_date_string = date_string(end_datetime, datetime_type == :verbose ? :long : :no_words)
-        end_string = datetime_component(end_date_string, end_datetime, datetime_type)
+        end_string = datetime_component(end_date_string, end_datetime, datetime_type, zone)
         I18n.t('time.ranges.different_days', "%{start_date_and_time} to %{end_date_and_time}", :start_date_and_time => start_string, :end_date_and_time => end_string)
       end
     end
+  end
+
+  def unlocalized_datetime_string(start_datetime, datetime_type=:event)
+    start_datetime = start_datetime.in_time_zone rescue start_datetime
+    return nil unless start_datetime
+
+    date_format = (datetime_type == :verbose || start_datetime.year != Time.zone.today.year) ? "%b %-d, %Y" : "%b %-d"
+    time_format = start_datetime.min == 0 ?  "%l%P" : "%l:%M%P"
+    return start_datetime.strftime("#{date_format} at #{time_format}")
   end
 
   def time_ago_in_words_with_ago(time)
@@ -426,10 +279,14 @@ def self.date_component(start_date, style=:normal)
       end
     end
     translated = t(*args)
-    translated = ERB::Util.h(translated) unless translated.html_safe?
-    result = RDiscount.new(translated).to_html.strip
+    markdown(translated, inlinify)
+  end
+
+  def markdown(string, inlinify = :auto)
+    string = ERB::Util.h(string) unless string.html_safe?
+    result = RDiscount.new(string).to_html.strip
     # Strip wrapping <p></p> if inlinify == :auto && they completely wrap the result && there are not multiple <p>'s
     result.gsub!(/<\/?p>/, '') if inlinify == :auto && result =~ /\A<p>.*<\/p>\z/m && !(result =~ /.*<p>.*<p>.*/m)
-    result.html_safe.strip
+    result.strip.html_safe
   end
 end

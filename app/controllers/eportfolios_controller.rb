@@ -23,7 +23,6 @@ class EportfoliosController < ApplicationController
   
   def index
     user_index
-    # @portfolios = Eportfolio.find_all_by_public(true)
   end
   
   def user_index
@@ -32,7 +31,7 @@ class EportfoliosController < ApplicationController
     @active_tab = "eportfolios"
     add_crumb(@current_user.short_name, user_profile_url(@current_user))
     add_crumb(t(:crumb, "ePortfolios"))
-    @portfolios = @current_user.eportfolios.active.find(:all, :order => :updated_at)
+    @portfolios = @current_user.eportfolios.active.order(:updated_at).all
     render :action => 'user_index'
   end
   
@@ -44,10 +43,10 @@ class EportfoliosController < ApplicationController
           @portfolio.setup_defaults
           flash[:notice] = t('notices.created', "Porfolio successfully created")
           format.html { redirect_to eportfolio_url(@portfolio) }
-          format.json { render :json => @portfolio.to_json(:permissions => {:user => @current_user, :session => session}) }
+          format.json { render :json => @portfolio.as_json(:permissions => {:user => @current_user, :session => session}) }
         else
           format.html { render :action => "new" }
-          format.json { render :json => @portfolio.errors.to_json, :status => :bad_request }
+          format.json { render :json => @portfolio.errors, :status => :bad_request }
         end
       end
     end
@@ -77,6 +76,10 @@ class EportfoliosController < ApplicationController
       end
       @show_left_side = true
       eportfolio_page_attributes
+      if @current_user
+        js_env :folder_id => Folder.unfiled_folder(@current_user).id,
+               :context_code => @current_user.asset_string
+      end
       render :template => "eportfolios/show"
     end
   end
@@ -89,10 +92,10 @@ class EportfoliosController < ApplicationController
           @portfolio.setup_defaults
           flash[:notice] = t('notices.updated', "Porfolio successfully updated")
           format.html { redirect_to eportfolio_url(@portfolio) }
-          format.json { render :json => @portfolio.to_json(:permissions => {:user => @current_user, :session => session}) }
+          format.json { render :json => @portfolio.as_json(:permissions => {:user => @current_user, :session => session}) }
         else
           format.html { render :action => "edit" }
-          format.json { render :json => @portfolio.errors.to_json, :status => :bad_request }
+          format.json { render :json => @portfolio.errors, :status => :bad_request }
         end
       end
     end
@@ -105,10 +108,10 @@ class EportfoliosController < ApplicationController
         if @portfolio.destroy
           flash[:notice] = t('notices.deleted', "Portfolio successfully deleted")
           format.html { redirect_to user_profile_url(@current_user) }
-          format.json { render :json => @portfolio.to_json }
+          format.json { render :json => @portfolio }
         else
           format.html { render :action => "delete" }
-          format.json { render :json => @portfolio.errors.to_json, :status => :bad_request }
+          format.json { render :json => @portfolio.errors, :status => :bad_request }
         end
       end
     end
@@ -117,14 +120,8 @@ class EportfoliosController < ApplicationController
   def reorder_categories
     @portfolio = Eportfolio.find(params[:eportfolio_id])
     if authorized_action(@portfolio, @current_user, :update)
-      order = params[:order].split(",")
-      order.each do |id|
-        category = @portfolio.eportfolio_categories.find_by_id(id) if id.present?
-        category.move_to_bottom if category
-      end
-      respond_to do |format|
-        format.json { render :json => @portfolio.eportfolio_categories.map{|c| [c.id, c.position]}.to_json, :status => :ok }
-      end
+      @portfolio.eportfolio_categories.build.update_order(params[:order].split(","))
+      render :json => @portfolio.eportfolio_categories.map{|c| [c.id, c.position]}, :status => :ok
     end
   end
   
@@ -132,14 +129,8 @@ class EportfoliosController < ApplicationController
     @portfolio = Eportfolio.find(params[:eportfolio_id])
     if authorized_action(@portfolio, @current_user, :update)
       @category = @portfolio.eportfolio_categories.find(params[:eportfolio_category_id])
-      order = params[:order].split(",")
-      order.each do |id|
-        entry = @category.eportfolio_entries.find_by_id(id) if id.present?
-        entry.move_to_bottom if entry
-      end
-      respond_to do |format|
-        format.json { render :json => @portfolio.eportfolio_entries.map{|c| [c.id, c.position]}.to_json, :status => :ok }
-      end
+      @category.eportfolio_entries.build.update_order(params[:order].split(","))
+      render :json => @portfolio.eportfolio_entries.map{|c| [c.id, c.position]}, :status => :ok
     end
   end
   
@@ -147,7 +138,7 @@ class EportfoliosController < ApplicationController
     zip_filename = "eportfolio.zip"
     @portfolio = Eportfolio.find(params[:eportfolio_id])
     if authorized_action(@portfolio, @current_user, :update)
-      @attachments = @portfolio.attachments.find_all_by_display_name(zip_filename).select{|a| ['to_be_zipped', 'zipping', 'zipped'].include?(a.workflow_state) }.sort_by{|a| a.created_at }
+      @attachments = @portfolio.attachments.find_all_by_display_name(zip_filename).select{|a| ['to_be_zipped', 'zipping', 'zipped', 'unattached'].include?(a.workflow_state) }.sort_by{|a| a.created_at }
       @attachment = @attachments.pop
       @attachments.each{|a| a.destroy! }
       if @attachment && (@attachment.created_at < 1.hour.ago || @attachment.created_at < (@portfolio.eportfolio_entries.map{|s| s.updated_at}.compact.max || @attachment.created_at))
@@ -161,7 +152,7 @@ class EportfoliosController < ApplicationController
         @attachment.file_state = '0'
         @attachment.save!
         ContentZipper.send_later_enqueue_args(:process_attachment, { :priority => Delayed::LOW_PRIORITY, :max_attempts => 1 }, @attachment)
-        render :json => @attachment.to_json
+        render :json => @attachment
       else
         respond_to do |format|
           if @attachment.zipped?
@@ -173,12 +164,12 @@ class EportfoliosController < ApplicationController
               format.html { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
               format.zip { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
             end
-            format.json { render :json => @attachment.to_json(:methods => :readable_size) }
+            format.json { render :json => @attachment.as_json(:methods => :readable_size) }
           else
             flash[:notice] = t('notices.zipping', "File zipping still in process...")
             format.html { redirect_to eportfolio_url(@portfolio.id) }
             format.zip { redirect_to eportfolio_url(@portfolio.id) }
-            format.json { render :json => @attachment.to_json }
+            format.json { render :json => @attachment }
           end
         end
       end
@@ -188,7 +179,7 @@ class EportfoliosController < ApplicationController
   def public_feed
     @portfolio = Eportfolio.find(params[:eportfolio_id])
     if @portfolio.public || params[:verifier] == @portfolio.uuid
-      @entries = @portfolio.eportfolio_entries.find(:all, :order => 'eportfolio_entries.created_at DESC')
+      @entries = @portfolio.eportfolio_entries.order('eportfolio_entries.created_at DESC').all
       feed = Atom::Feed.new do |f|
         f.title = t(:title, "%{portfolio_name} Feed", :portfolio_name => @portfolio.name)
         f.links << Atom::Link.new(:href => eportfolio_url(@portfolio.id), :rel => 'self')

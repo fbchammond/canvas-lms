@@ -17,13 +17,15 @@
 #
 
 class GradebookUploadsController < ApplicationController
+  include GradebooksHelper
+
   before_filter :require_context
   def new
     if authorized_action(@context, @current_user, :manage_grades)
       @gradebook_upload = @context.build_gradebook_upload
     end
   end
-  
+
   def create
     if authorized_action(@context, @current_user, :manage_grades)
       if params[:gradebook_upload] &&
@@ -41,7 +43,7 @@ class GradebookUploadsController < ApplicationController
         respond_to do |format|
           if errored_csv
             flash[:error] = t('errors.invalid_file', "Invalid csv file, grades could not be updated")
-            format.html { redirect_to named_context_url(@context, :context_gradebook_url) }
+            format.html { redirect_to polymorphic_url([@context, 'gradebook']) }
           else
             format.html { render :action => "show" }
           end
@@ -49,7 +51,7 @@ class GradebookUploadsController < ApplicationController
       else
         respond_to do |format|
           flash[:error] = t('errors.upload_failed', 'File could not be uploaded.')
-          format.html { redirect_to named_context_url(@context, :context_gradebook_url) }
+          format.html { redirect_to polymorphic_url([@context, 'gradebook']) }
         end
       end
     end
@@ -57,18 +59,18 @@ class GradebookUploadsController < ApplicationController
 
   def update
     @data_to_load = ActiveSupport::JSON.decode(params["json_data_to_submit"])
-    if authorized_action(@context, @current_user, :manage_grades) 
+    if authorized_action(@context, @current_user, :manage_grades)
       if @data_to_load
         @students = @data_to_load["students"]
         @assignments = @data_to_load["assignments"]
         assignment_map = {}
         new_assignment_ids = {}
-        new_assignments, old_assignments = @assignments.partition { |a| !a['original_id'] && a['id'].to_i < 0 }
+        new_assignments, old_assignments = @assignments.partition { |a| !a['previous_id'] && a['id'].to_i < 0 }
         new_assignments.each do |assignment|
           a = @context.assignments.create!(:title => assignment['title'], :points_possible => assignment['points_possible'])
           new_assignment_ids[assignment['id']] = a.id
           assignment['id'] = a.id
-          assignment['original_id'] = a.id
+          assignment['previous_id'] = a.id
           assignment_map[a.id] = a
         end
         @context.assignments.find(old_assignments.map { |a| a['id'].to_i }).each do |a|
@@ -79,7 +81,7 @@ class GradebookUploadsController < ApplicationController
           student_record['submissions'].each do |submission_record|
             list << {
               :assignment_id => new_assignment_ids[submission_record['assignment_id']] || submission_record['assignment_id'].to_i,
-              :user_id => student_record['original_id'].to_i,
+              :user_id => student_record['previous_id'].to_i,
               :grade => submission_record['grade']
             }
           end
@@ -87,15 +89,12 @@ class GradebookUploadsController < ApplicationController
         end
 
         all_submissions = {}
-        @context.submissions.find(:all,
-          :include => { :exclude => :quiz_submission },
-          :conditions => {
-            :assignment_id => assignment_map.keys,
-            :user_id => @students.map { |s| s['original_id'].to_i }
-          }).each do |s|
+        @context.submissions.where(:assignment_id => assignment_map.keys,
+                                   :user_id => @students.map { |s| s['previous_id'].to_i })
+            .each do |s|
           all_submissions[[s.assignment_id, s.user_id]] = s
         end
-      
+
         submissions_updated_count = 0
         @submissions.each do |sub|
           next unless @assignments
@@ -104,12 +103,15 @@ class GradebookUploadsController < ApplicationController
           submission = all_submissions[[assignment.id, sub[:user_id]]]
           submission ||= Submission.new(:assignment => assignment) { |s| s.user_id = sub[:user_id] }
           # grade_to_score expects a string so call to_s here, otherwise things that have a score of zero will return nil
+          # we should really be using Assignment#grade_student here
           score = assignment.grade_to_score(sub[:grade].to_s)
           unless score == submission.score
             old_score = submission.score
             submission.grade = sub[:grade].to_s
             submission.score = score
-            submission.save!
+            submission.grader_id = @current_user.id
+            submission.graded_at = Time.zone.now
+            submission.with_versioning(:explicit => true) { submission.save! }
             submissions_updated_count += 1
             logger.info "updated #{submission.student.name} with score #{submission.score} for assignment: #{submission.assignment.title} old score was #{old_score}"
           end
@@ -117,9 +119,9 @@ class GradebookUploadsController < ApplicationController
         flash[:notice] = t('notices.updated', {:one => "Successfully updated 1 submission.", :other => "Successfully updated %{count} submissions."}, :count => submissions_updated_count)
       end
       respond_to do |format|
-        format.html { redirect_to named_context_url(@context, :context_gradebook_url) }
+        format.html { redirect_to polymorphic_url([@context, 'gradebook']) }
       end
     end
   end
-  
+
 end

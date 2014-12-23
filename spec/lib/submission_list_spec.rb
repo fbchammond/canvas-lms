@@ -40,7 +40,32 @@ describe SubmissionList do
     interesting_submission_list
     @sl.list.keys.should eql([Date.parse(Time.now.utc.to_s)])
   end
-  
+
+  it "should take the time zone into account when dividing grading history into days" do
+    course_with_teacher(:active_all => true)
+    course_with_student(:course => @course, :active_all => true)
+
+    @assignment1 = @course.assignments.create!(:title => 'one', :points_possible => 10)
+    @assignment2 = @course.assignments.create!(:title => 'two', :points_possible => 10)
+    @assignment3 = @course.assignments.create!(:title => 'three', :points_possible => 10)
+
+    Time.zone = 'Alaska'
+    Time.stubs(:now).returns(Time.utc(2011, 12, 31, 23, 0))   # 12/31 14:00 local time
+    @assignment1.grade_student(@student, {:grade => 10, :grader => @teacher})
+    Time.stubs(:now).returns(Time.utc(2012, 1, 1, 1, 0))      # 12/31 16:00 local time
+    @assignment2.grade_student(@student, {:grade => 10, :grader => @teacher})
+    Time.stubs(:now).returns(Time.utc(2012, 1, 1, 10, 0))     #  1/01 01:00 local time
+    @assignment3.grade_student(@student, {:grade => 10, :grader => @teacher})
+    Time.unstub(:now)
+
+    @days = SubmissionList.new(@course).days
+    @days.size.should == 2
+    @days[0].date.should == Date.new(2012, 1, 1)
+    @days[0].graders[0].assignments.size.should == 1
+    @days[1].date.should == Date.new(2011, 12, 31)
+    @days[1].graders[0].assignments.size.should == 2
+  end
+
   context "named loops" do
     
     before do
@@ -51,8 +76,8 @@ describe SubmissionList do
       available_keys = [:graders, :date]
       SubmissionList.days(@course).each do |day|
         day.should be_is_a(OpenStruct)
-        day.hash_data.keys.size.should eql(available_keys.size)
-        available_keys.each {|k| day.hash_data.should be_include(k)}
+        day.send(:table).keys.size.should eql(available_keys.size)
+        available_keys.each {|k| day.send(:table).should be_include(k)}
         day.graders.should be_is_a(Array)
         day.date.should be_is_a(Date)
       end
@@ -63,8 +88,8 @@ describe SubmissionList do
       SubmissionList.days(@course).each do |day|
         day.graders.each do |grader|
           grader.should be_is_a(OpenStruct)
-          grader.hash_data.keys.size.should eql(available_keys.size)
-          available_keys.each {|k| grader.hash_data.keys.should be_include(k)}
+          grader.send(:table).keys.size.should eql(available_keys.size)
+          available_keys.each {|k| grader.send(:table).keys.should be_include(k)}
           grader.grader_id.should be_is_a(Numeric)
           grader.assignments.should be_is_a(Array)
           grader.name.should be_is_a(String)
@@ -90,8 +115,8 @@ describe SubmissionList do
         day.graders.each do |grader|
           grader.assignments.each do |assignment|
             assignment.should be_is_a(OpenStruct)
-            assignment.hash_data.keys.size.should eql(available_keys.size)
-            available_keys.each {|k| assignment.hash_data.keys.should be_include(k)}
+            assignment.send(:table).keys.size.should eql(available_keys.size)
+            available_keys.each {|k| assignment.send(:table).keys.should be_include(k)}
             assignment.submission_count.should eql(assignment.submissions.size)
             assignment.name.should be_is_a(String)
             assignment.name.should eql(assignment.submissions[0].assignment_name)
@@ -120,8 +145,8 @@ describe SubmissionList do
           grader.assignments.each do |assignment|
             assignment.submissions.each do |submission|
               submission.should be_is_a(OpenStruct)
-              submission.hash_data.keys.size.should eql(available_keys.size)
-              available_keys.each {|k| submission.hash_data.keys.should be_include(k)}
+              submission.send(:table).keys.size.should eql(available_keys.size)
+              available_keys.each {|k| submission.send(:table).keys.should be_include(k)}
             end
           end
         end
@@ -134,8 +159,6 @@ describe SubmissionList do
     before do
       course_model
       sl = SubmissionList.new(@course)
-      @sort_block_for_filtering = sl.send(:sort_block_for_filtering)
-      @sort_block_for_displaying = sl.send(:sort_block_for_displaying)
       @full_hash_list = YAML.load_file(
         File.expand_path(
           File.join(
@@ -146,60 +169,7 @@ describe SubmissionList do
           )
         )
       )
-      # def sort_block_for_filtering
-      #   lambda{|a, b|
-      #     tier_1 = a[:id] <=> b[:id]
-      #     tier_2 = a[:updated_at] <=> b[:updated_at]
-      #     tier_1 == 0 ? tier_2 : tier_1
-      #   }
-      # end
-      # 
-      # def sort_block_for_displaying
-      #   lambda{|a, b|
-      # 
-      #     first_tier = if b[:graded_at] and a[:graded_at]
-      #       b[:graded_at] <=> a[:graded_at]
-      #     elsif b[:graded_at]
-      #       1
-      #     elsif a[:graded_at]
-      #       -1
-      #     else
-      #       0
-      #     end
-      # 
-      #     second_tier = a[:safe_grader_id] <=> b[:safe_grader_id]
-      #     third_tier = a[:assignment_id] <=> b[:assignment_id]
-      # 
-      #     case first_tier
-      #     when -1
-      #       -1
-      #     when 1
-      #       1
-      #     when 0
-      #       case second_tier
-      #       when -1
-      #         -1
-      #       when 1
-      #         1
-      #       when 0
-      #         third_tier
-      #       end
-      #     end
-      #   }
-      # end
-      
-      
     end
-    
-    it "should be able to use a desctructive sort" do
-      fhl = @full_hash_list.dup
-      fhl.sort!(&@sort_block_for_displaying)
-      fhl.should_not eql(@full_hash_list)
-    end
-    
-    it "should order by id, then updated_at" do
-    end
-    
   end
 end
 

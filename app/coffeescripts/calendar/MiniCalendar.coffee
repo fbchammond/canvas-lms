@@ -1,17 +1,15 @@
 define [
   'jquery'
   'i18n!calendar'
+  'underscore'
+  'compiled/calendar/CalendarDefaults'
   'vendor/jquery.ba-tinypubsub'
-], ($, I18n) ->
+], ($, I18n, _, calendarDefaults) ->
   class MiniCalendar
     constructor: (selector, @mainCalendar) ->
       @calendar = $(selector)
-      @calendar.fullCalendar
+      @calendar.fullCalendar(_.defaults(
         height: 240
-        weekMode: "variable"
-        allDayDefault: false
-        lazyFetching: false
-        ignoreTimezone: true
         header:
           left: "prev"
           center: "title"
@@ -19,10 +17,18 @@ define [
         dayClick: @dayClick
         events: @getEvents
         eventRender: @eventRender
-
-        $.subscribe 
+        droppable: true
+        dropAccept: '.fc-event,.undated_event'
+        drop: @drop
+        , calendarDefaults)
+      ,
+        $.subscribe
           "Calendar/visibleContextListChanged" : @visibleContextListChanged
           "Calendar/refetchEvents" : @refetchEvents
+          "Calendar/currentDate" : @gotoDate
+          "CommonEvent/eventDeleted" : @eventSaved
+          "CommonEvent/eventSaved" : @eventSaved
+      )
 
     getEvents: (start, end, cb) =>
       # Since we have caching (lazyFetching) turned off, we can rely on this
@@ -36,8 +42,11 @@ define [
     dayClick: (date) =>
       @mainCalendar.gotoDate(date)
 
+    gotoDate: (date) =>
+      @calendar.fullCalendar("gotoDate", date)
+
     eventRender: (event, element, view) =>
-      cell = view.dateCell(event.start)
+      cell = view.dateToCell(event.start)
       td = view.element.find("tr:nth-child(#{cell.row+1}) td:nth-child(#{cell.col+1})")
       td.addClass("event")
       tooltip = I18n.t 'event_on_this_day', 'There is an event on this day'
@@ -49,7 +58,18 @@ define [
       false # don't render the event
 
     visibleContextListChanged: (list) =>
-      @calendar.fullCalendar('refetchEvents')
+      @refetchEvents()
+
+    eventSaved: =>
+      @refetchEvents()
 
     refetchEvents: () =>
+      return unless @calendar.is(':visible')
       @calendar.fullCalendar('refetchEvents')
+
+    drop: (date, allDay, jsEvent, ui) =>
+      if ui.helper.is('.undated_event')
+        @mainCalendar.drop(date, allDay, jsEvent, ui)
+      else if ui.helper.is('.fc-event')
+        @mainCalendar.dropOnMiniCalendar(date, allDay, jsEvent, ui)
+
