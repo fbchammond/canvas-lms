@@ -1,4 +1,4 @@
-@import "environment";
+@import "base/environment";
 
 #main {
   background-color: transparent;
@@ -245,4 +245,11 @@
 
 .fc-grid .fc-day-number {
   float: left;
+}
+
+// Make adjustment to calendar modal tab styles to accommodate updated tab design
+#edit_event .ui-tabs-nav {
+  li { 
+    //a { color: $canvas-light; }
+  }
 }

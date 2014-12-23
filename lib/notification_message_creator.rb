@@ -111,8 +111,11 @@ class NotificationMessageCreator
 
   def build_fallback_for(user)
     fallback_channel = immediate_channels_for(user).sort_by(&:path_type).first
-    fallback_policy = fallback_channel.notification_policies.by('daily').where(:notification_id => nil).first
-    fallback_policy ||= fallback_channel.notification_policies.create!(frequency: 'daily')
+    fallback_policy = nil
+    NotificationPolicy.unique_constraint_retry do
+      fallback_policy = fallback_channel.notification_policies.by('daily').where(:notification_id => nil).first
+      fallback_policy ||= fallback_channel.notification_policies.create!(frequency: 'daily')
+    end
 
     build_summary_for(user, fallback_policy)
   end
@@ -142,6 +145,7 @@ class NotificationMessageCreator
     messages = []
     message_options = message_options_for(user)
     channels.reject!{ |channel| ['email', 'sms'].include?(channel.path_type) } if too_many_messages_for?(user) && @notification.summarizable?
+    channels.reject!(&:bouncing?)
     channels.each do |channel|
       messages << user.messages.build(message_options.merge(:communication_channel => channel,
                                                             :to => channel.path))
@@ -180,6 +184,10 @@ class NotificationMessageCreator
     messages
   end
 
+  def unretired_policies_for(user)
+    user.notification_policies.where("communication_channels.workflow_state<>'retired'")
+  end
+
   def delayed_policies_for(user, channel=user.email_channel)
     # This condition is weird. Why would not throttling stop sending notifications?
     # Why could an inactive email channel stop us here? We handle that later! And could still send
@@ -189,9 +197,9 @@ class NotificationMessageCreator
     # If any channel has a policy, even policy-less channels don't get the notification based on the
     # notification default frequency. Is that right?
     policies= []
-    user_has_policy = NotificationPolicy.for(user).for(@notification).exists?
+    user_has_policy = unretired_policies_for(user).for(@notification).exists?
     if user_has_policy
-      policies += NotificationPolicy.for(user).for(@notification).by(['daily', 'weekly'])
+      policies += unretired_policies_for(user).for(@notification).by(['daily', 'weekly'])
     elsif channel &&
         channel.active? &&
         ['daily', 'weekly'].include?(@notification.default_frequency)

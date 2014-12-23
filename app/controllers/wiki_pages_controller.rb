@@ -21,6 +21,7 @@ class WikiPagesController < ApplicationController
 
   before_filter :require_context
   before_filter :get_wiki_page
+  before_filter :set_pandapub_read_token
   before_filter :set_js_rights, :only => [:pages_index, :show_page, :edit_page, :page_revisions]
   before_filter :set_js_wiki_data, :only => [:pages_index, :show_page, :edit_page, :page_revisions]
   add_crumb(proc { t '#crumbs.wiki_pages', "Pages"}) do |c|
@@ -42,6 +43,18 @@ class WikiPagesController < ApplicationController
     [:wiki, :page]
   end
 
+  def set_pandapub_read_token
+    if is_authorized_action?(@page, @current_user, :read)
+      if CanvasPandaPub.enabled?
+        channel = "/private/wiki_page/#{@page.global_id}/update"
+        js_env :WIKI_PAGE_PANDAPUB => {
+          :CHANNEL => channel,
+          :TOKEN => CanvasPandaPub.generate_token(channel, true)
+        }
+      end
+    end
+  end
+
   def show
     if @context.feature_enabled?(:draft_state)
       redirect_to polymorphic_url([@context, :named_page], :wiki_page_id => @page_name || @page, :titleize => params[:titleize], :module_item_id => params[:module_item_id])
@@ -54,7 +67,7 @@ class WikiPagesController < ApplicationController
     js_env(hash)
 
     unless is_authorized_action?(@page, @current_user, [:update, :update_content]) || @page.is_front_page?
-      wiki_page = @wiki.wiki_pages.deleted_last.find_by_url(@page.url) if @page.new_record?
+      wiki_page = @wiki.wiki_pages.deleted_last.where(url: @page.url).first if @page.new_record?
       if wiki_page && wiki_page.deleted?
         flash[:warning] = t('notices.page_deleted', 'The page "%{title}" has been deleted.', :title => @page.title)
         return redirect_to named_context_url(@context, :context_wiki_page_url, @wiki.get_front_page_url)
@@ -170,12 +183,15 @@ class WikiPagesController < ApplicationController
   end
 
   def pages_index
+    return unless tab_enabled?(@context.class::TAB_PAGES)
     if !@context.feature_enabled?(:draft_state)
       redirect_to polymorphic_url([@context, :wiki_pages])
       return
     end
 
     if authorized_action(@context.wiki, @current_user, :read)
+      log_asset_access("pages:#{@context.asset_string}", "pages", "other")
+      js_env :wiki_page_menu_tools => external_tools_display_hashes(:wiki_page_menu)
       @padless = true
     end
   end
@@ -192,7 +208,7 @@ class WikiPagesController < ApplicationController
         redirect_to polymorphic_url([@context, :edit_named_page], :wiki_page_id => @page_name || @page, :titleize => params[:titleize])
         return
       else
-        wiki_page = @wiki.wiki_pages.deleted_last.find_by_url(@page.url)
+        wiki_page = @wiki.wiki_pages.deleted_last.where(url: @page.url).first
         if wiki_page && wiki_page.deleted?
           flash[:warning] = t('notices.page_deleted', 'The page "%{title}" has been deleted.', :title => @page.title)
         else
@@ -206,6 +222,8 @@ class WikiPagesController < ApplicationController
       add_crumb(@page.title)
       @page.increment_view_count(@current_user, @context)
       log_asset_access(@page, 'wiki', @wiki)
+
+      js_env :wiki_page_menu_tools => external_tools_display_hashes(:wiki_page_menu)
 
       @padless = true
       render

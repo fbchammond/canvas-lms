@@ -24,7 +24,7 @@ module LtiOutbound
     def initialize(options)
       @url = options[:url] || raise('URL required for generating LTI content')
       @tool = options[:tool] || raise('Tool required for generating LTI content')
-      @user = options[:user] || raise('User required for generating LTI content')
+      @user = options[:user] || LTIUser.new #|| raise('User required for generating LTI content')
       @account = options[:account] || raise('Account required for generating LTI content')
       @context = options[:context] || raise('Context required for generating LTI content')
       @link_code = options[:link_code] || raise('Link Code required for generating LTI content')
@@ -35,10 +35,6 @@ module LtiOutbound
       @consumer_instance = context.consumer_instance || raise('Consumer instance required for generating LTI content')
 
       @variable_substitutor = options[:variable_substitutor]
-      variable_substitutor.add_substitution '$Person.name.family', @user.last_name
-      variable_substitutor.add_substitution '$Person.name.full', @user.name
-      variable_substitutor.add_substitution '$Person.name.given', @user.first_name
-      variable_substitutor.add_substitution '$Person.address.timezone', @user.timezone
 
       @hash = {}
     end
@@ -73,10 +69,10 @@ module LtiOutbound
       hash['resource_link_id'] = link_code
       hash['resource_link_title'] = overrides['resource_link_title'] || tool.name
       hash['user_id'] = user.opaque_identifier
-      hash['user_image'] = user.avatar_url
       hash['text'] = CGI::escape(selected_html) if selected_html
 
       hash['roles'] = user.current_role_types # AccountAdmin, Student, Faculty or Observer
+      hash['ext_roles'] = '$Canvas.xuser.allRoles'
 
       hash['custom_canvas_enrollment_state'] = '$Canvas.enrollment.enrollmentState'
 
@@ -89,12 +85,13 @@ module LtiOutbound
         hash['lis_person_contact_email_primary'] = user.email
       end
       if tool.public?
+        hash['user_image'] = user.avatar_url
         hash['custom_canvas_user_id'] = '$Canvas.user.id'
-        hash['lis_person_sourcedid'] = user.sis_source_id if user.sis_source_id
+        hash['lis_person_sourcedid'] = '$Person.sourcedId' if user.sis_source_id
         hash['custom_canvas_user_login_id'] = '$Canvas.user.loginId'
         if context.is_a?(LTICourse)
           hash['custom_canvas_course_id'] = '$Canvas.course.id'
-          hash['lis_course_offering_sourcedid'] = context.sis_source_id if context.sis_source_id
+          hash['lis_course_offering_sourcedid'] = '$CourseSection.sourcedId' if context.sis_source_id
         elsif context.is_a?(LTIAccount) || context.is_a?(LTIUser)
           hash['custom_canvas_account_id'] = '$Canvas.account.id'
           hash['custom_canvas_account_sis_id'] = '$Canvas.account.sisSourceId'
@@ -160,6 +157,11 @@ module LtiOutbound
         hash['ext_content_intended_use'] = 'homework'
         hash['ext_content_return_url'] = return_url
       elsif resource_type == 'migration_selection'
+        hash['ext_content_intended_use'] = 'content_package'
+        hash['ext_content_return_types'] = 'file'
+        hash['ext_content_file_extensions'] = 'zip,imscc'
+        hash['ext_content_return_url'] = return_url
+      elsif resource_type == 'course_home_sub_navigation'
         hash['ext_content_intended_use'] = 'content_package'
         hash['ext_content_return_types'] = 'file'
         hash['ext_content_file_extensions'] = 'zip,imscc'

@@ -20,6 +20,7 @@ define([
   'i18n!wiki.sidebar',
   'jquery' /* $ */,
   'str/htmlEscape',
+  'compiled/util/UsageRights' /* Usage Rights for File Uploading */,
   'jquery.ajaxJSON' /* ajaxJSON */,
   'jquery.inst_tree' /* instTree */,
   'jquery.instructure_forms' /* formSubmit, handlesHTML5Files, ajaxFileUpload, fileData */,
@@ -31,9 +32,8 @@ define([
   'tinymce.editor_box',
   'vendor/jquery.pageless' /* pageless */,
   'jqueryui/accordion' /* /\.accordion\(/ */,
-  'jqueryui/tabs' /* /\.tabs/ */,
-  'vendor/scribd.view' /* scribd */
-], function(I18n, $, htmlEscape) {
+  'jqueryui/tabs' /* /\.tabs/ */
+], function(I18n, $, htmlEscape, UsageRights) {
 
   var $editor_tabs,
       $tree1,
@@ -110,12 +110,12 @@ define([
         $file = $tree1.find(".file_blank").clone(true);
         $file
           .attr('class', 'file')
-          .attr('title', file.display_name)
+          .attr('title', htmlEscape(file.display_name))
           .attr('data-tooltip', '')
           .attr('aria-level', children.data('level'))
           .attr('id', this.generateTreeItemID('file'))
           .addClass(file.mime_class)
-          .toggleClass('scribdable', !!(file['scribdable?'] || file.canvadoc_session_url));
+          .toggleClass('scribdable', !!(file.canvadoc_session_url));
         if(file.media_entry_id) {
           $file
             .addClass('kalturable')
@@ -253,6 +253,8 @@ define([
     },
     init: function() {
       wikiSidebar.inited = true;
+
+      UsageRights.render('#usage-rights');
 
       $editor_tabs.find("#pages_accordion a.add").click(function(event){
         event.preventDefault();
@@ -626,6 +628,7 @@ define([
           $sidebar_upload_file_form.slideUp(function() {
             $sidebar_upload_file_form.find(".uploading").hide();
           });
+          UsageRights.setFileUsageRights(data.attachment);
           wikiSidebar.fileAdded(data.attachment, true, function(node) {
             wikiSidebar.fileSelected(node);
           });

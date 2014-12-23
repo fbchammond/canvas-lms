@@ -9,38 +9,30 @@
 %>
 <div id="keyboard_navigation"></div>
 <div id="gradebook_wrapper">
-
-  <% if @context.feature_enabled?(:outcome_gradebook) || @context.feature_enabled?(:post_grades) %>
-      <div class="gradebook-header">
-        <nav class="gradebook-navigation">
-          <ul class="nav nav-pills gradebook-navigation-pills">
-            <li class="active">
-              <a href="#"
-                 data-id="assignment"><%= t(:grades, "Grades") %></a>
-            </li>
-            <% if @context.feature_enabled?(:outcome_gradebook) %>
-            <li>
-              <a href="#"
-                 data-id="outcome"><%= t(:learning_mastery, "Learning Mastery") %></a>
-            </li>
-            <% end %>
-          </ul>
-        </nav>
-        <div class="section-button-placeholder"></div>
-        <% if @context.feature_enabled?(:post_grades) %>
-        <div class="pull-right">
-          <nav class="gradebook-navigation hidden">
-            <ul class="nav nav-pills gradebook-navigation-pills pull-right">
-              <li>
-                <a class="btn-outline" href="#"
-                   id="post-grades-button"><%= t(:post_grades, "Post Grades") %></a>
-              </li>
-            </ul>
-          </nav>
-        </div>
-        <% end %>
-      </div>
-  <% end %>
+<h1 class="screenreader-only"><%= t('page_header_title', 'Gradebook') %></h1>
+  <div class="gradebook-header">
+    <div class="accessibility_warning">
+      <%= link_to t(:accessibility_warning, 'Warning: The Gradebook Grid View is not accessible. Click here to use the Individual View instead.'), context_url(@context, :change_gradebook_version_context_gradebook_url, :version => "srgb"), :id => "accessibility_warning", :class => "screenreader-only" %>
+    </div>
+    <% if @context.feature_enabled?(:outcome_gradebook) || @context.feature_enabled?(:post_grades) %>
+      <nav class="gradebook-navigation">
+        <ul class="nav nav-pills gradebook-navigation-pills">
+          <li class="active">
+            <a href="#" data-id="assignment"><%= t(:grades, "Grades") %></a>
+          </li>
+          <% if @context.feature_enabled?(:outcome_gradebook) %>
+          <li>
+            <a href="#" data-id="outcome"><%= t(:learning_mastery, "Learning Mastery") %></a>
+          </li>
+          <% end %>
+        </ul>
+      </nav>
+      <div class="section-button-placeholder"></div>
+      <% if @context.feature_enabled?(:post_grades) %>
+        <div class="pull-right post-grades-placeholder"></div>
+      <% end %>
+    <% end %>
+  </div>
 
   <div class="assignment-gradebook-container hidden">
     <div id="gradebook-toolbar" class="toolbar">
@@ -50,7 +42,7 @@
       <button id="gradebook_settings"><i class="icon-settings"></i></button>
       <ul style="display: none;" class="gradebook_drop_down ui-kyle-menu">
         <li><a href="<%= context_url(@context, :context_gradebook_url) %>/history"><%= t('view_grading_history', 'View Grading History') %></a></li>
-        <li><a href="<%= context_url(@context, :context_gradebook_url) %>.csv"><%= t('download_scores', 'Download Scores (.csv)') %></a></li>
+        <li><a id=download_csv href="<%= context_url(@context, :context_gradebook_url) %>.csv"><%= t('download_scores', 'Download Scores (.csv)') %></a></li>
         <% if @gradebook_is_editable && @context.allows_gradebook_uploads? %>
           <li><a class="gradebook_upload_link" href="#"><%= t('upload_scores', 'Upload Scores (from .csv)') %></a></li>
         <% end %>

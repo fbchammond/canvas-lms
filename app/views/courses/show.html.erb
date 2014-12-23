@@ -16,7 +16,7 @@
   <div id="course_show_secondary">
     <% @can_manage_content = can_do(@context, @current_user, :manage_content) %>
     <% if @context.feature_enabled?(:draft_state) %>
-      <% if @can_manage_content && can_do(@context, @current_user, :change_course_state) && !@context.submissions.with_point_data.exists? %>
+      <% if @can_manage_content && can_do(@context, @current_user, :change_course_state) && @context.unpublishable? %>
         <div id="course_status" class="text-center">
           <h4>
             <%= t('headers.course_status', %{Course Status}) %>
@@ -101,7 +101,7 @@
       <% end %>
     <% end %>
 
-    <% if @context.available? && @context.self_enrollment && @context.open_enrollment && (!@context_enrollment || !@context_enrollment.active?) %>
+    <% if @context.available? && @context.self_enrollment_enabled? && @context.open_enrollment && (!@context_enrollment || !@context_enrollment.active?) %>
       <div class="rs-margin-lr rs-margin-top">
         <a href="<%= enroll_url(@context.self_enrollment_code) %>" title="<%= t('links.join_course', %{Join this Course}) %>" class="btn button-sidebar-wide self_enrollment_link" data-open-as-dialog><i class="icon-user-add"></i>  <%= t('links.join_course', %{Join this Course}) %></a>
       </div>
@@ -191,7 +191,7 @@
       <%= form_for :course, :url => context_url(@context, :context_url), :html => {:tabindex=>"0", :'data-turn-into-dialog'=>'{"height": 300, "width":500,"modal":true}', :title=>t('headings.choose_home_page_title', %{Choose Home Page}), :style => "display:none", :id => "edit_course_home_content_form", :method => :put} do |f| %>
         <label for="edit_course_home_content_select"><%= t('draft_state.labels.select_content', %{Select what you'd like to display on the home page.}) %></label>
 
-        <div class="form_group"><label class="radio"><input type="radio" name="course[default_view]" value="feed" <%= 'checked' if @context.default_view == 'feed' || (!has_front_page && @context.default_view == 'wiki') %>><%= t('draft_state.options.recent_activity_dashboard', %{Recent Activity Dashboard}) %></label></div>
+        <div class="form_group"><label class="radio"><input type="radio" name="course[default_view]" value="feed" <%= 'checked' if @context.default_view == 'feed' || (!has_front_page && @context.default_view == 'wiki') %>><%= t('draft_state.options.course_activity_stream', %{Course Activity Stream}) %></label></div>
         <div class="form_group">
           <label class="radio"><input type="radio" name="course[default_view]" value="wiki" <%= 'checked' if has_front_page && @context.default_view == 'wiki' %><%= 'disabled' unless has_front_page %>>
             <span class="<%= 'ui-state-disabled' unless has_front_page %>"><%= t('draft_state.options.custom_page', %{Pages Front Page}) %></span></label>
@@ -306,7 +306,8 @@
 </div>
 <% if @context.public_license? %>
   <div class="public-license" style="margin-top: 20px;">
-    <a href="<%= @context.license_url %>"><%= image_tag "cc/#{@context.license}.png", :style => "float: left; padding-right: 5px;" %></a>
+
+    <a href="<%= @context.license_url %>"><%= image_tag "cc/#{@context.license}.png", :style => "float: left; padding-right: 5px;", :alt => @context.readable_license   %></a>
     <span style="font-size: 0.8em; display: block; line-height: 1.5em;"><%= t 'license_notice', %{This course content is offered under a %{license_type} license.  Content in this course can be considered under this license unless otherwise noted.}, :license_type => content_tag('b', link_to(@context.readable_license, @context.license_url)) %></span>
     <div class="clear"></div>
   </div>

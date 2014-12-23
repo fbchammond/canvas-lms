@@ -1,4 +1,9 @@
 {{#if draftStateEnabled}}
+  {{#if title}}
+    <h1 class="screenreader-only" style="display: inline">{{title}}</h1>
+  {{else}}
+    <h1 class="screenreader-only" style="display: inline">{{#t "page_header_title"}}New Discussion{{/t}}</h1>
+  {{/if}}
   <div class="discussion-edit-header row-fluid">
     <div class="span4 offset8 text-right">
       {{#if published}}
@@ -15,6 +20,7 @@
     </div>
   </div>
 {{/if}}
+
 
 <fieldset>
   <div class="control-group">
@@ -33,7 +39,7 @@
           {{#t "#editor.switch_editor_html"}}HTML Editor{{/t}}
         </a>
         <a href="#" class="rte_switch_views_link" style="display:none;">
-          {{#t "#editor.switch_editor_visual"}}Visual Editor{{/t}}
+          {{#t "#editor.switch_editor_rich_text"}}Rich Content Editor{{/t}}
         </a>
       </div>
       <div style="clear:both;"></div>
@@ -47,12 +53,12 @@
 <fieldset>
 
   <div class="control-group">
-    <label class="control-label" for="discussion_attachment_uploaded_data">{{#t "attachment"}}Attachment{{/t}}</label>
+    <label class="control-label" role="button" aria-label="{{#t}}Add Attachment{{/t}}" tabindex="0" for="discussion_attachment_uploaded_data">{{#t "attachment"}}Attachment{{/t}}</label>
     <div class="controls">
       {{#each attachments}}
         <div class="attachmentRow">
           <a href="{{url}}" class="{{mimeClass content-type}}">{{display_name}}</a>
-          <button type="button" class="removeAttachment close" style="float:none">×</button>
+          <button type="button" class="removeAttachment close" style="float:none" aria-label="{{#t}}Remove Attachment{{/t}}">×</button>
         </div>
       {{/each}}
       <input type="file"
@@ -109,7 +115,7 @@
             aria-controls="podcast_has_student_posts_container"}}
           {{#t "enable_podcast_feed"}}Enable podcast feed{{/t}}
         </label>
-  
+
         <label id="podcast_has_student_posts_container"
                style="{{hiddenUnless podcast_url}}"
                class="checkbox" for="podcast_has_student_posts">
@@ -147,6 +153,7 @@
             <input type="text"
                    class="datetime_field input-medium"
                    name="delayed_post_at"
+                   id="delayed_post_at"
                    {{! TODO: what would be the best way to get this formatted right? }}
                    value="{{datetimeFormatted delayed_post_at false}}">
           </div>
@@ -161,6 +168,7 @@
               <input type="text"
                      class="datetime_field input-medium"
                      name="lock_at"
+                     id="lock_at"
                      {{! TODO: what would be the best way to get this formatted right? }}
                      value="{{datetimeFormatted lock_at false}}">
             </div>
@@ -187,12 +195,26 @@
 
       <div id="grading_type_options" class="control-group"></div>
 
+      <div id="post_to_sis_options" class="control-group"></div>
+
       <div id="assignment_group_options" class="control-group"></div>
 
       {{#unless isLargeRoster}}
         <div id="peer_review_options" class="control-group"></div>
       {{/unless}}
     </fieldset>
+
+    <hr>
+
+    {{#if differentiatedAssignmentsEnabled}}
+      <div class="text-center pad-box-mini" style="margin-bottom:10px">
+        <span>
+          <em>
+          {{#t "only_visible_to_overrides_note"}}Note: This discussion is <strong>only</strong> visible to the section(s) specified below:{{/t}}
+          </em>
+        </span>
+      </div>
+    {{/if}}
 
     <div class='js-assignment-overrides'></div>
   </div>
@@ -203,4 +225,3 @@
           data-text-while-loading="{{#t "saving"}}Saving...{{/t}}"
           class="btn btn-primary">{{#t "save"}}Save{{/t}}</button>
 </div>
-

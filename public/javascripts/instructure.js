@@ -52,7 +52,6 @@ define([
   'jqueryui/tabs' /* /\.tabs/ */,
   'compiled/behaviors/trackEvent',
   'compiled/badge_counts',
-  'vendor/scribd.view' /* scribd */,
   'vendor/jquery.placeholder'
 ], function(KeyboardNavDialog, INST, I18n, $, _, tz, userSettings, htmlEscape, wikiSidebar) {
 
@@ -87,6 +86,14 @@ define([
     var $menu_items = $(".menu-item"),
         $menu = $("#menu"),
         menuItemHoverTimeoutId;
+
+    // Makes sure that the courses/groups menu is openable by clicking
+    $coursesItem = $menu.find('#courses_menu_item .menu-item-title');
+    $coursesItem.click(function (e) {
+      if (e.metaKey || e.ctrlKey) return;
+      e.preventDefault();
+      $coursesItem.focus();
+    })
 
     function clearMenuHovers(){
       window.clearTimeout(menuItemHoverTimeoutId);
@@ -164,12 +171,6 @@ define([
 
 
     //////////////// END layout related stuff
-
-    $("#ajax_authenticity_token").ifExists(function(){
-      if(this.text()) {
-        $("input[name='authenticity_token']").val(this.text());
-      }
-    });
 
     KeyboardNavDialog.prototype.bindOpenKeys.call({$el: $('#keyboard_navigation')});
 
@@ -317,13 +318,14 @@ define([
           }).end()
         .end()
         .find("a:not(.not_external, .external):external").each(function(){
+          var externalLink = htmlEscape(I18n.t('titles.external_link', 'Links to an external site.'));
           $(this)
             .not(":has(img)")
             .addClass('external')
             .html('<span>' + $(this).html() + '</span>')
             .attr('target', '_blank')
-            .attr('aria-label', htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')))
-            .append('<span class="ui-icon ui-icon-extlink ui-icon-inline" title="' + htmlEscape(I18n.t('titles.external_link', 'Links to an external site.')) + '"/>');
+            .append('<span aria-hidden="true" class="ui-icon ui-icon-extlink ui-icon-inline" title="' + externalLink + '"/>')
+            .append('<span class="screenreader-only">&nbsp;(' + externalLink + ')</span>');
         }).end()
           .find("a.instructure_file_link").each(function() {
               var $link = $(this),
@@ -391,22 +393,17 @@ define([
         event.preventDefault();
         var $link = $(this).loadingImage({image_size: 'small'}).hide();
         $.ajaxJSON($link.attr('href').replace(/\/download.*/, ""), 'GET', {}, function(data) {
-          var attachment = data && data.attachment,
-              scribdDocAttributes = attachment && attachment.scribd_doc && attachment.scribd_doc.attributes;
+          var attachment = data && data.attachment;
           $link.loadingImage('remove');
           if (attachment &&
-                (attachment['scribdable?'] ||
-                 $.isPreviewable(attachment.content_type, 'google') ||
+                ($.isPreviewable(attachment.content_type, 'google') ||
                  attachment.canvadoc_session_url)) {
             var $div = $("<span><br /></span>")
               .insertAfter($link.parents(".link_holder:last"))
               .loadDocPreview({
                 canvadoc_session_url: attachment.canvadoc_session_url,
-                scribd_doc_id: scribdDocAttributes && scribdDocAttributes.doc_id,
-                scribd_access_key: scribdDocAttributes && scribdDocAttributes.access_key,
                 mimeType: attachment.content_type,
                 public_url: attachment.authenticated_s3_url,
-                attachment_scribd_render_url: attachment.scribd_render_url,
                 attachment_preview_processing: attachment.workflow_state == 'pending_upload' || attachment.workflow_state == 'processing'
               })
               .append(

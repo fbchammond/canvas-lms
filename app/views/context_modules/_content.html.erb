@@ -57,7 +57,7 @@ TEXT
   <div id="context_modules" tabindex="0" aria-label="<%= t('headings.course_modules', %{Course Modules}) %>" class="<%= 'editable' if can_do(@context, @current_user, :manage_content) %>">
     <% editable = can_do(@context, @current_user, :manage_content) %>
     <% cache([@context.cache_key, editable, 'all_context_modules_6', collection_cache_key(@modules)].join('/')) do %>
-      <% ContextModule.send(:preload_associations, @modules, :content_tags => :content) %>
+      <% ActiveRecord::Associations::Preloader.new(@modules, :content_tags => :content).run %>
       <% @modules.each do |m| %>
         <%= render :partial => 'context_modules/context_module', :object => m, :locals => {:editable => editable } %>
       <% end %>
@@ -160,7 +160,7 @@ TEXT
       <button type="button" class="btn button-secondary cancel_button"><%= t('#buttons.cancel', %{Cancel}) %></button>
     </div>
   </div>
-  <%= render :partial => "shared/select_content_dialog", :locals => {:for_modules => true} %>
+  <%= render :partial => "shared/select_content_dialog", :locals => {:for_modules => true, lti_app_placements: [Lti::ResourcePlacement::LINK_SELECTION, Lti::ResourcePlacement::RESOURCE_SELECTION]} %>
   <div id="edit_item_dialog" style="display: none;">
     <%= form_for :content_tag, :url => "", :html => {:id => "edit_item_form", :method => :put, :style => "margin: 20px 10px;"} do |f| %>
       <table class="formtable">

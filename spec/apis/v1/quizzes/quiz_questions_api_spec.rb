@@ -19,8 +19,12 @@
 require File.expand_path(File.dirname(__FILE__) + '/../../api_spec_helper')
 
 describe Quizzes::QuizQuestionsController, type: :request do
+  before :once do
+    Account.default.enable_feature!(:draft_state)
+  end
+
   context 'as a teacher' do
-    before do
+    before :once do
       @course = course
       teacher_in_course active_all: true
       @quiz = @course.quizzes.create!(:title => "A Sample Quiz")
@@ -37,7 +41,17 @@ describe Quizzes::QuizQuestionsController, type: :request do
                         :course_id => @course.id.to_s, :quiz_id => @quiz.id.to_s)
 
         question_ids = json.collect { |q| q['id'] }
-        question_ids.should == questions.map(&:id)
+        expect(question_ids).to eq questions.map(&:id)
+      end
+      it "returns a list of questions which do not include previously deleted questions" do
+        question1 = @quiz.quiz_questions.create!(:question_data => { :question_name => "Question 1"})
+        question2 = @quiz.quiz_questions.create!(:question_data => { :question_name => "Question 2"})
+        question1.destroy
+        json = api_call(:get, "/api/v1/courses/#{@course.id}/quizzes/#{@quiz.id}/questions",
+                        :controller => "quizzes/quiz_questions", :action => "index", :format => "json",
+                        :course_id => @course.id.to_s, :quiz_id => @quiz.id.to_s)
+        question_ids = json.collect {|q| q['id'] }
+        expect(question_ids).to eq [question2.id]
       end
     end
 
@@ -63,19 +77,19 @@ describe Quizzes::QuizQuestionsController, type: :request do
 
         it "has only the allowed question output fields" do
           question_fields = Api::V1::QuizQuestion::API_ALLOWED_QUESTION_OUTPUT_FIELDS[:only].map(&:to_sym) +  Api::V1::QuizQuestion::API_ALLOWED_QUESTION_DATA_OUTPUT_FIELDS.map(&:to_sym)
-          @json.keys.each { |key| question_fields.to_s.should include(key.to_s) }
+          @json.keys.each { |key| expect(question_fields.to_s).to include(key.to_s) }
         end
 
         it "has the question data fields" do
           Api::V1::QuizQuestion::API_ALLOWED_QUESTION_DATA_OUTPUT_FIELDS.map(&:to_sym).each do |field|
-            @json.should have_key(field)
+            expect(@json).to have_key(field)
 
             # ugh... due to wonkiness in Question#question_data's treatment of keys,
             # and the fact that symbolize_keys doesn't recurse, we resort to this.
             if @json[field].is_a?(Array) && @question.question_data[field].is_a?(Array)
-              @json[field].map(&:symbolize_keys).should == @question.question_data[field].map(&:symbolize_keys)
+              expect(@json[field].map(&:symbolize_keys)).to eq @question.question_data[field].map(&:symbolize_keys)
             else
-              @json[field].should == @question.question_data.symbolize_keys[field]
+              expect(@json[field]).to eq @question.question_data.symbolize_keys[field]
             end
           end
         end
@@ -89,15 +103,15 @@ describe Quizzes::QuizQuestionsController, type: :request do
         end
 
         it "should return a not found error message" do
-          @json.inspect.should include "does not exist"
+          expect(@json.inspect).to include "does not exist"
         end
       end
     end
   end
 
   context 'as a student' do
-    before do
-      course_with_student_logged_in :active_all => true
+    before :once do
+      course_with_student :active_all => true
 
       @quiz = @course.quizzes.create!(:title => 'quiz')
       @quiz.published_at = Time.now
@@ -128,7 +142,7 @@ describe Quizzes::QuizQuestionsController, type: :request do
     end
 
     context 'whom has started a quiz' do
-      before do
+      before :once do
         @quiz.generate_submission(@student)
       end
 

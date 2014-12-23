@@ -1,4 +1,5 @@
 {{#ifAll atLeastOnePageFetched length}}
+  <h1 class="screenreader-only">{{#t "announcements_title"}}Announcements{{/t}}</h1>
   <div class="headerBar clearfix">
     <div class="headerBar-right form-inline">
       {{#if options.atom_feed_url}}
@@ -18,8 +19,8 @@
 
       {{#if options.permissions.create}}
         <a href="{{new_topic_url}}" class="btn btn-primary" id="new-discussion-btn">
-          <i class="icon-announcement"></i> 
-          {{#t "make_an_announcement"}}Make an announcement{{/t}}
+          <i class="icon-plus"></i> 
+          {{#t}}Announcement{{/t}}
         </a>
       {{/if}}
     </div>
@@ -57,11 +58,12 @@
       </h1>
       {{#if options.permissions.create}}
         <a href="{{new_topic_url}}" class="btn btn-large btn-primary">
-          {{#t "make_an_announcement_caps"}}Make an Announcement{{/t}}
+          <i class="icon-plus"></i> 
+          {{#t}}Announcement{{/t}}
         </a>
       {{/if}}
     </div>
   {{else}}
-    <h2>{{#t "loading"}}Loading...{{/t}}</h2>
+    <h1>{{#t "loading"}}Loading...{{/t}}</h1>
   {{/if}}
 {{/ifAll}}

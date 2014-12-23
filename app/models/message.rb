@@ -18,11 +18,7 @@
 
 class Message < ActiveRecord::Base
   # Included modules
-  if CANVAS_RAILS2
-    include ActionController::UrlWriter
-  else
-    include Rails.application.routes.url_helpers
-  end
+  include Rails.application.routes.url_helpers
 
   include PolymorphicTypeOverride
   override_polymorphic_types context_type: {'QuizSubmission' => 'Quizzes::QuizSubmission',
@@ -42,7 +38,7 @@ class Message < ActiveRecord::Base
   belongs_to :asset_context, :polymorphic => true
   belongs_to :communication_channel
   belongs_to :context, :polymorphic => true
-  belongs_to :notification
+  include NotificationPreloader
   belongs_to :user
   belongs_to :root_account, :class_name => 'Account'
   has_many   :attachments, :as => :context
@@ -136,7 +132,7 @@ class Message < ActiveRecord::Base
   # Named scopes
   scope :for_asset_context_codes, lambda { |context_codes| where(:asset_context_code => context_codes) }
 
-  scope :for, lambda { |context| where(:context_type => context.class.base_ar_class.to_s, :context_id => context) }
+  scope :for, lambda { |context| where(:context_type => context.class.base_class.to_s, :context_id => context) }
 
   scope :after, lambda { |date| where("messages.created_at>?", date) }
 
@@ -204,7 +200,9 @@ class Message < ActiveRecord::Base
   end
 
   def author_email_address
-    author.try(:email)
+    if context_root_account.try(:author_email_in_notifications?)
+      author.try(:email)
+    end
   end
 
   # Public: Helper to generate a URI for the given subject. Overrides Rails'
@@ -383,13 +381,13 @@ class Message < ActiveRecord::Base
 
     # Add the attribute 'inner_html' with the value of inner_html into the _binding
     @output_buffer = nil
-    inner_html = RailsXss::Erubis.new(template, :bufvar => '@output_buffer').result(_binding)
+    inner_html = ActionView::Template::Handlers::Erubis.new(template, :bufvar => '@output_buffer').result(_binding)
     setter = eval "inner_html = nil; lambda { |v| inner_html = v }", _binding
     setter.call(inner_html)
 
     layout_path = Canvas::MessageHelper.find_message_path('_layout.email.html.erb')
     @output_buffer = nil
-    RailsXss::Erubis.new(File.read(layout_path)).result(_binding)
+    ActionView::Template::Handlers::Erubis.new(File.read(layout_path)).result(_binding)
   ensure
     @i18n_scope = orig_i18n_scope
   end
@@ -413,7 +411,7 @@ class Message < ActiveRecord::Base
     if path_type == 'facebook'
       # this will ensure we escape anything that's not already safe
       @output_buffer = nil
-      self.body = RailsXss::Erubis.new(message_body_template).result(_binding)
+      self.body = ActionView::Template::Handlers::Erubis.new(message_body_template).result(_binding)
     else
       self.body = Erubis::Eruby.new(message_body_template,
         :bufvar => '@output_buffer').result(_binding)
@@ -706,11 +704,26 @@ class Message < ActiveRecord::Base
   #
   # Returns nothing.
   def deliver_via_twitter
-    twitter_service = user.user_services.find_by_service('twitter')
+    twitter_service = user.user_services.where(service: 'twitter').first
     host = HostUrl.short_host(self.asset_context)
     msg_id = AssetSignature.generate(self)
     Twitter::Messenger.new(self, twitter_service, host, msg_id).deliver
     complete_dispatch
+  end
+
+  # Internal: Deliver the message through Yo.
+  #
+  # Returns nothing.
+  def deliver_via_yo
+    plugin = Canvas::Plugin.find(:yo)
+    if plugin && plugin.enabled? && plugin.setting(:api_token)
+      service = self.user.user_services.where(service: 'yo').first
+      Hey.api_token ||= plugin.setting(:api_token)
+      Hey::Yo.user(service.service_user_id, link: self.url)
+      complete_dispatch
+    else
+      cancel
+    end
   end
 
   # Internal: Deliver the message through Facebook.
@@ -718,7 +731,7 @@ class Message < ActiveRecord::Base
   # Returns nothing.
   def deliver_via_facebook
     facebook_user_id = self.to.to_i.to_s
-    service = self.user.user_services.for_service('facebook').find_by_service_user_id(facebook_user_id)
+    service = self.user.user_services.for_service('facebook').where(service_user_id: facebook_user_id).first
     Facebook::Connection.dashboard_increment_count(service.service_user_id, service.token, I18n.t(:new_facebook_message, 'You have a new message from Canvas')) if service && service.token
     complete_dispatch
   end

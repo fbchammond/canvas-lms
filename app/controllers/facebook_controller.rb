@@ -22,31 +22,19 @@ class FacebookController < ApplicationController
   before_filter :require_facebook_user, :only => [:settings, :notification_preferences, :hide_message]
 
   def notification_preferences
-    @cc = @user.communication_channels.find_by_path_type('facebook')
+    @cc = @user.communication_channels.where(path_type: 'facebook').first
     if @cc
-      @old_policies = @cc.notification_policies.to_a
-      @policies = []
-      params[:types].each do |type, frequency|
-        notifications = Notification.find_all_by_category(type)
-        notifications.each do |notification|
-          pref = @old_policies.find { |p| p.notification_id == notification.id }
-          pref ||= @cc.notification_policies.build
-          pref.notification_id = notification.id
-          pref.frequency = frequency
-          @policies << pref unless frequency == 'never'
-        end
+      frequencies = {}
+      # translate from categories to actual notifications
+      Notification.all.each do |notification|
+        frequencies[notification.name] = params[:types][notification.category] if params[:types][notification.category]
       end
-      NotificationPolicy.transaction do
-        @old_policies.each{|p| p.frequency = p.notification.default_frequency; p.save! if p.changed? }
-        @policies.each{|p| p.save!}
-      end
+
+      NotificationPolicy.find_all_for(@cc, frequencies)
     end
-    # TODO: i18n... see notification.rb
-    @notification_categories = Notification.dashboard_categories.reject{|c| c.category == "Summaries"}
-    @policies = @cc.notification_policies
     redirect_to facebook_settings_url
   end
-  
+
   def hide_message
     @message = @user.messages.to_facebook.find(params[:id])
     @message.destroy
@@ -71,7 +59,7 @@ class FacebookController < ApplicationController
   
   def settings
     @notification_categories = Notification.dashboard_categories
-    @cc = @user && @user.communication_channels.find_by_path_type('facebook')
+    @cc = @user && @user.communication_channels.where(path_type: 'facebook').first
     @policies = @cc.try(:notification_policies)
     respond_to do |format|
       format.html { render :action => 'settings', :layout => 'facebook' }
@@ -109,7 +97,7 @@ class FacebookController < ApplicationController
       if data && sig
         if @facebook_user_id = data['user_id']
           Shard.with_each_shard(UserService.associated_shards('facebook', @facebook_user_id)) do
-            @service = UserService.find_by_service_and_service_user_id('facebook', @facebook_user_id)
+            @service = UserService.where(service: 'facebook', service_user_id: @facebook_user_id).first
             break if @service
           end
         end
@@ -126,11 +114,11 @@ class FacebookController < ApplicationController
       end
     elsif session[:facebook_canvas_user_id]
       @user = User.find(session[:facebook_canvas_user_id])
-      @service = @user.user_services.find_by_service('facebook')
+      @service = @user.user_services.where(service: 'facebook').first
     elsif session[:facebook_user_id]
       @facebook_user_id = session[:facebook_user_id]
       Shard.with_each_shard(UserService.associated_shards('facebook', @facebook_user_id)) do
-        @service = UserService.find_by_service_and_service_user_id('facebook', @facebook_user_id)
+        @service = UserService.where(service: 'facebook', service_user_id: @facebook_user_id).first
         break if @service
       end
       @user = @service && @service.user
@@ -139,7 +127,7 @@ class FacebookController < ApplicationController
       if @current_user
         @user = @current_user
         session[:facebook_canvas_user_id] = @user.id
-        @service = @user.user_services.find_by_service('facebook')
+        @service = @user.user_services.where(service: 'facebook').first
       end
     end
   end

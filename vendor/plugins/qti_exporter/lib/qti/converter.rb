@@ -65,7 +65,7 @@ class Converter < Canvas::Migration::Migrator
   def self.is_qti_2(manifest_path)
     if File.exists?(manifest_path)
       xml = Nokogiri::XML(File.open(manifest_path))
-      if xml.namespaces.values.any? { |v| QTI_2_NAMESPACES.include?(v) }
+      if xml.namespaces.values.any? { |v| QTI_2_NAMESPACES.any?{|ns| v.to_s.start_with?(ns)} }
         return true
       elsif (xml.at_css('metadata schema') ? xml.at_css('metadata schema').text : '') =~ /QTIv2\./i
         return true
@@ -124,7 +124,7 @@ class Converter < Canvas::Migration::Migrator
       manifest_file = File.join(@dest_dir_2_1, MANIFEST_FILE)
       Qti.convert_files(manifest_file).each do |attachment|
         mig_id = Digest::MD5.hexdigest(attachment)
-        mig_id = prepend_id(mig_id) if id_prepender
+        mig_id = ::Canvas::Migration::MigratorHelper.prepend_id(mig_id, id_prepender)
         @course[:file_map][mig_id] = {
           :migration_id => mig_id,
           :path_name => attachment,

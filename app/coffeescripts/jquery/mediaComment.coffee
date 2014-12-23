@@ -32,13 +32,22 @@ define [
   # track events in google analytics
   mejs.MepDefaults.features.push('googleanalytics')
 
+  positionAfterSubtitleSelector = mejs.MepDefaults.features.indexOf('tracks') + 1
+
+  # enable the source chooser
+  mejs.MepDefaults.features.splice(positionAfterSubtitleSelector, 0, 'sourcechooser')
+
+  # enable the playback speed selector
+  mejs.MepDefaults.features.splice(positionAfterSubtitleSelector, 0, 'speed')
+
+
   getSourcesAndTracks = (id) ->
     dfd = new $.Deferred
     $.getJSON "/media_objects/#{id}/info", (data) ->
       # this 'when ...' is because right now in canvas, none of the mp3 urls actually work.
       # see: CNVS-12998
       sources = for source in data.media_sources when source.content_type isnt 'audio/mp3'
-        "<source type='#{source.content_type}' src='#{source.url}' />"
+        "<source type='#{source.content_type}' src='#{source.url}' title='#{source.width}x#{source.height} #{Math.floor(source.bitrate / 1024)} kbps' />"
 
       tracks = _.map data.media_tracks, (track) ->
         languageName = mejs.language.codes[track.locale] || track.locale

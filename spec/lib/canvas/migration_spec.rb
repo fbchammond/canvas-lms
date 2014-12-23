@@ -20,6 +20,7 @@ describe "Migration package importers" do
             "Common Cartridge 1.2" => ["cc1-2", CC::Importer::Standard::Converter],
             "Common Cartridge 1.3" => ["cc1-3", CC::Importer::Standard::Converter],
             "Common Cartridge 1.3 - flat" => ["cc1-3flat.xml", CC::Importer::Standard::Converter],
+            "Common Cartridge 1.3 - thin" => ["cc1-3thin.xml", CC::Importer::Standard::Converter],
             "QTI packages" => ['qti', Qti::Converter],
             "WebCT exports (as qti packages)" => ['webct', Qti::Converter],
     }
@@ -43,14 +44,15 @@ describe "Migration package importers" do
     supported.each_pair do |key, val|
       it "should find converter for #{key}" do 
         settings = get_settings(val.first)
-        Canvas::Migration::Worker::get_converter(settings).should == val.last
+        expect(Canvas::Migration::Worker::get_converter(settings)).to eq val.last
       end
     end
     
     unsupported.each_pair do |key, val|
       it "should correctly identify package type for #{key}" do 
         settings = get_settings(val.first)
-        Canvas::Migration::PackageIdentifier.new(settings).identify_package.should == val.last
+        archive = Canvas::Migration::Archive.new(settings)
+        expect(Canvas::Migration::PackageIdentifier.new(archive).identify_package).to eq val.last
       end
     end
   end
@@ -62,8 +64,8 @@ describe "Migration package importers" do
 
       mig = Canvas::Migration::Migrator.new({:archive_file => file, :content_migration => cm}, "test")
       mig.unzip_archive
-      File.should be_exist(File.join(mig.unzipped_file_path, 'messaging/why oh why.txt'))
-      File.should be_exist(File.join(mig.unzipped_file_path, 'res00175/SR_Epilogue_Frequently_Asked_Questions.html'))
+      expect(File).to be_exist(File.join(mig.unzipped_file_path, 'messaging/why oh why.txt'))
+      expect(File).to be_exist(File.join(mig.unzipped_file_path, 'res00175/SR_Epilogue_Frequently_Asked_Questions.html'))
     end
   end
   

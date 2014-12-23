@@ -24,6 +24,9 @@
   // non-amd shims
   shim: <%= shims %>,
 
+  // client app maps
+  map: <%= map %>,
+
   // which modules should have their dependencies concatenated into them
   modules: [
 
@@ -58,9 +61,6 @@
         'vendor/jquery.ba-hashchange',
         'vendor/jqueryui/effects/drop',
         'compiled/jquery.rails_flash_notifications',
-        'translations/scribd',
-        'i18n!scribd',
-        'vendor/scribd.view',
         'jquery.dropdownList',
         'vendor/jqueryui/progressbar',
         'translations/media_comments',

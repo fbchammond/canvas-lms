@@ -58,7 +58,6 @@ module SIS
 
         @total_rows = 1
         @current_row = 0
-        @rows_since_progress_update = 0
     
         @progress_multiplier = opts[:progress_multiplier] || 1
         @progress_offset = opts[:progress_offset] || 0
@@ -118,7 +117,7 @@ module SIS
               @total_rows += rows
               false
             rescue ::CSV::MalformedCSVError
-              add_error(csv, "Malformed CSV")
+              add_error(csv, I18n.t("Malformed CSV"))
               true
             end
           end
@@ -172,7 +171,7 @@ module SIS
             :message => "Importing CSV for account: #{@root_account.id} (#{@root_account.name}) sis_batch_id: #{@batch.id}: #{e.to_s}",
             :during_tests => false
           )
-          add_error(nil, "Error while importing CSV. Please contact support. (Error report #{error_report.id})")
+          add_error(nil, I18n.t("Error while importing CSV. Please contact support. (Error report %{number})", number: error_report.id))
         else
           add_error(nil, "#{e.message}\n#{e.backtrace.join "\n"}")
           raise e
@@ -211,17 +210,18 @@ module SIS
         @current_row += count
         return unless @batch
 
-        @rows_since_progress_update += count
-        if @rows_since_progress_update >= @updates_every
+        if update_progress?
+          @last_progress_update = Time.now
           if @parallelism > 1
             SisBatch.transaction do
-              @batch.reload(:select => 'data, progress', :lock => true)
+              lock_type = true
+              lock_type = 'FOR NO KEY UPDATE' if SisBatch.connection.adapter_name == 'PostgreSQL' && SisBatch.connection.send(:postgresql_version) >= 90300
+              @batch.reload(:select => 'data, progress', :lock => lock_type)
               @current_row += @batch.data[:current_row]
               @batch.data[:current_row] = @current_row
               @batch.progress = (((@current_row.to_f/@total_rows) * @progress_multiplier) + @progress_offset) * 100
               @batch.save
               @current_row = 0
-              @rows_since_progress_update = 0
             end
           else
             @batch.fast_update_progress( (((@current_row.to_f/@total_rows) * @progress_multiplier) + @progress_offset) * 100)
@@ -232,6 +232,12 @@ module SIS
           sleep(@pause_duration)
           update_pause_vars
         end
+      end
+
+      def update_progress?
+        @last_progress_update ||= Time.now
+        update_interval = Setting.get('sis_batch_progress_interval', 2.seconds).to_i
+        @last_progress_update < update_interval.ago
       end
 
       def run_single_importer(importer, csv)
@@ -248,7 +254,7 @@ module SIS
             :message => "Importing CSV for account: #{@root_account.id} (#{@root_account.name}) sis_batch_id: #{@batch.id}: #{e.to_s}",
             :during_tests => false
           )
-          add_error(nil, "Error while importing CSV. Please contact support. (Error report #{error_report.id})")
+          add_error(nil, I18n.t("Error while importing CSV. Please contact support. (Error report %{number})", number: error_report.id))
           @batch.processing_errors ||= []
           @batch.processing_warnings ||= []
           @batch.processing_errors.concat(@errors)
@@ -388,7 +394,7 @@ module SIS
               end
             end
           rescue Iconv::Failure
-            add_error(csv, "Invalid UTF-8")
+            add_error(csv, I18n.t("Invalid UTF-8"))
             return
           end
           begin
@@ -403,14 +409,14 @@ module SIS
                   false
                 end
               end
-              add_error(csv, "Couldn't find Canvas CSV import headers") if importer.nil?
+              add_error(csv, I18n.t("Couldn't find Canvas CSV import headers")) if importer.nil?
               break
             end
           rescue ::CSV::MalformedCSVError
             add_error(csv, "Malformed CSV")
           end
         elsif !File.directory?(csv[:fullpath]) && !(csv[:fullpath] =~ IGNORE_FILES)
-          add_warning(csv, "Skipping unknown file type")
+          add_warning(csv, I18n.t("Skipping unknown file type"))
         end
       end
     end

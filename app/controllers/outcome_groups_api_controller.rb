@@ -132,6 +132,7 @@ class OutcomeGroupsApiController < ApplicationController
 
   before_filter :require_user
   before_filter :get_context
+  before_filter :require_context, :only => [:link_index]
 
   # @API Redirect to root outcome group for context
   #
@@ -174,10 +175,12 @@ class OutcomeGroupsApiController < ApplicationController
   def link_index
     return unless can_read_outcomes
 
-    url = polymorphic_url [:api_v1, @context || :global, :outcome_group_links]
-    links = Api.paginate(context_outcome_links, self, url)
+    url = polymorphic_url [:api_v1, @context, :outcome_group_links]
+    links = @context.learning_outcome_links.order(:id)
+    links = Api.paginate(links, self, url)
     render json: links.map { |link|
-      outcome_link_json(link, @current_user, session, params.slice(:outcome_style, :outcome_group_style))
+      outcome_params = params.slice(:outcome_style, :outcome_group_style)
+      outcome_link_json(link, @current_user, session, outcome_params)
     }
   end
 
@@ -201,16 +204,16 @@ class OutcomeGroupsApiController < ApplicationController
   # the same context as this outcome group, and must not be a descendant of
   # this outcome group (i.e. no cycles allowed).
   #
-  # @argument title [Optional, String]
+  # @argument title [String]
   #   The new outcome group title.
   #
-  # @argument description [Optional, String]
+  # @argument description [String]
   #   The new outcome group description.
   #
-  # @argument vendor_guid [Optional, String]
+  # @argument vendor_guid [String]
   #   A custom GUID for the learning standard.
   #
-  # @argument parent_outcome_group_id [Optional, Integer]
+  # @argument parent_outcome_group_id [Integer]
   #   The id of the new parent outcome group.
   #
   # @returns OutcomeGroup
@@ -320,7 +323,7 @@ class OutcomeGroupsApiController < ApplicationController
       end
 
       # preload the links' outcomes' contexts.
-      ContentTag.send(:preload_associations, @links, :learning_outcome_content => :context)
+      ActiveRecord::Associations::Preloader.new(@links, :learning_outcome_content => :context).run
 
       # render to json and serve
       render :json => @links.map{ |link| outcome_link_json(link, @current_user, session) }
@@ -378,29 +381,29 @@ class OutcomeGroupsApiController < ApplicationController
   # default of 0. If no ratings are provided, the mastery_points parameter is
   # ignored.
   #
-  # @argument outcome_id [Optional, Integer]
+  # @argument outcome_id [Integer]
   #   The ID of the existing outcome to link.
   #
-  # @argument title [Optional, String]
+  # @argument title [String]
   #   The title of the new outcome. Required if outcome_id is absent.
   #
-  # @argument display_name [Optional, String]
+  # @argument display_name [String]
   #   A friendly name shown in reports for outcomes with cryptic titles,
   #   such as common core standards names.
   #
-  # @argument description [Optional, String]
+  # @argument description [String]
   #   The description of the new outcome.
   #
-  # @argument vendor_guid [Optional, String]
+  # @argument vendor_guid [String]
   #   A custom GUID for the learning standard.
   #
-  # @argument mastery_points [Optional, Integer]
+  # @argument mastery_points [Integer]
   #   The mastery threshold for the embedded rubric criterion.
   #
-  # @argument ratings[][description] [Optional, String]
+  # @argument ratings[][description] [String]
   #   The description of a rating level for the embedded rubric criterion.
   #
-  # @argument ratings[][points] [Optional, Integer]
+  # @argument ratings[][points] [Integer]
   #   The points corresponding to a rating level for the embedded rubric criterion.
   #
   # @returns OutcomeLink
@@ -486,7 +489,7 @@ class OutcomeGroupsApiController < ApplicationController
   def unlink
     if can_manage_outcomes
       @outcome_group = context_outcome_groups.find(params[:id])
-      @outcome_link = @outcome_group.child_outcome_links.active.find_by_content_id(params[:outcome_id])
+      @outcome_link = @outcome_group.child_outcome_links.active.where(content_id: params[:outcome_id]).first
       raise ActiveRecord::RecordNotFound unless @outcome_link
       begin
         @outcome_link.destroy
@@ -528,13 +531,13 @@ class OutcomeGroupsApiController < ApplicationController
   # Creates a new empty subgroup under the outcome group with the given title
   # and description.
   #
-  # @argument title [String]
+  # @argument title [Required, String]
   #   The title of the new outcome group.
   #
-  # @argument description [Optional, String]
+  # @argument description [String]
   #   The description of the new outcome group.
   #
-  # @argument vendor_guid [Optional, String]
+  # @argument vendor_guid [String]
   #   A custom GUID for the learning standard
   #
   # @returns OutcomeGroup
@@ -587,7 +590,7 @@ class OutcomeGroupsApiController < ApplicationController
   # outcome group, or from an associated account. The source group cannot be
   # the root outcome group of its context.
   #
-  # @argument source_outcome_group_id [Integer]
+  # @argument source_outcome_group_id [Required, Integer]
   #   The ID of the source outcome group.
   #
   # @returns OutcomeGroup
@@ -604,7 +607,7 @@ class OutcomeGroupsApiController < ApplicationController
       @outcome_group = context_outcome_groups.find(params[:id])
 
       # source has to exist
-      @source_outcome_group = LearningOutcomeGroup.active.find_by_id(params[:source_outcome_group_id])
+      @source_outcome_group = LearningOutcomeGroup.active.where(id: params[:source_outcome_group_id]).first
       unless @source_outcome_group
         render :json => 'error'.to_json, :status => :bad_request
         return
@@ -653,20 +656,13 @@ class OutcomeGroupsApiController < ApplicationController
     LearningOutcomeGroup.for_context(@context).active
   end
 
-  def context_outcome_links
-    if @context
-      @context.learning_outcome_links
-    # else, there's no convenient way to find the global content tags; not supporting this for now
-    end
-  end
-
   # verify the outcome is eligible to be linked into the context,
   # returning the outcome if so
   def context_available_outcome(outcome_id)
     if @context
       @context.available_outcome(outcome_id, :allow_global => true)
     else
-      LearningOutcome.global.find_by_id(outcome_id)
+      LearningOutcome.global.where(id: outcome_id).first
     end
   end
 

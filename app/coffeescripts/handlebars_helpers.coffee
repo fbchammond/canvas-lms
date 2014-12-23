@@ -18,18 +18,24 @@ define [
 ], (tz, enrollmentName, Handlebars, I18n, $, _, htmlEscape, semanticDateRange, dateSelect, mimeClass, convertApiUserContent, textHelper) ->
 
   Handlebars.registerHelper name, fn for name, fn of {
-    t : (translationKey, defaultValue, options) ->
+    t : (args..., options) ->
       wrappers = {}
       options = options?.hash ? {}
-      scope = options.scope
-      delete options.scope
       for key, value of options when key.match(/^w\d+$/)
         wrappers[new Array(parseInt(key.replace('w', '')) + 2).join('*')] = value
         delete options[key]
       options.wrapper = wrappers if wrappers['*']
-      options.needsEscaping = true
-      options = $.extend(options, this) unless this instanceof String or typeof this is 'string'
-      I18n.scoped(scope).t(translationKey, defaultValue, options)
+      options[key] = this[key] for key in this
+      new Handlebars.SafeString htmlEscape(I18n.t(args..., options))
+
+    __i18nliner_escape: (val) ->
+      htmlEscape val
+
+    __i18nliner_safe: (val) ->
+      new htmlEscape.SafeString(val)
+
+    __i18nliner_concat: (args..., options) ->
+      args.join("")
 
     hiddenIf : (condition) -> " display:none; " if condition
 
@@ -43,8 +49,8 @@ define [
       localDatetime = $.datetimeString(datetime)
       titleText = localDatetime
       if ENV and ENV.CONTEXT_TIMEZONE and (ENV.TIMEZONE != ENV.CONTEXT_TIMEZONE)
-        localText = Handlebars.helpers.t('#helpers.local','Local')
-        courseText = Handlebars.helpers.t('#helpers.course', 'Course')
+        localText = I18n.t('#helpers.local','Local')
+        courseText = I18n.t('#helpers.course', 'Course')
         courseDatetime = $.datetimeString(datetime, timezone: ENV.CONTEXT_TIMEZONE)
         if localDatetime != courseDatetime
           titleText = "#{localText}: #{localDatetime}<br>#{courseText}: #{courseDatetime}"
@@ -58,7 +64,7 @@ define [
     friendlyDatetime : (datetime, {hash: {pubdate, contextSensitive}}) ->
       return unless datetime?
       datetime = tz.parse(datetime) unless _.isDate datetime
-      fudged = $.fudgeDateForProfileTimezone(datetime)
+      fudged = $.fudgeDateForProfileTimezone(tz.parse(datetime))
       timeTitle = ""
       if contextSensitive and ENV and ENV.CONTEXT_TIMEZONE
         timeTitle = Handlebars.helpers.contextSensitiveDatetimeTitle(datetime, hash: {justText: true})
@@ -66,6 +72,8 @@ define [
         timeTitle = $.datetimeString(datetime)
 
       new Handlebars.SafeString "<time data-tooltip title='#{timeTitle}' datetime='#{datetime.toISOString()}' #{'pubdate' if pubdate}>#{$.friendlyDatetime(fudged)}</time>"
+
+
 
     # expects: a Date object or an ISO string
     formattedDate : (datetime, format, {hash: {pubdate}}) ->
@@ -123,6 +131,7 @@ define [
     # convert an event date and time to a string using the given date and time format specifiers
     tEventToString : (date = '', i18n_date_format = 'short', i18n_time_format = 'tiny') ->
       I18n.t 'time.event',
+        defaultValue: '%{date} at %{time}',
         date: I18n.l "date.formats.#{i18n_date_format}", date
         time: I18n.l "time.formats.#{i18n_time_format}", date
 
@@ -240,6 +249,19 @@ define [
     #
     eachProp: (context, options) ->
       (options.fn(property: prop, value: context[prop]) for prop of context).join ''
+
+    # runs block if the setting is set to the value
+    # usage:
+    # {{#ifSettingIs some_setting some_value}}
+    #   The setting is set to the thing!
+    # {{else}}
+    #   The setting is set to something else or doesn't exist
+    # {{/ifSettingIs}}
+    ifSettingIs: ->
+      [setting, value, {fn, inverse}] = arguments
+      settings = ENV.SETTINGS
+      return fn(this) if settings[setting] == value
+      inverse(this)
 
     # evaluates the block for each item in context and passes the result to $.toSentence
     toSentence: (context, options) ->
@@ -367,11 +389,14 @@ define [
         'disabled'
       else
         ''
-    truncate_left: ( string, max) ->
-       return textHelper.truncateText( string.split("").reverse().join(""), {max: max}).split("").reverse().join("")
+    truncate_left: ( string, max ) ->
+       return Handlebars.Utils.escapeExpression(textHelper.truncateText(string.split("").reverse().join(""), {max: max}).split("").reverse().join(""))
 
-    truncate: ( string, max) ->
-      return textHelper.truncateText( string, {max: max})
+    truncate: ( string, max ) ->
+      return Handlebars.Utils.escapeExpression(textHelper.truncateText(string, {max: max}))
+
+    escape_html: (string) ->
+      htmlEscape string
 
     enrollmentName: enrollmentName
 
@@ -445,6 +470,7 @@ define [
     or: (args..., options) ->
       for arg in args when arg
         return arg
+
   }
 
   return Handlebars

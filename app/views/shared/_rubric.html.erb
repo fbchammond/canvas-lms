@@ -22,7 +22,7 @@
   style="<%= hidden unless rubric %>"
   tabindex="0"
 >
-  <div class="screenreader-only"><h3><%= t 'rubric', "Rubric" %></h3></div>
+  <div class="screenreader-only"><h2><%= t 'rubric', "Rubric" %></h2></div>
   <div class="rubric_title">
     <div style="float: right; <%= hidden unless editable && edit_view %>" class="links displaying">
       <% hash = rubric_association ? {:rubric_association_id => rubric_association.id} : {} %>
@@ -141,7 +141,7 @@
       </div>
       <div style="float: left;" class="editing">
       <a href="#" class="icon-add add_criterion_link"><%= t 'links.add_criterion', "Add Criterion" %></a>
-      &nbsp;&nbsp;<a href="#" class="icon-search find_outcome_link outcome"><%= t 'links.find_outcome_criterion', "Find Outcome Criterion" %></a>
+      &nbsp;&nbsp;<a href="#" class="icon-search find_outcome_link outcome"><%= t 'links.find_outcome', "Find Outcome" %></a>
       </div>
       <div class="clear"></div>
     </td>

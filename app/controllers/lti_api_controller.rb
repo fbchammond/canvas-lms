@@ -19,6 +19,8 @@
 require 'oauth/client/action_pack'
 
 class LtiApiController < ApplicationController
+  skip_before_filter :require_user
+  skip_before_filter :load_user
   skip_before_filter :verify_authenticity_token
 
   # this API endpoint passes all the existing tests for the LTI v1.1 outcome service specification
@@ -51,11 +53,61 @@ class LtiApiController < ApplicationController
     render :text => e.to_s, :status => 401
   end
 
+  # examples: https://github.com/adlnet/xAPI-Spec/blob/master/xAPI.md#AppendixA
+  #
+  # {
+  #   id: "12345678-1234-5678-1234-567812345678",
+  #   actor: {
+  #     account: {
+  #       homePage: "http://www.instructure.com/",
+  #       name: "uniquenameofsomekind"
+  #     }
+  #   },
+  #   verb: {
+  #     id: "http://adlnet.gov/expapi/verbs/interacted",
+  #     display: {
+  #       "en-US" => "interacted"
+  #     }
+  #   },
+  #   object: {
+  #     id: "http://example.com/"
+  #   },
+  #   result: {
+  #     duration: "PT10M0S"
+  #   }
+  # }
+  #
+  # * object.id will be logged as url
+  # * result.duration must be an ISO 8601 duration if supplied
+  def xapi_service
+    token = Lti::XapiService::Token.parse_and_validate(params[:token])
+    verify_oauth(token.tool)
+
+    if request.content_type != "application/json"
+      return render :text => '', :status => 415
+    end
+
+    Lti::XapiService.log_page_view(token, params)
+
+    return render :text => '', :status => 200
+  rescue BasicLTI::BasicOutcomes::Unauthorized => e
+    return render :text => e, :status => 401
+  end
+
+  def logout_service
+    token = Lti::LogoutService::Token.parse_and_validate(params[:token])
+    verify_oauth(token.tool)
+    Lti::LogoutService.register_logout_callback(token, params[:callback])
+    return render :text => '', :status => 200
+  rescue BasicLTI::BasicOutcomes::Unauthorized => e
+    return render :text => e, :status => 401
+  end
+
   protected
 
-  def verify_oauth
+  def verify_oauth(tool = nil)
     # load the external tool to grab the key and secret
-    @tool = ContextExternalTool.find(params[:tool_id])
+    @tool = tool || ContextExternalTool.find(params[:tool_id])
 
     # verify the request oauth signature, timestamp and nonce
     begin

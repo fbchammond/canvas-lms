@@ -58,7 +58,7 @@
 #         "sis_course_id": {
 #           "description": "The unique SIS identifier for the course in which the section belongs. This field is only included if the user has permission to view SIS information.",
 #           "example": 7,
-#           "type": "integer"
+#           "type": "string"
 #         },
 #         "start_at": {
 #           "description": "the start date for the section, if applicable",
@@ -85,7 +85,7 @@ class SectionsController < ApplicationController
   # @API List course sections
   # Returns the list of sections for this course.
   #
-  # @argument include[] [Optional, String, "students"|"avatar_url"]
+  # @argument include[] [String, "students"|"avatar_url"]
   #   - "students": Associations to include with the group. Note: this is only
   #     available if you have permission to view users or grades in the course
   #   - "avatar_url": Include the avatar URLs for students returned.
@@ -110,13 +110,13 @@ class SectionsController < ApplicationController
   # @argument course_section[name] [String]
   #   The name of the section
   #
-  # @argument course_section[sis_section_id] [Optional, String]
+  # @argument course_section[sis_section_id] [String]
   #   The sis ID of the section
   #
-  # @argument course_section[start_at] [Optional, DateTime]
+  # @argument course_section[start_at] [DateTime]
   #   Section start date in ISO8601 format, e.g. 2011-01-01T01:00Z
   #
-  # @argument course_section[end_at] [Optional, DateTime]
+  # @argument course_section[end_at] [DateTime]
   #   Section end date in ISO8601 format. e.g. 2011-01-01T01:00Z
   #
   # @returns Section
@@ -156,8 +156,8 @@ class SectionsController < ApplicationController
   def crosslist_check
     course_id = params[:new_course_id]
     # cross-listing should only be allowed within the same root account
-    @new_course = @section.root_account.all_courses.not_deleted.find_by_id(course_id) if course_id =~ Api::ID_REGEX
-    @new_course ||= @section.root_account.all_courses.not_deleted.find_by_sis_source_id(course_id) if course_id.present?
+    @new_course = @section.root_account.all_courses.not_deleted.where(id: course_id).first if course_id =~ Api::ID_REGEX
+    @new_course ||= @section.root_account.all_courses.not_deleted.where(sis_source_id: course_id).first if course_id.present?
     allowed = @new_course && @section.grants_right?(@current_user, session, :update) && @new_course.grants_right?(@current_user, session, :manage_admin_users)
     res = {:allowed => !!allowed}
     if allowed

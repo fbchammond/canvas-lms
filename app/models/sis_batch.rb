@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2014 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -211,11 +211,7 @@ class SisBatch < ActiveRecord::Base
     if data[:supplied_batches].include?(:section)
       # delete sections who weren't in this batch, whose course was in the selected term
       scope = CourseSection.where("course_sections.workflow_state='active' AND course_sections.root_account_id=? AND course_sections.sis_batch_id IS NOT NULL AND course_sections.sis_batch_id<>?", self.account, self)
-      if CANVAS_RAILS2
-        scope = scope.scoped(:joins => "INNER JOIN courses ON courses.id=COALESCE(nonxlist_course_id, course_id)", :select => "course_sections.id, course_sections.*")
-      else
-        scope = scope.joins("INNER JOIN courses ON courses.id=COALESCE(nonxlist_course_id, course_id)").readonly(false)
-      end
+      scope = scope.joins("INNER JOIN courses ON courses.id=COALESCE(nonxlist_course_id, course_id)").readonly(false)
       scope = scope.where(:courses => { :enrollment_term_id => self.batch_mode_term })
       scope.find_each do |section|
         section.destroy
@@ -225,12 +221,7 @@ class SisBatch < ActiveRecord::Base
     if data[:supplied_batches].include?(:enrollment)
       # delete enrollments for courses that weren't in this batch, in the selected term
 
-      if CANVAS_RAILS2
-        scope = Enrollment.active.scoped(joins: :course, select: "enrollments.id, enrollments.*")
-      else
-        scope = Enrollment.active.joins(:course).readonly(false)
-      end
-
+      scope = Enrollment.active.joins(:course).readonly(false)
       params = {root_account: self.account, batch: self, term: self.batch_mode_term}
       scope = scope.where("courses.root_account_id=:root_account
                            AND enrollments.sis_batch_id IS NOT NULL
@@ -244,6 +235,7 @@ class SisBatch < ActiveRecord::Base
   end
 
   def as_json(options={})
+    self.options ||= {} # set this to empty hash if it does not exist so options[:stuff] doesn't blow up
     data = {
       "created_at" => self.created_at,
       "ended_at" => self.ended_at,
@@ -251,7 +243,12 @@ class SisBatch < ActiveRecord::Base
       "progress" => self.progress,
       "id" => self.id,
       "workflow_state" => self.workflow_state,
-      "data" => self.data
+      "data" => self.data,
+      "batch_mode" => self.batch_mode,
+      "batch_mode_term_id" => self.batch_mode_term ? self.batch_mode_term.id : nil,
+      "override_sis_stickiness" => self.options[:override_sis_stickiness],
+      "add_sis_stickiness" => self.options[:add_sis_stickiness],
+      "clear_sis_stickiness" => self.options[:clear_sis_stickiness],
     }
     data["processing_errors"] = self.processing_errors if self.processing_errors.present?
     data["processing_warnings"] = self.processing_warnings if self.processing_warnings.present?

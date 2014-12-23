@@ -3,7 +3,8 @@ module DataFixup
 
     def self.run
       @new_roots = Set.new
-      Shackles.activate(:slave) do
+      env = Shackles.environment == :deploy ? :deploy : :slave
+      Shackles.activate(env) do
         scope = Attachment.
           where('root_attachment_id IS NOT NULL AND
             NOT EXISTS (SELECT id
@@ -30,7 +31,7 @@ module DataFixup
     def self.other_namespace(attachment)
       account_id = attachment.namespace.sub('account_', '').to_i
       if account_id.to_s.length > 8
-        namespace_account_id = Account.find_by_id(account_id).try(:local_id)
+        namespace_account_id = Account.where(id: account_id).first.try(:local_id)
       else
         namespace_account_id = attachment.shard.global_id_for(account_id)
       end

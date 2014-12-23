@@ -37,13 +37,7 @@ class PluginSetting < ActiveRecord::Base
   before_save :encrypt_settings
   after_save :clear_cache
   after_destroy :clear_cache
-  if CANVAS_RAILS2
-    def after_initialize
-      initialize_plugin_setting
-    end
-  else
-    after_initialize :initialize_plugin_setting
-  end
+  after_initialize :initialize_plugin_setting
   
   def validate_uniqueness_of_name?
     true
@@ -142,5 +136,9 @@ class PluginSetting < ActiveRecord::Base
 
   def self.decrypt(text, salt)
     Canvas::Security.decrypt_password(text, salt, 'instructure_plugin_setting')
+  end
+
+  def self.find_by_name(name)
+    where(name: name).first
   end
 end

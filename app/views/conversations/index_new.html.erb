@@ -1,24 +1,38 @@
 <% jammit_css :conversations_new %>
 <% js_bundle  :conversations_new %>
 <% @body_classes << 'full-width' %>
-
+<h1 class="screenreader-only"><%= t(:page_title_header, "Conversations") %></h1>
 <% content_for :page_title, t('titles.conversations', "Conversations") %>
 
 <div class="conversations">
   <header class="panel">
     <div class="filters">
-      <select class="course-filter" id="course-filter" aria-label="<%= t(:filter_messages_by_course, "Filter messages by course") %>"></select>
+      <span aria-hidden="true" class="screenreader-only" id="course-filter-description"><%= t(:filter_messages_by_course, "Filter messages by course") %></span>
+      <select class="course-filter" id="course-filter" aria-labelledby="course-filter-description"></select>
 
-      <select class="type-filter show-tick" id="type-filter" aria-label="<%= t(:filter_messages_by_type, "Filter messages by type") %>">
+      <span aria-hidden="true" class="screenreader-only" id="type-filter-description"><%= t(:filter_messages_by_type, "Filter messages by type") %></span>
+      <select class="type-filter show-tick" id="type-filter" aria-labelledby="type-filter-description">
         <option value="inbox"><%= t(:inbox, "Inbox") %></option>
         <option value="unread"><%= t(:unread, "Unread") %></option>
         <option value="starred"><%= t(:starred, "Starred") %></option>
         <option value="sent"><%= t(:sent, "Sent") %></option>
         <option value="archived"><%= t(:archived, "Archived") %></option>
+        <option value="submission_comments"><%= t(:submission_comments, "Submission Comments") %></option>
       </select>
     </div>
 
-    <div class="actions">
+    <div class="actions" id="submission-comment-actions" style="display: none;">
+      <button class="btn"
+              id="submission-reply-btn"
+              title="<%= t(:reply, "Reply") %>"
+              data-tooltip
+              disabled>
+        <span class="screenreader-only"><%= t(:reply, "Reply") %></span>
+        <i class="icon-reply-2"></i>
+      </button>
+    </div>
+
+    <div class="actions" id="conversation-actions">
       <button class="btn"
               id="compose-btn"
               title="<%= t(:compose_new_message, "Compose a new message") %>"
@@ -62,7 +76,7 @@
         </button>
       </div>
 
-      <div class="inline-block" role="application">
+      <div class="inline-block">
         <button class="al-trigger btn"
                 id="admin-btn"
                 title="<%= t(:more_options, "More options") %>"

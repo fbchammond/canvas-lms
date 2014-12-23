@@ -43,8 +43,8 @@ class InfoController < ApplicationController
     error[:user_agent] = request.headers['User-Agent']
     begin
       report_id = error.delete(:id)
-      @report = ErrorReport.find_by_id(report_id.to_i) if report_id.present? && report_id.to_i != 0
-      @report ||= ErrorReport.find_by_id(session.delete(:last_error_id)) if session[:last_error_id].present?
+      @report = ErrorReport.where(id: report_id.to_i).first if report_id.present? && report_id.to_i != 0
+      @report ||= ErrorReport.where(id: session.delete(:last_error_id)).first if session[:last_error_id].present?
       @report ||= ErrorReport.new
       error.delete(:category) if @report.category.present?
       @report.user = @current_user
@@ -82,8 +82,6 @@ class InfoController < ApplicationController
   def health_check
     # This action should perform checks on various subsystems, and raise an exception on failure.
     Account.connection.select_value("SELECT 1")
-    Rails.cache.read 'heartbeat'
-    Canvas.redis.get('heartbeat') if Canvas.redis_enabled?
     Tempfile.open("heartbeat", ENV['TMPDIR'] || Dir.tmpdir) { |f| f.write("heartbeat"); f.flush }
 
     respond_to do |format|

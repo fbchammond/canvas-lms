@@ -16,7 +16,11 @@
 <% content_for :left_side do %>
   <div class="eportfolio-name">
     <h3><%= @portfolio.name %></h3>
-    <a href="<%= url_for(@portfolio.user) %>" id="section-tabs-header-subtitle" class="ellipsis"><%= @portfolio.user.name %></a>
+    <% if @owner_url %>
+      <a href="<%= @owner_url %>" id="section-tabs-header-subtitle" class="ellipsis"><%= @portfolio.user.name %></a>
+    <% else %>
+      <span id="section-tabs-header-subtitle" class="ellipsis"><%= @portfolio.user.name %></span>
+    <% end %>
   </div>
   <%= render :partial => "eportfolios/section_list" %>
 <% end %>
@@ -235,7 +239,7 @@
       <td colspan="2">
         <div style="text-align: right; margin-right: 5%; font-size: 0.8em;">
           <a href="#" class="switch_views_link"><%= t '#editor.switch_editor_html', "HTML Editor" %></a>
-          <a href="#" class="switch_views_link" style="display:none;"><%= t '#editor.switch_editor_visual', "Visual Editor" %></a>
+          <a href="#" class="switch_views_link" style="display:none;"><%= t '#editor.switch_editor_rich_text', "Rich Content Editor" %></a>
         </div>
         <%= f.text_area :content, :id => "edit_page_content", :style => "width: 98%; height: 300px;" %>
       </td>

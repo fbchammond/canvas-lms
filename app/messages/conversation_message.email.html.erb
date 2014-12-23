@@ -32,7 +32,7 @@
       <td></td>
     </tr>
     <tr >
-      <td align="left" width="50px" ><img style="border-radius: 50px;" height= 50px width = 50px src= <%=author_avatar_url%> alt=<%=author_short_name%>> </td>
+      <td align="left" width="50" style="width: 50px"><img style="border-radius: 50px; height: 50px; width: 50px;" height="50" width="50" src="<%=author_avatar_url%>" alt="<%=author_short_name%>"> </td>
       <td width="10"></td>
       <td>
         <table border="0" style="font-size: 14px; color: #444444; background-color: #ffffff; font-family: 'Open Sans', 'Lucida Grande', 'Segoe UI', Arial, Verdana, 'Lucida Sans Unicode', Tahoma, 'Sans Serif';" valign="top" align="left">
@@ -43,7 +43,7 @@
           </tr>
           <tr>
             <td valign="top" align="left">
-              <a href="<%= content :link %>">
+              <a href="mailto:<%= author_email_address %>">
                 <%= author_email_address%>
               </a>
             </td>
@@ -57,10 +57,16 @@
   <p>
     <b><%= author_short_name%></b>
     <br/>
-    <a href="<%= content :link %>">
+    <a href="mailto:<%= author_email_address %>">
       <%= author_email_address%>
     </a>
   </p>
+<% end %>
+
+<% if asset.has_media_objects? %>
+<p><%= t :audio_comment, "This message includes media comments. To listen or reply, click the link below:" %></p>
+<% else %>
+<p><%= t :reply_to_conversation_message, "You can reply to this message in Canvas by replying directly to this email." %></p>
 <% end %>
 
 

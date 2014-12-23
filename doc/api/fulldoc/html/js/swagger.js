@@ -604,7 +604,7 @@ var SwaggerOperation = function(nickname, path, method, parameters, summary, not
   this["do"] = __bind(this["do"], this);
 
   if (errors.length > 0)
-    this.resource.api.fail(errors);
+    console.error("Errors while initializing SwaggerOperation:", errors, nickname, path, method, parameters, summary);
 
   this.path = this.path.replace('{format}', 'json');
   this.method = this.method.toLowerCase();
@@ -626,7 +626,11 @@ var SwaggerOperation = function(nickname, path, method, parameters, summary, not
     // for 1.1 compatibility
     var type = param.type || param.dataType;
     if(type === 'array') {
-      type = 'array[' + (param.items.$ref ? param.items.$ref : param.items.type) + ']';
+      if(param.items) {
+        type = 'array[' + (param.items.$ref ? param.items.$ref : param.items.type) + ']';
+      } else {
+        console.log("Warning: " + param.name + " is array type but has no 'items'", this);
+      }
     }
 
     if(type.toLowerCase() === 'boolean') {

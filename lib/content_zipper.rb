@@ -214,7 +214,8 @@ class ContentZipper
     @portfolio = @portfolio
     @static_attachments = static_attachments
     @submissions_hash = submissions_hash
-    av = ActionView::Base.new(Rails::Configuration.new.view_path)
+    av = ActionView::Base.new()
+    av.view_paths = ActionController::Base.view_paths
     av.extend TextHelper
     res = av.render(:partial => "eportfolios/static_page", :locals => {:page => page, :portfolio => portfolio, :static_attachments => static_attachments, :submissions_hash => submissions_hash})
     res
@@ -228,7 +229,6 @@ class ContentZipper
     @files_added = true
     @logger.debug("zipping into attachment: #{zip_attachment.id}")
     zip_attachment.workflow_state = 'zipping' #!(:workflow_state => 'zipping')
-    zip_attachment.scribd_attempts += 1
     zip_attachment.save!
     filename = "#{folder.context.short_name}-#{folder.name} files"
     make_zip_tmpdir(filename) do |zip_name|
@@ -296,7 +296,6 @@ class ContentZipper
 
   def mark_attachment_as_zipping!(zip_attachment)
     zip_attachment.workflow_state = 'zipping'
-    zip_attachment.scribd_attempts += 1
     zip_attachment.save!
   end
 

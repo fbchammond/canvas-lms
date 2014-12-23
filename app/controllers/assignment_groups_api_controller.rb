@@ -27,11 +27,12 @@ class AssignmentGroupsApiController < ApplicationController
   #
   # Returns the assignment group with the given id.
   #
-  # @argument include[] ["assignments"|"discussion_topic"]
-  #   Associations to include with the group. "discussion_topic" is only valid
-  #   if "assignments" is also included.
+  # @argument include[] ["assignments"|"discussion_topic"|"assignment_visibility"]
+  #   Associations to include with the group. "discussion_topic" and "assignment_visibility"
+  #   are only valid if "assignments" is also included. The "assignment_visibility" option additionally
+  #   requires that the Differentiated Assignments course feature be turned on.
   #
-  # @argument override_assignment_dates [Optional, Boolean]
+  # @argument override_assignment_dates [Boolean]
   #   Apply assignment overrides for each assignment, defaults to true.
   #
   # @returns AssignmentGroup
@@ -39,6 +40,7 @@ class AssignmentGroupsApiController < ApplicationController
     if authorized_action(@assignment_group, @current_user, :read)
       includes = Array(params[:include])
       override_dates = value_to_boolean(params[:override_assignment_dates] || true)
+      includes.delete('assignment_visibility') unless @context.grants_any_right?(@current_user, :read_as_admin, :manage_grades, :manage_assignments)
       render :json => assignment_group_json(@assignment_group, @current_user, session, includes, {
         stringify_json_ids: stringify_json_ids?,
         override_dates: override_dates
@@ -50,16 +52,16 @@ class AssignmentGroupsApiController < ApplicationController
   #
   # Create a new assignment group for this course.
   #
-  # @argument name [Optional, String]
+  # @argument name [String]
   #   The assignment group's name
   #
-  # @argument position [Optional, Integer]
+  # @argument position [Integer]
   #   The position of this assignment group in relation to the other assignment groups
   #
-  # @argument group_weight [Optional, Float]
+  # @argument group_weight [Float]
   #   The percent of the total grade that this assignment group represents
   #
-  # @argument rules [Optional]
+  # @argument rules
   #   The grading rules that are applied within this assignment group
   #   See the Assignment Group object definition for format
   #

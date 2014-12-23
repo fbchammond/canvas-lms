@@ -27,7 +27,7 @@ module Importers
         return item
       end
 
-      item ||= ContextExternalTool.find_by_context_id_and_context_type_and_migration_id(context.id, context.class.to_s, hash[:migration_id]) if hash[:migration_id]
+      item ||= ContextExternalTool.where(context_id: context, context_type: context.class.to_s, migration_id: hash[:migration_id]).first if hash[:migration_id]
       item ||= context.context_external_tools.new
       item.migration_id = hash[:migration_id]
       item.name = hash[:title]
@@ -40,6 +40,7 @@ module Importers
       end
       item.domain = hash[:domain] unless hash[:domain].blank?
       item.privacy_level = hash[:privacy_level] || 'name_only'
+      item.not_selectable = hash[:not_selectable] if hash[:not_selectable]
       item.consumer_key ||= hash[:consumer_key] || 'fake'
       item.shared_secret ||= hash[:shared_secret] || 'fake'
       item.settings = create_tool_settings(hash)

@@ -17,13 +17,14 @@ describe "Navigating to wiki pages" do
 
       f(".edit-wiki").click
 
-      keep_trying_until { driver.current_url.should == edit_url }
+      keep_trying_until { expect(driver.current_url).to eq edit_url }
     end
   end
 
   describe "Permissions" do
     before do
       course_with_teacher
+      set_course_draft_state
     end
 
     it "displays public content to unregistered users" do
@@ -35,8 +36,46 @@ describe "Navigating to wiki pages" do
       title = "foo"
       wikiPage = @course.wiki.wiki_pages.create!(:title => title, :body => "bar")
 
-      get "/courses/#{@course.id}/wiki/#{title}"
-      f('#wiki_body').should_not be_nil
+      get "/courses/#{@course.id}/pages/#{title}"
+      expect(f('#wiki_page_show')).not_to be_nil
+    end
+  end
+
+  context "menu tools" do
+    before do
+      course_with_teacher_logged_in(:draft_state => true)
+      Account.default.enable_feature!(:lor_for_account)
+
+      @tool = Account.default.context_external_tools.new(:name => "a", :domain => "google.com", :consumer_key => '12345', :shared_secret => 'secret')
+      @tool.wiki_page_menu = {:url => "http://www.example.com", :text => "Export Wiki Page"}
+      @tool.save!
+
+      @wiki_page = @course.wiki.front_page
+      @wiki_page.workflow_state = 'active'; @wiki_page.save!
+    end
+
+    it "should show tool launch links in the gear for items on the index" do
+      get "/courses/#{@course.id}/pages"
+      wait_for_ajaximations
+
+      gear = f(".collectionViewItems tr .al-trigger")
+      gear.click
+      link = f(".collectionViewItems tr li a.menu_tool_link")
+      expect(link).to be_displayed
+      expect(link.text).to match_ignoring_whitespace(@tool.label_for(:wiki_page_menu))
+      expect(link['href']).to eq course_external_tool_url(@course, @tool) + "?launch_type=wiki_page_menu&pages[]=#{@wiki_page.id}"
+    end
+
+    it "should show tool launch links in the gear for items on the show page" do
+      get "/courses/#{@course.id}/pages/#{@wiki_page.url}"
+      wait_for_ajaximations
+
+      gear = f("#wiki_page_show .al-trigger")
+      gear.click
+      link = f("#wiki_page_show .al-options li a.menu_tool_link")
+      expect(link).to be_displayed
+      expect(link.text).to match_ignoring_whitespace(@tool.label_for(:wiki_page_menu))
+      expect(link['href']).to eq course_external_tool_url(@course, @tool) + "?launch_type=wiki_page_menu&pages[]=#{@wiki_page.id}"
     end
   end
 end

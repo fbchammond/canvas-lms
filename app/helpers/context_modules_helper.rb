@@ -17,18 +17,24 @@
 #
 
 module ContextModulesHelper
-  def cache_if_module(context_module, editable, draft_state, &block)
+  def cache_if_module(context_module, editable, draft_state, differentiated_assignments, user, &block)
     if context_module
-      cache(['context_module_render_11_', context_module.cache_key, editable, draft_state].join('/'), nil, &block)
+      visible_assignments = differentiated_assignments ? user.assignment_and_quiz_visibilities(course_id: context_module.context_id) : []
+      cache_key_items = ['context_module_render_11_', context_module.cache_key, editable, draft_state, Time.zone]
+      cache_key_items << Digest::MD5.hexdigest(visible_assignments.to_s) if differentiated_assignments
+      cache_key = cache_key_items.join('/')
+      cache_key = add_menu_tools_to_cache_key(cache_key)
+      cache(cache_key, nil, &block)
     else
       yield
     end
   end
 
-  def module_item_published?(item)
-    # If I publish an attachment, but its folder is hidden, the file is still
-    # hidden, now what? WHAT DO WE DO?
-    item && ((item.content && item.content.respond_to?(:published?)) ? item.content : item).published?
+  def add_menu_tools_to_cache_key(cache_key)
+    tool_key = @menu_tools && @menu_tools.values.flatten.map(&:cache_key).join("/")
+    cache_key += Digest::MD5.hexdigest(tool_key) if tool_key.present?
+    # should leave it alone if there are no tools
+    cache_key
   end
 
   def module_item_publishable_id(item)

@@ -107,6 +107,10 @@ class CourseSection < ActiveRecord::Base
     }
     can :read
 
+    given { |user, session| self.course.grants_right?(user, session, :manage_grades) }
+    can :manage_grades
+
+
     given { |user, session| self.course.grants_right?(user, session, :read_as_admin) }
     can :read_as_admin
   end
@@ -129,7 +133,7 @@ class CourseSection < ActiveRecord::Base
 
   def verify_unique_sis_source_id
     return true unless self.sis_source_id
-    existing_section = CourseSection.find_by_root_account_id_and_sis_source_id(self.root_account_id, self.sis_source_id)
+    existing_section = CourseSection.where(root_account_id: self.root_account_id, sis_source_id: self.sis_source_id).first
     return true if !existing_section || existing_section.id == self.id
 
     self.errors.add(:sis_source_id, t('sis_id_taken', "SIS ID \"%{sis_id}\" is already in use", :sis_id => self.sis_source_id))

@@ -43,7 +43,7 @@ define [
       assign_attributes.turnitin_settings or= {}
       json.assignment = @createAssignment(assign_attributes)
       json.publishable = json.can_publish
-      json.unpublishable = json.can_unpublish
+      json.unpublishable = !json.published or json.can_unpublish
 
       json
 
@@ -62,7 +62,7 @@ define [
     unpublish: ->
       @updateOneAttribute('published', false)
 
-    disabledMessage: -> I18n.t 'cannot_unpublish_with_replies', "Can't unpublish if there are replies"
+    disabledMessage: -> I18n.t 'cannot_unpublish_with_replies', "Can't unpublish if there are student replies"
 
     topicSubscribe: ->
       baseUrl = _.result this, 'url'
@@ -172,3 +172,6 @@ define [
       @set 'group_category_id', id
 
     canGroup: -> @get('can_group')
+
+    differentiatedAssignmentsEnabled: ->
+      ENV?.DIFFERENTIATED_ASSIGNMENTS_ENABLED || false

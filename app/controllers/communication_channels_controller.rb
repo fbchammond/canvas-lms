@@ -18,7 +18,7 @@
 
 # @API Communication Channels
 #
-# API for accessing users' email addresses, SMS phone numbers, Twitter,
+# API for accessing users' email addresses, SMS phone numbers, Twitter, Yo,
 # and Facebook communication channels.
 #
 # In this API, the `:user_id` parameter can always be replaced with `self` if
@@ -40,7 +40,7 @@
 #           "type": "string"
 #         },
 #         "type": {
-#           "description": "The type of communcation channel being described. Possible values are: 'email', 'sms', 'chat', 'facebook' or 'twitter'. This field determines the type of value seen in 'address'.",
+#           "description": "The type of communcation channel being described. Possible values are: 'email', 'sms', 'chat', 'facebook', 'twitter' or 'yo'. This field determines the type of value seen in 'address'.",
 #           "example": "email",
 #           "type": "string",
 #           "allowableValues": {
@@ -49,7 +49,8 @@
 #               "sms",
 #               "chat",
 #               "facebook",
-#               "twitter"
+#               "twitter",
+#               "yo"
 #             ]
 #           }
 #         },
@@ -109,10 +110,10 @@ class CommunicationChannelsController < ApplicationController
   #
   # Creates a new communication channel for the specified user.
   #
-  # @argument communication_channel[address] [String]
+  # @argument communication_channel[address] [Required, String]
   #   An email address or SMS number.
   #
-  # @argument communication_channel[type] [String, "email"|"sms"|"push"]
+  # @argument communication_channel[type] [Required, String, "email"|"sms"|"push"]
   #   The type of communication channel.
   #
   #   In order to enable push notification support, the server must be
@@ -121,7 +122,7 @@ class CommunicationChannelsController < ApplicationController
   #   the access token from this request must have an SNS ARN configured on
   #   it.
   #
-  # @argument skip_confirmation [Optional, Boolean]
+  # @argument skip_confirmation [Boolean]
   #   Only valid for site admins and account admins making requests; If true, the channel is
   #   automatically validated and no confirmation email or SMS is sent.
   #   Otherwise, the user must respond to a confirmation message to confirm the
@@ -139,7 +140,7 @@ class CommunicationChannelsController < ApplicationController
 
     return render_unauthorized_action unless has_api_permissions?
 
-    params.delete(:build_pseudonym) if api_request?
+    params[:build_pseudonym] = 0 if api_request?
 
     skip_confirmation = value_to_boolean(params[:skip_confirmation]) &&
         (Account.site_admin.grants_right?(@current_user, :manage_students) || @domain_root_account.grants_right?(@current_user, :manage_students))
@@ -170,7 +171,7 @@ class CommunicationChannelsController < ApplicationController
 
     # Find or create the communication channel.
     @cc ||= @user.communication_channels.by_path(params[:communication_channel][:address]).
-      find_by_path_type(params[:communication_channel][:type])
+      where(path_type: params[:communication_channel][:type]).first
     @cc ||= @user.communication_channels.build(:path => params[:communication_channel][:address],
       :path_type => params[:communication_channel][:type])
 
@@ -202,7 +203,7 @@ class CommunicationChannelsController < ApplicationController
     if cc
       @communication_channel = cc
       @user = cc.user
-      @enrollment = @user.enrollments.find_by_uuid_and_workflow_state(params[:enrollment], 'invited') if params[:enrollment].present?
+      @enrollment = @user.enrollments.where(uuid: params[:enrollment], workflow_state: 'invited').first if params[:enrollment].present?
       @course = @enrollment && @enrollment.course
       @root_account = @course.root_account if @course
       @root_account ||= @user.pseudonyms.first.try(:account) if @user.pre_registered?
@@ -212,6 +213,13 @@ class CommunicationChannelsController < ApplicationController
         @root_account = account.try(:root_account)
       end
       @root_account ||= @domain_root_account
+
+      # now that we've retrieved a communication channel record with our
+      # nonce we can set the locale based on the associated models
+      I18n.localizer = lambda {
+        infer_locale :user => @user,
+                     :root_account => @root_account
+      }
 
       # logged in as an unconfirmed user?! someone's masquerading; just pretend we're not logged in at all
       if @current_user == @user && !@user.registered?
@@ -237,6 +245,8 @@ class CommunicationChannelsController < ApplicationController
       # load merge opportunities
       merge_users = cc.merge_candidates
       merge_users << @current_user if @current_user && !@user.registered? && !merge_users.include?(@current_user)
+      user_observers = UserObserver.where("user_id = ? OR observer_id = ?", @user.id, @user.id)
+      merge_users = merge_users.reject { |u| user_observers.any?{|uo| uo.user == u || uo.observer == u} }
       # remove users that don't have a pseudonym for this account, or one can't be created
       merge_users = merge_users.select { |u| u.find_or_initialize_pseudonym_for_account(@root_account, @domain_root_account) }
       @merge_opportunities = []
@@ -305,7 +315,7 @@ class CommunicationChannelsController < ApplicationController
         @pseudonym ||= @root_account.pseudonyms.build(:user => @user, :unique_id => cc.path) if @user.creation_pending?
         # We create the pseudonym with unique_id = cc.path, but if that unique_id is taken, just nil it out and make the user come
         # up with something new
-        @pseudonym.unique_id = '' if @pseudonym && @pseudonym.new_record? && @root_account.pseudonyms.active.custom_find_by_unique_id(@pseudonym.unique_id)
+        @pseudonym.unique_id = '' if @pseudonym && @pseudonym.new_record? && @root_account.pseudonyms.active.by_unique_id(@pseudonym.unique_id).first
 
         # Have to either have a pseudonym to register with, or be looking at merge opportunities
         return render :action => 'confirm_failed', :status => :bad_request if !@pseudonym && @merge_opportunities.empty?

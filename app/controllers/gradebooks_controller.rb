@@ -63,7 +63,7 @@ class GradebooksController < ApplicationController
             'score' => s.grants_right?(@current_user, :read_grade)? s.score  : nil
           }
         }
-        ags_json = light_weight_ags_json(@presenter.groups)
+        ags_json = light_weight_ags_json(@presenter.groups, {student: @presenter.student})
         js_env submissions: submissions_json,
                assignment_groups: ags_json,
                group_weighting_scheme: @context.group_weighting_scheme,
@@ -78,10 +78,9 @@ class GradebooksController < ApplicationController
     end
   end
 
-  def light_weight_ags_json(assignment_groups)
+  def light_weight_ags_json(assignment_groups, opts={})
     assignment_groups.map do |ag|
-      assignment_scope = AssignmentGroup.assignment_scope_for_grading(@context)
-      assignments = ag.send(assignment_scope).map do |a|
+      assignments = ag.visible_assignments(opts[:student] || @current_user).map do |a|
         {
           :id => a.id,
           :submission_types => a.submission_types_array,
@@ -113,8 +112,8 @@ class GradebooksController < ApplicationController
   end
 
   def attendance
-    @enrollment = @context.all_student_enrollments.find_by_user_id(params[:user_id]) if params[:user_id].present?
-    @enrollment ||= @context.all_student_enrollments.find_by_user_id(@current_user.id) if !@context.grants_right?(@current_user, session, :manage_grades)
+    @enrollment = @context.all_student_enrollments.where(user_id: params[:user_id]).first if params[:user_id].present?
+    @enrollment ||= @context.all_student_enrollments.where(user_id: @current_user).first if !@context.grants_right?(@current_user, session, :manage_grades)
     add_crumb t(:crumb, 'Attendance')
     if !@enrollment && @context.grants_right?(@current_user, session, :manage_grades)
       @assignments = @context.assignments.active.where(:submission_types => 'attendance').all
@@ -127,7 +126,7 @@ class GradebooksController < ApplicationController
     elsif @enrollment && @enrollment.grants_right?(@current_user, session, :read_grades)
       @assignments = @context.assignments.active.where(:submission_types => 'attendance').all
       @students = @context.students_visible_to(@current_user).order_by_sortable_name
-      @submissions = @context.submissions.find_all_by_user_id(@enrollment.user_id)
+      @submissions = @context.submissions.where(user_id: @enrollment.user_id).to_a
       @user = @enrollment.user
       render :action => "student_attendance"
       # render student_attendance, optional params[:assignment_id] to highlight and scroll to that particular assignment
@@ -156,7 +155,11 @@ class GradebooksController < ApplicationController
           cancel_cache_buster
           Shackles.activate(:slave) do
             send_data(
-              @context.gradebook_to_csv(:include_sis_id => @context.grants_any_right?(@current_user, session, :read_sis, :manage_sis), :user => @current_user),
+              @context.gradebook_to_csv(
+                :user => @current_user,
+                :include_priors => value_to_boolean(params[:include_priors]),
+                :include_sis_id => @context.grants_any_right?(@current_user, session, :read_sis, :manage_sis)
+              ),
               :type => "text/csv",
               :filename => t('grades_filename', "Grades").gsub(/ /, "_") + "-" + @context.name.to_s.gsub(/ /, "_") + ".csv",
               :disposition => "attachment"
@@ -175,22 +178,24 @@ class GradebooksController < ApplicationController
     @gradebook_is_editable = @context.grants_right?(@current_user, session, :manage_grades)
     per_page = Setting.get('api_max_per_page', '50').to_i
     teacher_notes = @context.custom_gradebook_columns.not_deleted.where(:teacher_notes=> true).first
+    ag_includes = [:assignments]
+    ag_includes << :assignment_visibility if @context.feature_enabled?(:differentiated_assignments)
     js_env  :GRADEBOOK_OPTIONS => {
       :chunk_size => Setting.get('gradebook2.submissions_chunk_size', '35').to_i,
-      :assignment_groups_url => api_v1_course_assignment_groups_url(@context, :include => [:assignments], :override_assignment_dates => "false"),
+      :assignment_groups_url => api_v1_course_assignment_groups_url(@context, :include => ag_includes, :override_assignment_dates => "false"),
       :sections_url => api_v1_course_sections_url(@context),
       :students_url => api_v1_course_enrollments_url(@context, :include => [:avatar_url], :type => ['StudentEnrollment', 'StudentViewEnrollment'], :per_page => per_page),
       :students_url_with_concluded_enrollments => api_v1_course_enrollments_url(@context, :include => [:avatar_url], :type => ['StudentEnrollment', 'StudentViewEnrollment'], :state => ['active', 'invited', 'completed'], :per_page => per_page),
       :submissions_url => api_v1_course_student_submissions_url(@context, :grouped => '1'),
       :outcome_links_url => api_v1_course_outcome_group_links_url(@context),
       :outcome_rollups_url => api_v1_course_outcome_rollups_url(@context, :per_page => 100),
-      :change_grade_url => api_v1_course_assignment_submission_url(@context, ":assignment", ":submission"),
+      :change_grade_url => api_v1_course_assignment_submission_url(@context, ":assignment", ":submission", :include =>[:visibility]),
       :context_url => named_context_url(@context, :context_url),
       :download_assignment_submissions_url => named_context_url(@context, :context_assignment_submissions_url, "{{ assignment_id }}", :zip => 1),
       :re_upload_submissions_url => named_context_url(@context, :submissions_upload_context_gradebook_url, "{{ assignment_id }}"),
       :context_id => @context.id,
       :context_code => @context.asset_string,
-      :context_integration_id => @context.integration_id,
+      :context_sis_id => @context.sis_source_id,
       :group_weighting_scheme => @context.group_weighting_scheme,
       :grading_standard =>  @context.grading_standard_enabled? && (@context.grading_standard.try(:data) || GradingStandard.default_grading_standard),
       :course_is_concluded => @context.completed?,
@@ -201,6 +206,7 @@ class GradebooksController < ApplicationController
       :publish_to_sis_url => context_url(@context, :context_details_url, :anchor => 'tab-grade-publishing'),
       :speed_grader_enabled => @context.allows_speed_grader?,
       :draft_state_enabled => @context.feature_enabled?(:draft_state),
+      :differentiated_assignments_enabled => @context.feature_enabled?(:differentiated_assignments),
       :outcome_gradebook_enabled => @context.feature_enabled?(:outcome_gradebook),
       :custom_columns_url => api_v1_course_custom_gradebook_columns_url(@context),
       :custom_column_url => api_v1_course_custom_gradebook_column_url(@context, ":id"),
@@ -209,7 +215,9 @@ class GradebooksController < ApplicationController
       :reorder_custom_columns_url => api_v1_custom_gradebook_columns_reorder_url(@context),
       :teacher_notes => teacher_notes && custom_gradebook_column_json(teacher_notes, @current_user, session),
       :change_gradebook_version_url => context_url(@context, :change_gradebook_version_context_gradebook_url, :version => 2),
-      :sis_app_url => Setting.get('sis_app_url', nil)
+      :sis_app_url => Setting.get('sis_app_url', nil),
+      :sis_app_token => Setting.get('sis_app_token', nil),
+      :list_students_by_sortable_name_enabled => @context.feature_enabled?(:gradebook_list_students_by_sortable_name)
     }
   end
 
@@ -466,11 +474,9 @@ class GradebooksController < ApplicationController
 
 
   def assignment_groups_json(opts={})
-    assignment_scope = AssignmentGroup.assignment_scope_for_grading(@context)
-    @context.assignment_groups.active.includes(assignment_scope).map { |g|
+    @context.assignment_groups.active.includes(:published_assignments).map { |g|
       assignment_group_json(g, @current_user, session, ['assignments'], {
-        stringify_json_ids: opts[:stringify_json_ids] || stringify_json_ids?,
-        assignment_group_assignment_scope: assignment_scope
+        stringify_json_ids: opts[:stringify_json_ids] || stringify_json_ids?
       })
     }
   end

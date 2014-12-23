@@ -23,12 +23,12 @@ describe "collaborations" do
     f(".collaboration_#{collaboration.id} .delete_collaboration_link").click
 
     if type == 'google_docs'
-      keep_trying_until { f('#delete_collaboration_dialog .delete_button').should be_displayed }
+      keep_trying_until { expect(f('#delete_collaboration_dialog .delete_button')).to be_displayed }
       f('#delete_collaboration_dialog .delete_button').click
     else
       #driver.switch_to.alert.accept
     end
-    keep_trying_until { f(".collaboration_#{collaboration.id} .delete_collaboration_link").should be_nil }
+    keep_trying_until { expect(f(".collaboration_#{collaboration.id} .delete_collaboration_link")).to be_nil }
   end
 
   # Public: Given an array of collaborations, verify their presence.
@@ -48,18 +48,9 @@ describe "collaborations" do
         driver.execute_script 'window.confirm = function(msg) { return true; }'
       end
       keep_trying_until {
-        form_visible?.should == form_visible
+        expect(form_visible?).to eq form_visible
       }
     end
-  end
-
-  # Public: Determine if the given collaborator has been selected.
-  #
-  # user - The collaborator to check.
-  #
-  # Returns a boolean.
-  def collaborator_is_selected?(user)
-    fj(".members-list li[data-id=#{user.id}]").present?
   end
 
   # Public: Create a new collaboration.
@@ -124,8 +115,8 @@ describe "collaborations" do
             submit_form('.edit_collaboration')
           end
 
-          f('.collaboration .title').text.should == new_title
-          Collaboration.order("id DESC").last.title.should == new_title
+          expect(f('.collaboration .title').text).to eq new_title
+          expect(Collaboration.order("id DESC").last.title).to eq new_title
         end
 
         it 'should be delete-able' do
@@ -141,64 +132,8 @@ describe "collaborations" do
           end
           wait_for_ajaximations
 
-          f('#no_collaborations_message').should be_displayed
-          Collaboration.order("id DESC").last.should be_deleted
-        end
-
-        it 'should not display the new collaboration form if other collaborations exist' do
-          create_collaboration!(type, title)
-          validate_collaborations(%W{/courses/#{@course.id}/collaborations}, false)
-        end
-
-        describe '#add_collaboration fragment' do
-          it 'should display the new collaboration form if no collaborations exist' do
-            PluginSetting.create!(:name => type, :settings => {})
-            validate_collaborations(%W{/courses/#{@course.id}/collaborations
-              /courses/#{@course.id}/collaborations#add_collaboration}, true)
-          end
-
-          it 'should hide the new collaboration form if collaborations exist' do
-            create_collaboration!(type, title)
-            validate_collaborations(%W{/courses/#{@course.id}/collaborations
-              /courses/#{@course.id}/collaborations#add_collaboration}, false)
-          end
-        end
-
-        it 'should open the new collaboration form if the last collaboration is deleted' do
-          create_collaboration!(type, title)
-          validate_collaborations("/courses/#{@course.id}/collaborations/", false, true)
-          delete_collaboration(@collaboration, type)
-          form_visible?.should be_true
-        end
-
-        it 'should not display the new collaboration form when the penultimate collaboration is deleted' do
-          PluginSetting.create!(:name => type, :settings => {})
-
-          @collaboration1 = Collaboration.typed_collaboration_instance(title)
-          @collaboration1.context = @course
-          @collaboration1.attributes = {:title => "My Collab 1"}
-          @collaboration1.user = @user
-          @collaboration1.save!
-          @collaboration2 = Collaboration.typed_collaboration_instance(title)
-          @collaboration2.context = @course
-          @collaboration2.attributes = {:title => "My Collab 2"}
-          @collaboration2.user = @user
-          @collaboration2.save!
-
-          validate_collaborations("/courses/#{@course.id}/collaborations/", false, true)
-          delete_collaboration(@collaboration1, type)
-          form_visible?.should be_false
-          delete_collaboration(@collaboration2, type)
-          form_visible?.should be_true
-        end
-
-        it 'should leave the new collaboration form open when the last collaboration is deleted' do
-          create_collaboration!(type, title)
-          validate_collaborations(%W{/courses/#{@course.id}/collaborations
-                                     /courses/#{@course.id}/collaborations#add_collaboration}, false, true)
-          f('.add_collaboration_link').click
-          delete_collaboration(@collaboration, type)
-          form_visible?.should be_true
+          expect(f('#no_collaborations_message')).to be_displayed
+          expect(Collaboration.order("id DESC").last).to be_deleted
         end
 
         it 'should display available collaborators' do
@@ -212,7 +147,7 @@ describe "collaborations" do
           wait_for_ajaximations
 
           keep_trying_until {
-            ffj('.available-users:visible li').length.should == 1
+            expect(ffj('.available-users:visible li').length).to eq 1
           }
         end
 
@@ -227,7 +162,7 @@ describe "collaborations" do
           wait_for_ajaximations
           fj('.available-users:visible a').click
           keep_trying_until {
-            ffj('.members-list li').length.should == 1
+            expect(ffj('.members-list li').length).to eq 1
           }
         end
 
@@ -243,7 +178,7 @@ describe "collaborations" do
 
           fj('.available-users:visible a').click
           fj('.members-list a').click
-          ffj('.members-list li').length.should == 0
+          expect(ffj('.members-list li').length).to eq 0
         end
       end
     end

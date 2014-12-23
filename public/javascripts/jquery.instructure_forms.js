@@ -21,6 +21,8 @@ define([
   'jquery' /* jQuery, $ */,
   'underscore',
   'compiled/xhr/FakeXHR',
+  'compiled/behaviors/authenticity_token',
+  'str/htmlEscape',
   'jquery.ajaxJSON' /* ajaxJSON, defaultAjaxError */,
   'jquery.disableWhileLoading' /* disableWhileLoading */,
   'jquery.google-analytics' /* trackEvent */,
@@ -30,7 +32,7 @@ define([
   'compiled/jquery.rails_flash_notifications',
   'tinymce.editor_box' /* editorBox */,
   'vendor/jquery.scrollTo' /* /\.scrollTo/ */
-], function(INST, I18n, $, _, FakeXHR) {
+], function(INST, I18n, $, _, FakeXHR, authenticity_token, htmlEscape) {
 
   // Intercepts the default form submission process.  Uses the form tag's
   // current action and method attributes to know where to submit to.
@@ -339,10 +341,8 @@ define([
   $.ajaxJSONFiles = function(url, submit_type, formData, files, success, error, options) {
     var $newForm = $(document.createElement("form"));
     $newForm.attr('action', url).attr('method', submit_type);
-    if(!formData.authenticity_token) {
-      // TODO: remove me once we stop proxying file uploads
-      formData.authenticity_token = ENV.AUTHENTICITY_TOKEN;
-    }
+    // TODO: remove me once we stop proxying file uploads
+    formData.authenticity_token = authenticity_token();
     var fileNames = {};
     files.each(function() {
       fileNames[$(this).attr('name')] = true;
@@ -381,10 +381,8 @@ define([
     });
   }
   $.ajaxFileUpload = function(options) {
-    if(!options.data.authenticity_token) {
-      // TODO: remove me once we stop proxying file uploads
-      options.data.authenticity_token = ENV.AUTHENTICITY_TOKEN;
-    }
+    // TODO: remove me once we stop proxying file uploads
+    options.data.authenticity_token = authenticity_token();
     $.toMultipartForm(options.data, function(params) {
       $.sendFormAsBinary({
         url: options.url,
@@ -1006,19 +1004,12 @@ define([
                           "<img src='/images/error_bottom.png' class='error_bottom'/>" +
                         "</div>").appendTo("body");
       }
-      // it'd be more semantic to make the error_box have a role=alert but that doesn't work everywhere
-      // http://blog.paciellogroup.com/2012/06/html5-accessibility-chops-aria-rolealert-browser-support/
-      // we also have to add aria_alerts to the layout itself, since creating
-      // it dynamically means VoiceOver won't read it
+      $.screenReaderFlashError(message);
 
-      // if there is no container for ARIA alerts, add the role to the template, so it at least works for some users.
-      if ($('#aria_alerts').length === 0) {
-        $template.find(".error_text").attr('role', 'alert');
-      } else {
-        $('#aria_alerts').append($('<div/>').html(message));
-      }
       var $box = $template.clone(true).attr('id', '').css('zIndex', $obj.zIndex() + 1).appendTo("body");
-      $box.find(".error_text").html(message);
+
+      // If our message happens to be a safe string, parse it as such. Otherwise, clean it up. //
+      $box.find(".error_text").html(htmlEscape(message).toString());
 
       var offset = $obj.offset();
       var height = $box.outerHeight();

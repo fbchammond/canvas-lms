@@ -45,6 +45,7 @@ define [
     computedAttributes: [
       'canModerate'
       'canReply'
+      'hiddenName'
       'speedgraderUrl'
       'inlineReplyLink'
       { name: 'allowsSideComments', deps: ['parent_id', 'deleted'] }
@@ -102,6 +103,18 @@ define [
         'replies'
         'author'
 
+    hiddenName: ->
+      if ENV.DISCUSSION.HIDE_STUDENT_NAMES
+        isGradersEntry = @get('user_id')+'' is ENV.DISCUSSION.CURRENT_USER.id
+        isStudentsEntry = @get('user_id')+'' is ENV.DISCUSSION.STUDENT_ID
+
+        if isGradersEntry
+          @get('author').display_name
+        else if isStudentsEntry
+          I18n.t('this_student', "This Student")
+        else
+          I18n.t('discussion_participant', "Discussion Participant")
+
     ##
     # Computed attribute to determine if the entry can be moderated
     # by the current user
@@ -154,7 +167,7 @@ define [
       # ENV.DISCUSSION.SPEEDGRADER_URL_TEMPLATE will only exist if I have permission to grade
       # and this thing is an assignment
       if ENV.DISCUSSION.SPEEDGRADER_URL_TEMPLATE
-        ENV.DISCUSSION.SPEEDGRADER_URL_TEMPLATE.replace /%22%3Astudent_id%22/, @get('user_id')
+        ENV.DISCUSSION.SPEEDGRADER_URL_TEMPLATE.replace /%22:student_id%22/, @get('user_id')
 
     ##
     # Computed attribute

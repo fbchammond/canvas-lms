@@ -5,12 +5,13 @@ describe "self enrollment" do
 
   context "in a full course" do
     it "should not be allowed" do
+      Account.default.allow_self_enrollment!
       course(:active_all => true)
       @course.self_enrollment = true
       @course.self_enrollment_limit = 0
       @course.save!
       get "/enroll/#{@course.self_enrollment_code}"
-      f("form#enroll_form").should be_nil
+      expect(f("form#enroll_form")).to be_nil
     end
   end
 
@@ -31,7 +32,7 @@ describe "self enrollment" do
       expect_new_page_load {
         submit_form("#enroll_form")
       }
-      f('.btn-primary').text.should == primary_action
+      expect(f('.btn-primary').text).to eq primary_action
       get "/"
       assert_valid_dashboard
     end
@@ -45,7 +46,7 @@ describe "self enrollment" do
       expect_new_page_load {
         submit_form("#enroll_form")
       }
-      f('.btn-primary').text.should == primary_action
+      expect(f('.btn-primary').text).to eq primary_action
       get "/"
       assert_valid_dashboard
     end
@@ -54,11 +55,11 @@ describe "self enrollment" do
       user_logged_in
       get "/enroll/#{@course.self_enrollment_code}"
       # no option to log in/register, since already authenticated
-      f("input[name='pseudonym[unique_id]']").should be_nil
+      expect(f("input[name='pseudonym[unique_id]']")).to be_nil
       expect_new_page_load {
         submit_form("#enroll_form")
       }
-      f('.btn-primary').text.should == primary_action
+      expect(f('.btn-primary').text).to eq primary_action
       get "/"
       assert_valid_dashboard
     end
@@ -66,6 +67,7 @@ describe "self enrollment" do
 
   shared_examples_for "closed registration" do
     before do
+      Account.default.allow_self_enrollment!
       course(:active_all => active_course)
       set_up_course
       @course.update_attribute(:self_enrollment, true)
@@ -73,8 +75,8 @@ describe "self enrollment" do
 
     it "should not register a new user" do
       get "/enroll/#{@course.self_enrollment_code}"
-      f("input[type=radio][name=user_type]").should be_nil
-      f("input[name='user[name]']").should be_nil
+      expect(f("input[type=radio][name=user_type]")).to be_nil
+      expect(f("input[name='user[name]']")).to be_nil
     end
 
     it "should authenticate and register an existing user" do
@@ -85,7 +87,7 @@ describe "self enrollment" do
       expect_new_page_load {
         submit_form("#enroll_form")
       }
-      f('.btn-primary').text.should == primary_action
+      expect(f('.btn-primary').text).to eq primary_action
       get "/"
       assert_valid_dashboard
     end
@@ -94,11 +96,11 @@ describe "self enrollment" do
       user_logged_in
       get "/enroll/#{@course.self_enrollment_code}"
       # no option to log in/register, since already authenticated
-      f("input[name='pseudonym[unique_id]']").should be_nil
+      expect(f("input[name='pseudonym[unique_id]']")).to be_nil
       expect_new_page_load {
         submit_form("#enroll_form")
       }
-      f('.btn-primary').text.should == primary_action
+      expect(f('.btn-primary').text).to eq primary_action
       get "/"
       assert_valid_dashboard
     end
@@ -109,7 +111,7 @@ describe "self enrollment" do
     let(:set_up_course){ }
     let(:primary_action){ "Go to the Course" }
     let(:assert_valid_dashboard) {
-      f('#courses_menu_item').should include_text("Courses")
+      expect(f('#courses_menu_item')).to include_text("Courses")
     }
     
     context "with open registration" do
@@ -129,8 +131,8 @@ describe "self enrollment" do
     }
     let(:primary_action){ "Go to your Dashboard" }
     let(:assert_valid_dashboard) {
-      f('#courses_menu_item').should include_text("Courses") # show for future course
-      f('#dashboard').should include_text("You've enrolled in one or more courses that have not started yet")
+      expect(f('#courses_menu_item')).to include_text("Courses") # show for future course
+      expect(f('#dashboard')).to include_text("You've enrolled in one or more courses that have not started yet")
     }
     context "with open registration" do
       include_examples "open registration"
@@ -145,8 +147,8 @@ describe "self enrollment" do
     let(:set_up_course){ }
     let(:primary_action){ "Go to your Dashboard" }
     let(:assert_valid_dashboard) {
-      f('#courses_menu_item').should include_text("Courses")
-      f('#dashboard').should include_text("You've enrolled in one or more courses that have not started yet")
+      expect(f('#courses_menu_item')).to include_text("Courses")
+      expect(f('#dashboard')).to include_text("You've enrolled in one or more courses that have not started yet")
     }
     context "with open registration" do
       include_examples "open registration"

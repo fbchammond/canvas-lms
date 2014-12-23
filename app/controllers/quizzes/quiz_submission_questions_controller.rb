@@ -38,7 +38,8 @@
 #           "type": "boolean"
 #         },
 #         "answer": {
-#           "description": "The provided answer (if any) for this question. The format of this parameter depends on the type of the question, see the Appendix for more information."
+#           "description": "The provided answer (if any) for this question. The format of this parameter depends on the type of the question, see the Appendix for more information.",
+#           "type": "string"
 #         }
 #       }
 #     }
@@ -68,7 +69,7 @@ class Quizzes::QuizSubmissionQuestionsController < ApplicationController
   #  }
   def index
     if authorized_action(@quiz, @current_user, :update)
-      render json: quiz_submission_questions_json(@quiz.active_quiz_questions,
+      render json: quiz_submission_questions_json(@quiz.active_quiz_questions.all,
         @quiz_submission.submission_data,
         {
           user: @current_user,
@@ -109,19 +110,19 @@ class Quizzes::QuizSubmissionQuestionsController < ApplicationController
   #
   # Provide or update an answer to one or more QuizQuestions.
   #
-  # @argument attempt [Integer]
+  # @argument attempt [Required, Integer]
   #   The attempt number of the quiz submission being taken. Note that this
   #   must be the latest attempt index, as questions for earlier attempts can
   #   not be modified.
   #
-  # @argument validation_token [String]
+  # @argument validation_token [Required, String]
   #   The unique validation token you received when the Quiz Submission was
   #   created.
   #
-  # @argument access_code [Optional, String]
+  # @argument access_code [String]
   #   Access code for the Quiz, if any.
   #
-  # @argument quiz_questions [Array]
+  # @argument quiz_questions[] [QuizSubmissionQuestion]
   #   Set of question IDs and the answer value.
   #
   #   See {Appendix: Question Answer Formats} for the accepted answer formats
@@ -140,6 +141,8 @@ class Quizzes::QuizSubmissionQuestionsController < ApplicationController
   #      "answer": 42.0
   #    }]
   #  }
+  #
+  # @returns [QuizSubmissionQuestion]
   def answer
     unless @quiz_submission.grants_right?(@service.participant.user, :update)
       reject! 'you are not allowed to update questions for this quiz submission', 403
@@ -177,16 +180,16 @@ class Quizzes::QuizSubmissionQuestionsController < ApplicationController
   # Set a flag on a quiz question to indicate that you want to return to it
   # later.
   #
-  # @argument attempt [Integer]
+  # @argument attempt [Required, Integer]
   #   The attempt number of the quiz submission being taken. Note that this
   #   must be the latest attempt index, as questions for earlier attempts can
   #   not be modified.
   #
-  # @argument validation_token [String]
+  # @argument validation_token [Required, String]
   #   The unique validation token you received when the Quiz Submission was
   #   created.
   #
-  # @argument access_code [Optional, String]
+  # @argument access_code [String]
   #   Access code for the Quiz, if any.
   #
   # @example_request
@@ -206,16 +209,16 @@ class Quizzes::QuizSubmissionQuestionsController < ApplicationController
   # Remove the flag that you previously set on a quiz question after you've
   # returned to it.
   #
-  # @argument attempt [Integer]
+  # @argument attempt [Required, Integer]
   #   The attempt number of the quiz submission being taken. Note that this
   #   must be the latest attempt index, as questions for earlier attempts can
   #   not be modified.
   #
-  # @argument validation_token [String]
+  # @argument validation_token [Required, String]
   #   The unique validation token you received when the Quiz Submission was
   #   created.
   #
-  # @argument access_code [Optional, String]
+  # @argument access_code [String]
   #   Access code for the Quiz, if any.
   #
   # @example_request

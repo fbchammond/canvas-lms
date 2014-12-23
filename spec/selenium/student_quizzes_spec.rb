@@ -1,6 +1,10 @@
 require File.expand_path(File.dirname(__FILE__) + '/helpers/quizzes_common')
 
 describe "quizzes" do
+  before :once do
+    Account.default.enable_feature!(:draft_state)
+  end
+
   include_examples "quizzes selenium tests"
 
   def prepare_quiz
@@ -22,39 +26,6 @@ describe "quizzes" do
     end
 
     context "taking a timed quiz" do
-      it "should warn the student before the due date is exceeded" do
-        @context = @course
-        bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
-        q = quiz_model
-        a = bank.assessment_questions.create!
-        b = bank.assessment_questions.create!
-        answers = [{id: 1, answer_text: 'A', weight: 100}, {id: 2, answer_text: 'B', weight: 0}]
-        question = q.quiz_questions.create!(:question_data => {
-          :name => "first question",
-          'question_type' => 'multiple_choice_question',
-          'answers' => answers,
-          :points_possible => 1
-        }, :assessment_question => a)
-
-        q.generate_quiz_data
-        q.due_at = Time.now.utc + 20.seconds
-        q.save!
-
-        get "/courses/#{@course.id}/quizzes/#{q.id}/take?user_id=#{@student.id}"
-        f("#take_quiz_link").click
-        answer_one = f("#question_#{question.id}_answer_1")
-        answer_two = f("#question_#{question.id}_answer_2")
-
-        # force a save to create a submission
-        answer_one.click
-        wait_for_ajaximations
-
-        keep_trying_until do
-          submission = Quizzes::QuizSubmission.last
-          fj('#times_up_dialog:visible').should be_present
-        end
-      end
-
       it "should warn the student before the lock date is exceeded" do
         @context = @course
         bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
@@ -84,7 +55,7 @@ describe "quizzes" do
 
         keep_trying_until do
           submission = Quizzes::QuizSubmission.last
-          fj('#times_up_dialog:visible').should be_present
+          expect(fj('#times_up_dialog:visible')).to be_present
         end
       end
     end
@@ -94,46 +65,9 @@ describe "quizzes" do
         @quiz.update_attributes(:lock_at => lock_at, :unlock_at => unlock_at)
       end
 
-      # This feature doesn't exist for draft state yet
-      describe "on main page" do
-        def validate_description_text(does_contain_text, text)
-          description = f('.description')
-          if does_contain_text
-            description.should include_text(text)
-          else
-            description.should_not include_text(text)
-          end
-        end
-
-        it "should show the resume quiz link if quiz is unlocked" do
-          get "/courses/#{@course.id}/quizzes"
-          f('.description').should include_text('Resume Quiz')
-        end
-
-        it "should show the resume quiz link if quiz unlock_at date is < now" do
-          update_quiz_lock(nil, 10.minutes.ago)
-          get "/courses/#{@course.id}/quizzes"
-          f('.description').should include_text('Resume Quiz')
-        end
-
-        it "should not show the resume link if the quiz is locked" do
-          update_quiz_lock(5.minutes.ago, nil)
-          get "/courses/#{@course.id}/quizzes"
-          f('.description').should_not include_text('Resume Quiz')
-        end
-
-        it "should grade any submission that needs grading" do
-          @qsub.end_at = 5.minutes.ago
-          @qsub.save!
-          get "/courses/#{@course.id}/quizzes"
-          f('.description').should_not include_text('Resume Quiz')
-          f('.description').should include_text('0 out of')
-        end
-      end
-
       describe "on individual quiz page" do
         def validate_resume_button_text(text)
-          f('#not_right_side .take_quiz_button').text.should == text
+          expect(f('#not_right_side .take_quiz_button').text).to eq text
         end
 
         before do
@@ -154,12 +88,12 @@ describe "quizzes" do
         it "should not show the resume quiz button if quiz is locked" do
           update_quiz_lock(5.minutes.ago, nil)
           get "/courses/#{@course.id}/quizzes/#{@quiz.id}"
-          f('#not_right_side .take_quiz_button').should_not be_present
+          expect(f('#not_right_side .take_quiz_button')).not_to be_present
         end
 
         it "should not see the publish button" do
           get "/courses/#{@course.id}/quizzes/#{@quiz.id}"
-          f('#quiz-publish-link').should_not be_present
+          expect(f('#quiz-publish-link')).not_to be_present
         end
 
         it "should not see unpublished warning" do
@@ -170,14 +104,14 @@ describe "quizzes" do
 
           get "/courses/#{@course.id}/quizzes/#{@quiz.id}"
 
-          f(".unpublished_warning").should_not be_present
+          expect(f(".unpublished_warning")).not_to be_present
         end
       end
     end
 
     context "who gets logged out while taking a quiz" do
       it "should be notified and able to relogin" do
-        pending('193')
+        skip('193')
         # setup a quiz and start taking it
         quiz_with_new_questions(!:goto_edit)
         get "/courses/#{@course.id}/quizzes/#{@quiz.id}"
@@ -187,7 +121,7 @@ describe "quizzes" do
         # answer a question, and check that it is saved
         ff('.answers .answer_input input')[0].click
         wait_for_ajaximations
-        f('#last_saved_indicator').text.should match(/^Quiz saved at \d+:\d+(pm|am)$/)
+        expect(f('#last_saved_indicator').text).to match(/^Quiz saved at \d+:\d+(pm|am)$/)
 
         # now kill our session (like logging out)
         destroy_session(false)
@@ -199,7 +133,7 @@ describe "quizzes" do
           wait_for_ajaximations
 
           # we should get notified that we are logged out
-          fj('#deauthorized_dialog:visible').should be_present
+          expect(fj('#deauthorized_dialog:visible')).to be_present
           index = (index + 1) % 2
         }
 
@@ -209,32 +143,32 @@ describe "quizzes" do
         expect_new_page_load { fill_in_login_form(@pseudonym.unique_id, @pseudonym.password) }
 
         # we should be back at the quiz show page
-        driver.find_element(:link_text, 'Resume Quiz').should be_present
+        expect(driver.find_element(:link_text, 'Resume Quiz')).to be_present
       end
     end
   end
 
   context "who closes the session without submitting" do
     it "should automatically grade the submission when it becomes overdue" do
-      pending('disabled because of regression')
+      skip('disabled because of regression')
 
       job_tag = 'Quizzes::QuizSubmission#grade_if_untaken'
 
       course_with_student_logged_in
       quiz = prepare_quiz
 
-      Delayed::Job.find_by_tag(job_tag).should == nil
+      expect(Delayed::Job.find_by_tag(job_tag)).to eq nil
 
       take_and_answer_quiz(false)
 
       driver.execute_script("window.close()")
 
-      quiz_sub = @quiz.quiz_submissions.find_by_user_id(@user.id)
-      quiz_sub.should be_present
-      quiz_sub.workflow_state.should == "untaken"
+      quiz_sub = @quiz.quiz_submissions.where(user_id: @user).first
+      expect(quiz_sub).to be_present
+      expect(quiz_sub.workflow_state).to eq "untaken"
 
       job = Delayed::Job.find_by_tag(job_tag)
-      job.should be_present
+      expect(job).to be_present
 
       # okay, we will manually "run" the job because we can't afford to wait
       # for it to be picked up by DJ in a spec:
@@ -242,7 +176,7 @@ describe "quizzes" do
       auto_grader.perform
 
       quiz_sub.reload
-      quiz_sub.workflow_state.should == "complete"
+      expect(quiz_sub.workflow_state).to eq "complete"
     end
   end
 
@@ -258,7 +192,7 @@ describe "quizzes" do
 
       take_and_answer_quiz
 
-      ff('.correct_answer').length.should == 0
+      expect(ff('.correct_answer').length).to eq 0
     end
 
     it "should highlight correct answers" do
@@ -267,7 +201,7 @@ describe "quizzes" do
 
       take_and_answer_quiz
 
-      ff('.correct_answer').length.should > 0
+      expect(ff('.correct_answer').length).to be > 0
     end
 
     it "should always highlight incorrect answers" do
@@ -278,7 +212,7 @@ describe "quizzes" do
         answers[1][:id] # don't answer
       end
 
-      ff('.incorrect.answer_arrow').length.should > 0
+      expect(ff('.incorrect.answer_arrow').length).to be > 0
     end
   end
 end

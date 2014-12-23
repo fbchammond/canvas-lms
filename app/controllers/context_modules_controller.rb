@@ -21,17 +21,31 @@ class ContextModulesController < ApplicationController
   add_crumb(proc { t('#crumbs.modules', "Modules") }) { |c| c.send :named_context_url, c.instance_variable_get("@context"), :context_context_modules_url }
   before_filter { |c| c.active_tab = "modules" }
 
+  module ModuleIndexHelper
+    def load_modules
+      @modules = @context.modules_visible_to(@current_user)
+      @collapsed_modules = ContextModuleProgression.for_user(@current_user).for_modules(@modules).select([:context_module_id, :collapsed]).select{|p| p.collapsed? }.map(&:context_module_id)
+
+      @menu_tools = {}
+      [:assignment_menu, :discussion_topic_menu, :file_menu, :module_menu, :quiz_menu, :wiki_page_menu].each do |type|
+        @menu_tools[type] = ContextExternalTool.all_tools_for(@context, :type => type,
+          :root_account => @domain_root_account, :current_user => @current_user)
+      end
+    end
+  end
+  include ModuleIndexHelper
+
   def index
     if authorized_action(@context, @current_user, :read)
-      @modules = @context.modules_visible_to(@current_user)
-
-      @collapsed_modules = ContextModuleProgression.for_user(@current_user).for_modules(@modules).select([:context_module_id, :collapsed]).select{|p| p.collapsed? }.map(&:context_module_id)
+      log_asset_access("modules:#{@context.asset_string}", "modules", "other")
+      load_modules
       if @context.grants_right?(@current_user, session, :participate_as_student)
         return unless tab_enabled?(@context.class::TAB_MODULES)
-        ContextModule.send(:preload_associations, @modules, [:content_tags])
+        ActiveRecord::Associations::Preloader.new(@modules, :content_tags).run
         @modules.each{|m| m.evaluate_for(@current_user) }
         session[:module_progressions_initialized] = true
       end
+      js_env :course_id => @context.id
     end
   end
 
@@ -43,7 +57,7 @@ class ContextModulesController < ApplicationController
         reevaluate_modules_if_locked(@tag)
         @progression = @tag.context_module.evaluate_for(@current_user) if @tag.context_module
         @progression.uncollapse! if @progression && @progression.collapsed?
-        content_tag_redirect(@context, @tag, :context_context_modules_url)
+        content_tag_redirect(@context, @tag, :context_context_modules_url, :modules)
       end
     end
   end
@@ -51,7 +65,7 @@ class ContextModulesController < ApplicationController
   def module_redirect
     if authorized_action(@context, @current_user, :read)
       @module = @context.context_modules.not_deleted.find(params[:context_module_id])
-      @tags = @module.content_tags.active
+      @tags = @module.content_tags_visible_to(@current_user)
       if params[:last]
         @tags.pop while @tags.last && @tags.last.content_type == 'ContextModuleSubHeader'
       else
@@ -104,11 +118,11 @@ class ContextModulesController < ApplicationController
       end
     end
   end
-  
+
   def reorder
     if authorized_action(@context.context_modules.scoped.new, @current_user, :update)
       m = @context.context_modules.not_deleted.first
-      
+
       m.update_order(params[:order].split(","))
       # Need to invalidate the ordering cache used by context_module.rb
       @context.touch
@@ -119,7 +133,7 @@ class ContextModulesController < ApplicationController
       @modules = @context.context_modules.not_deleted
       @modules.each{|m| m.save_without_touching_context }
       @context.touch
-      
+
       # # Background this, not essential that it happen right away
       # ContextModule.send_later(:update_tag_order, @context)
       respond_to do |format|
@@ -127,11 +141,11 @@ class ContextModulesController < ApplicationController
       end
     end
   end
-  
+
   def content_tag_assignment_data
     if authorized_action(@context, @current_user, :read)
       info = {}
-      @context.context_module_tags.not_deleted.each do |tag|
+      @context.module_items_visible_to(@current_user).each do |tag|
         info[tag.id] = Rails.cache.fetch([tag, @current_user, "content_tag_assignment_info"].cache_key) do
           if tag.assignment
             tag.assignment.context_module_tag_info(@current_user)
@@ -145,7 +159,7 @@ class ContextModulesController < ApplicationController
   end
 
   def prerequisites_needing_finishing_for(mod, progression, before_tag=nil)
-    tags = mod.content_tags.active
+    tags = mod.content_tags_visible_to(@current_user)
     pres = []
     tags.each do |tag|
       if req = (mod.completion_requirements || []).detect{|r| r[:id] == tag.id }
@@ -176,9 +190,9 @@ class ContextModulesController < ApplicationController
     raise ActiveRecord::RecordNotFound if id !~ Api::ID_REGEX
     type = code.join("_").classify
     if type == 'ContentTag'
-      @tag = @context.context_module_tags.active.find_by_id(id)
+      @tag = @context.context_module_tags.active.where(id: id).first
     else
-      @tag = @context.context_module_tags.active.find_by_context_module_id_and_content_id_and_content_type(params[:context_module_id], id, type)
+      @tag = @context.context_module_tags.active.where(context_module_id: params[:context_module_id], content_id: id, content_type: type).first
     end
     @module = @context.context_modules.active.find(params[:context_module_id])
     @progression = @module.evaluate_for(@current_user)
@@ -238,7 +252,7 @@ class ContextModulesController < ApplicationController
       @progression.save
       respond_to do |format|
         format.html { redirect_to named_context_url(@context, :context_context_modules_url) }
-        format.json { render :json => (@progression.collapsed ? @progression : @module.content_tags.active) }
+        format.json { render :json => (@progression.collapsed ? @progression : @module.content_tags_visible_to(@current_user) )}
       end
     end
   end
@@ -255,7 +269,7 @@ class ContextModulesController < ApplicationController
     @module = @context.context_modules.not_deleted.find(params[:context_module_id])
     if authorized_action(@module, @current_user, :update)
       order = params[:order].split(",").map{|id| id.to_i}
-      tags = @context.context_module_tags.not_deleted.find_all_by_id(order).compact
+      tags = @context.context_module_tags.not_deleted.where(id: order)
       affected_module_ids = (tags.map(&:context_module_id) + [@module.id]).uniq.compact
       affected_items = []
       items = order.map{|id| tags.detect{|t| t.id == id.to_i } }.compact.uniq
@@ -328,12 +342,15 @@ class ContextModulesController < ApplicationController
     @module = @context.context_modules.not_deleted.find(params[:context_module_id])
     if authorized_action(@module, @current_user, :update)
       @tag = @module.add_item(params[:item])
-      @tag[:publishable] = module_item_publishable?(@tag)
-      @tag[:published] = module_item_published?(@tag)
-      @tag[:publishable_id] = module_item_publishable_id(@tag)
-      @tag[:unpublishable] = module_item_unpublishable?(@tag)
-      @tag[:graded] = @tag.graded?
-      render :json => @tag
+      json = @tag.as_json
+      json['content_tag'].merge!(
+          publishable: module_item_publishable?(@tag),
+          published: @tag.published?,
+          publishable_id: module_item_publishable_id(@tag),
+          unpublishable:  module_item_unpublishable?(@tag),
+          graded: @tag.graded?
+        )
+      render json: json
     end
   end
   
@@ -373,11 +390,12 @@ class ContextModulesController < ApplicationController
               @progressions = ContextModuleProgression.where(:context_module_id => context_module_ids).each{|p| p.evaluate }
             end
           end
-          render :json => @progressions
-        else
+        elsif @context.grants_right?(@current_user, session, :participate_as_student)
           @progressions = @context.context_modules.active.order(:id).map{|m| m.evaluate_for(@current_user) }
-          render :json => @progressions
+        else
+          @progressions = []
         end
+        render :json => @progressions
       elsif !@context.feature_enabled?(:draft_state)
         redirect_to named_context_url(@context, :context_context_modules_url, :anchor => "student_progressions")
       elsif !@context.grants_right?(@current_user, session, :view_all_grades)
@@ -393,10 +411,10 @@ class ContextModulesController < ApplicationController
   def update
     @module = @context.context_modules.not_deleted.find(params[:id])
     if authorized_action(@module, @current_user, :update)
-      if params.delete :publish
+      if params[:publish]
         @module.publish
         @module.publish_items!
-      elsif params.delete :unpublish
+      elsif params[:unpublish]
         @module.unpublish
       end
       respond_to do |format|
@@ -419,5 +437,4 @@ class ContextModulesController < ApplicationController
       end
     end
   end
-
 end

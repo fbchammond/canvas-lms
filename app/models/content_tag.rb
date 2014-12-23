@@ -29,7 +29,7 @@ class ContentTag < ActiveRecord::Base
   belongs_to :content, :polymorphic => true
   validates_inclusion_of :content_type, :allow_nil => true, :in => ['Attachment', 'Assignment', 'WikiPage',
     'ContextModuleSubHeader', 'Quizzes::Quiz', 'ExternalUrl', 'LearningOutcome', 'DiscussionTopic',
-    'Rubric', 'ContextExternalTool', 'LearningOutcomeGroup', 'AssessmentQuestionBank', 'LiveAssessments::Assessment']
+    'Rubric', 'ContextExternalTool', 'LearningOutcomeGroup', 'AssessmentQuestionBank', 'LiveAssessments::Assessment', 'Lti::MessageHandler']
   belongs_to :context, :polymorphic => true
   validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course', 'LearningOutcomeGroup',
     'Assignment', 'Account', 'Quizzes::Quiz']
@@ -278,8 +278,8 @@ class ContentTag < ActiveRecord::Base
   end
 
   def self.delete_for(asset)
-    ContentTag.find_all_by_content_id_and_content_type(asset.id, asset.class.to_s).each{|t| t.destroy }
-    ContentTag.find_all_by_context_id_and_context_type(asset.id, asset.class.to_s).each{|t| t.destroy }
+    ContentTag.where(content_id: asset, content_type: asset.class.to_s).each{|t| t.destroy }
+    ContentTag.where(context_id: asset, context_type: asset.class.to_s).each{|t| t.destroy }
   end
 
   alias_method :destroy!, :destroy
@@ -359,7 +359,7 @@ class ContentTag < ActiveRecord::Base
   end
 
   def sync_workflow_state_to_asset?
-    self.content_type_quiz? || ['Assignment', 'WikiPage', 'DiscussionTopic'].include?(self.content_type)
+    self.content_type_quiz? || ['Attachment', 'Assignment', 'WikiPage', 'DiscussionTopic'].include?(self.content_type)
   end
 
   def content_type_quiz?
@@ -416,6 +416,58 @@ class ContentTag < ActiveRecord::Base
   }
   scope :learning_outcome_alignments, -> { where(:tag_type => 'learning_outcome') }
   scope :learning_outcome_links, -> { where(:tag_type => 'learning_outcome_association', :associated_asset_type => 'LearningOutcomeGroup', :content_type => 'LearningOutcome') }
+
+  # Scopes For Differentiated Assignment Filtering:
+
+  scope :visible_to_students_in_course_with_da, lambda { |user_ids, course_ids|
+    # keep content tags that:
+    # - arent a discussion/quiz/assignment
+    # - or are a discussion without an assignment
+    # - or have an assignment/quiz visibility
+    # - and are in the proper course(s)
+    scope = includes_assignment_and_discussion_visibilities(user_ids, course_ids).
+    includes_quiz_visibilities(user_ids, course_ids).
+    where(<<-SQL, Quizzes::Quiz.class_names)
+      content_tags.content_type NOT IN ('Assignment','DiscussionTopic', ? )
+      OR (
+        (discussion_topics.id IS NOT NULL AND discussion_topics.assignment_id IS NULL)
+        OR (assignment_student_visibilities.assignment_id IS NOT NULL)
+        OR (quiz_student_visibilities.quiz_id IS NOT NULL))
+    SQL
+    scope.where("content_tags.context_id IN (?)",course_ids).
+    uniq
+   }
+
+  # must join with ON's (rather than where's) to avoid sequence scans
+  scope :includes_assignment_and_discussion_visibilities, lambda { |user_ids, course_ids|
+    user_ids = Array.wrap(user_ids).join(',')
+    course_ids = Array.wrap(course_ids).join(',')
+    joins("LEFT JOIN discussion_topics ON discussion_topics.id = content_tags.content_id AND content_type = 'DiscussionTopic'").
+    joins(sanitize_sql_array([<<-SQL, user_ids, course_ids, user_ids, course_ids]))
+      LEFT JOIN assignment_student_visibilities
+        ON ((assignment_student_visibilities.assignment_id = content_tags.content_id
+              AND assignment_student_visibilities.user_id IN (%s)
+              AND assignment_student_visibilities.course_id IN (%s)
+              AND content_type = 'Assignment')
+        OR (assignment_student_visibilities.assignment_id = discussion_topics.assignment_id
+              AND assignment_student_visibilities.user_id IN (%s)
+              AND assignment_student_visibilities.course_id IN (%s)
+              AND content_type = 'DiscussionTopic'))
+    SQL
+  }
+
+  # must join with ON's (rather than where's) to avoid sequence scans
+  scope :includes_quiz_visibilities, lambda { |user_ids, course_ids|
+    user_ids = Array.wrap(user_ids).join(',')
+    course_ids = Array.wrap(course_ids).join(',')
+    joins(sanitize_sql_array([<<-SQL, user_ids, course_ids]))
+      LEFT JOIN quiz_student_visibilities
+        ON (quiz_student_visibilities.quiz_id = content_tags.content_id
+          AND quiz_student_visibilities.user_id IN (%s)
+          AND quiz_student_visibilities.course_id IN (%s)
+          AND content_type IN ('Quiz','Quizzes::Quiz'))
+    SQL
+  }
 
   # only intended for learning outcome links
   def self.outcome_title_order_by_clause

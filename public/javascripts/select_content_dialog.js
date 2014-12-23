@@ -112,7 +112,12 @@ $(document).ready(function() {
     $("#select_context_content_dialog").dialog({
       title: dialog_title,
       width: options.width || 400,
-      height: options.height || 400
+      height: options.height || 400,
+      close: function() {
+        if (options.close) {
+          options.close();
+        }
+      }
     }).fixDialogButtons();
     $("#select_context_content_dialog").dialog('option', 'title', dialog_title);
   }
@@ -133,6 +138,7 @@ $(document).ready(function() {
         submitted(item_data);
       }
     };
+
     var item_type = $("#add_module_item_select").val();
     if(item_type == 'external_url') {
       var item_data = {
@@ -143,11 +149,16 @@ $(document).ready(function() {
       }
       item_data['item[url]'] = $("#content_tag_create_url").val();
       item_data['item[title]'] = $("#content_tag_create_title").val();
-      submit(item_data);   
+      submit(item_data);
+
     } else if(item_type == 'context_external_tool') {
+
+      var tool = $("#context_external_tools_select .tools .tool.selected").data('tool');
+      var tool_type = tool ? tool.definition_type :$("#add_module_item_select").val()
+      var tool_id = tool ? tool.definition_id : 0
       var item_data = {
-        'item[type]': $("#add_module_item_select").val(),
-        'item[id]': $("#context_external_tools_select .tools .tool.selected").data('id'),
+        'item[type]': tool_type,
+        'item[id]': tool_id,
         'item[new_tab]': $("#external_tool_create_new_tab").attr('checked') ? '1' : '0',
         'item[indent]': $("#content_tag_indent").val()
       }
@@ -161,15 +172,19 @@ $(document).ready(function() {
       } else {
         submit(item_data);
       }
+
     } else if(item_type == 'context_module_sub_header') {
+
       var item_data = {
         'item[type]': $("#add_module_item_select").val(),
         'item[id]': $("#select_context_content_dialog .module_item_option:visible:first .module_item_select").val(),
         'item[indent]': $("#content_tag_indent").val()
       }
       item_data['item[title]'] = $("#sub_header_title").val();
-      submit(item_data);   
+      submit(item_data);
+
     } else {
+
       var $options = $("#select_context_content_dialog .module_item_option:visible:first .module_item_select option:selected");
       $options.each(function() {
         var $option = $(this);
@@ -195,13 +210,19 @@ $(document).ready(function() {
 
             $("#select_context_content_dialog").loadingImage('remove');
             item_data['item[id]'] = obj.id;
-            item_data['item[title]'] = $("#select_context_content_dialog .module_item_option:visible:first .item_title").val();
-            item_data['item[title]'] = item_data['item[title]'] || obj.display_name
+            if (item_data['item[type]'] === 'attachment') {
+              // some browsers return a fake path in the file input value, so use the name returned by the server
+              item_data['item[title]'] = obj.display_name;
+            } else {
+              item_data['item[title]'] = $("#select_context_content_dialog .module_item_option:visible:first .item_title").val();
+              item_data['item[title]'] = item_data['item[title]'] || obj.display_name;
+            }
             var $option = $(document.createElement('option'));
             $option.val(obj.id).text(item_data['item[title]']);
             $("#" + item_data['item[type]'] + "s_select").find(".module_item_select option:last").after($option);
             submit(item_data);
           };
+
           if(item_data['item[type]'] == 'attachment') {
             $.ajaxJSONFiles(url, 'POST', data, $("#module_attachment_uploaded_data"), function(data) {
               callback(data);
@@ -214,7 +235,13 @@ $(document).ready(function() {
               callback(data);
             }, function(data) {
               $("#select_context_content_dialog").loadingImage('remove');
-              $("#select_context_content_dialog").errorBox(I18n.t('errors.failed_to_create_item', 'Failed to Create new Item'));
+              if (data && data.errors && data.errors.title[0] && data.errors.title[0].message && data.errors.title[0].message === "blank") {
+                $("#select_context_content_dialog").errorBox(I18n.t('errors.assignment_name_blank', 'Assignment name cannot be blank.'));
+                $('.item_title').focus();
+              } else {
+                $("#select_context_content_dialog").errorBox(I18n.t('errors.failed_to_create_item', 'Failed to Create new Item'));
+              }
+
             });
           }
         } else {
@@ -223,19 +250,21 @@ $(document).ready(function() {
       });
     }
   });
-  $("#context_external_tools_select .tools").delegate('.tool', 'click', function() {
+  $("#context_external_tools_select .tools").delegate('.tool', 'click', function(e) {
+    e.preventDefault();
+
     var $tool = $(this);
-    if($(this).hasClass('selected') && !$(this).hasClass('resource_selection')) { 
-      $(this).removeClass('selected'); 
-      return; 
+    if($(this).hasClass('selected') && !$(this).hasClass('resource_selection')) {
+      $(this).removeClass('selected');
+      return;
     }
     $tool.parents(".tools").find(".tool.selected").removeClass('selected');
     $tool.addClass('selected');
     if($tool.hasClass('resource_selection')) {
       var tool = $tool.data('tool');
       var frameHeight = Math.max(Math.min($(window).height() - 100, 550), 100);
-      var width = tool.resource_selection.selection_width || tool.selection_width;
-      var height = tool.resource_selection.selection_height || tool.selection_height;
+      var width = tool.placements.resource_selection.selection_width;
+      var height = tool.placements.resource_selection.selection_height;
       var $dialog = $("#resource_selection_dialog");
       if($dialog.length == 0) {
         $dialog = $("<div/>", {id: 'resource_selection_dialog', style: 'padding: 0; overflow-y: hidden;'});
@@ -287,13 +316,15 @@ $(document).ready(function() {
         .dialog('option', 'height', height || frameHeight || 400)
         .dialog('open');
       $dialog.triggerHandler('dialogresize');
-      var url = $.replaceTags($("#select_content_resource_selection_url").attr('href'), 'id', tool.id);
+      var url = $.replaceTags($("#select_content_resource_selection_url").attr('href'), 'id', tool.definition_id);
       $dialog.find("iframe").attr('src', url);
     } else {
-      $("#external_tool_create_url").val($tool.data('url') || '');
-      $("#context_external_tools_select .domain_message").showIf($tool.data('domain'))
-        .find(".domain").text($tool.data('domain'));
-      $("#external_tool_create_title").val($tool.data('name'));
+      var placements = $tool.data('tool').placements
+      var placement = placements.assignment_selection || placements.link_selection
+      $("#external_tool_create_url").val(placement.url || '');
+      $("#context_external_tools_select .domain_message").showIf($tool.data('tool').domain)
+        .find(".domain").text($tool.data('tool').domain);
+      $("#external_tool_create_title").val(placement.title);
     }
   });
   var $tool_template = $("#context_external_tools_select .tools .tool:first").detach();
@@ -311,16 +342,14 @@ $(document).ready(function() {
           $select.find(".tools").empty();
           for(var idx in data) {
             var tool = data[idx];
-            if(tool.url || tool.domain || tool.resource_selection) {
-              var $tool = $tool_template.clone(true);
-              $tool.toggleClass('resource_selection', !!tool.resource_selection);
-              $tool.fillTemplateData({
-                data: tool,
-                dataValues: ['id', 'url', 'domain', 'name']
-              });
-              $tool.data('tool', tool);
-              $select.find(".tools").append($tool.show());
-            }
+            var $tool = $tool_template.clone(true);
+            $tool.toggleClass('resource_selection', 'resource_selection' in tool.placements);
+            $tool.fillTemplateData({
+              data: tool,
+              dataValues: ['definition_type', 'definition_id', 'domain', 'name', 'placements', 'description']
+            });
+            $tool.data('tool', tool);
+            $select.find(".tools").append($tool.show());
           }
         }, function(data) {
           $select.find(".message").text(I18n.t('errors.loading_failed', "Loading Failed"));

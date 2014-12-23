@@ -1,0 +1,187 @@
+.toolbar {
+  @include ui-widget-header-bg-and-text;
+  padding: $contentBoxPadding / 2;
+  font-size: $baseFontSize;
+  line-height: $baseLineHeight;
+
+  .header {
+    font-size: 16px;
+  }
+}
+
+// List View
+.list-view {
+  @if $is-k12 { background-color: white; }
+  overflow: auto;
+  & > header,
+  // oldskool compat
+  #section-tabs-header {
+    @if $is-k12 { 
+      background-color: white;
+      margin: 0;
+      line-height: 1.1;
+      font-weight: bold;
+      padding: $k12-sp;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    @else {
+      @include buttonBackground($listViewHeaderBackgroundLight, $listViewHeaderBackground, $gray);
+      margin-top: 0;
+      padding: 4px 12px;
+      font-weight: bold;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.75);
+      border-bottom: 1px solid #efefef;
+      border-top: 1px solid $listBorderColor;
+      text-shadow: none;
+      // oldskool overrides
+      font-size: $baseFontSize;
+      font-weight: normal;
+      margin-bottom: 0;
+      line-height: 19px;
+      height: inherit;
+    }
+  }
+  #section-tabs-header-subtitle {
+    display: block;
+    font-size: 11px;
+    font-style: italic;
+    color: inherit;
+  }
+
+  & > *:first-child {
+    border-top: 0 !important; // oldskool important
+  }
+
+  & > ul,
+  // oldskool overrides
+  & > nav > ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+
+    & > li {
+      padding: 0;
+      @if $is-k12 { padding: 0 $k12-sp - 4; }
+
+      & > a {
+        display: block;
+        color: ensure-contrast($gray, $lightBackground);
+        text-decoration: none;
+        
+        // K-12 styles
+        @if $is-k12 { 
+          padding: ($k12-sp - 4) $k12-sp;
+          border-radius: $k12-sp/2;
+          
+          @if $use_high_contrast {
+            &:hover, &:focus {
+              background: darken($brand-k12-dark, 30%);
+              color: white;
+            }
+          }
+          @else { &:hover, &:focus { background: #f2f2f2; } }
+        }
+        
+        // Default UI styles
+        @else {
+          padding: 4px 8px;
+
+          &:hover, &:focus {
+            @if $use_high_contrast {
+              background: #333;
+              color: #fff;
+              text-decoration: underline; 
+            } 
+            @else { background: $white; }
+          }
+          &:hover {
+            text-decoration: none;
+            background: $course-sidenav_list-item--bg-color;  
+            color: $course-sidenav_list-item--active-font-color;        
+          }
+        }
+
+        & > span {
+          white-space: nowrap;
+        }
+
+      }
+
+      &:last-child > a {
+        border-bottom: 0;
+      }
+    }
+  }
+  
+  // lists w/o headers still need a strong border
+  & > ul + ul {
+    border-top: 1px solid $listBorderColor;
+  }
+
+  a.active {
+
+    @if $is-k12 {
+      background-color: $brand-k12;
+      color: white;
+      @if $use_high_contrast {
+        background-color: darken($brand-k12, 35%);
+        &:hover, &:focus { background-color: darken($brand-k12, 35%); }
+      }
+      @else {
+        background-color: $brand-k12;
+        &:hover, &:focus { background-color: $brand-k12; }
+      }
+    }
+    
+    @else {
+      /// active state colors and backgrounds on left sidenav            
+      background: $course-sidenav_list-item--bg-color;
+      color: $course-sidenav_list-item--active-font-color;
+      &:hover {      
+        background: $course-sidenav_list-item--bg-color;  
+        color: $course-sidenav_list-item--active-font-color;
+      }
+    }
+  }
+}
+.image-block {
+  @include clearfix;
+
+  .image-block-image {
+    float: left;
+    margin-right: $contentBoxPadding;
+  }
+
+  .image-block-content {
+    display: table-cell;
+    vertical-align: top;
+    width: 10000px;
+  }
+}
+
+.box-shadow {
+  box-shadow: 0 2px 4px rgba(0,0,0,.25)
+}
+
+.page-action-list {
+  @include reset-list;
+  a {
+    display: block;
+    color: $gray;
+    font-weight: bold;
+    border-bottom: solid 1px lighten($grayLight, 10%);
+    box-shadow: 0 1px 0px rgba(255, 255, 255, 0.85);
+    padding: 8px 0;
+
+    &:hover, &:focus { color: $blue; }
+
+    @if $use_high_contrast { text-decoration: none; }
+
+    &:active {
+      color: $grayLight;
+    }
+  }
+}

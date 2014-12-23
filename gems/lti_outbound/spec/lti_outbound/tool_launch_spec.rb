@@ -45,7 +45,7 @@ describe LtiOutbound::ToolLaunch do
       tool.name = 'tool_name'
       tool.privacy_level = LtiOutbound::LTITool::PRIVACY_LEVEL_PUBLIC
     end
-    teacher_role = LtiOutbound::LTIRole::INSTRUCTOR
+    teacher_role = LtiOutbound::LTIRoles::ContextNotNamespaced::INSTRUCTOR
     @user = LtiOutbound::LTIUser.new.tap do |user|
       user.avatar_url = 'avatar_url'
       user.current_roles = 'current_roles'
@@ -118,12 +118,12 @@ describe LtiOutbound::ToolLaunch do
       expect(hash['custom_canvas_user_login_id']).to eq 'user_login_id'
       expect(hash['custom_canvas_course_id']).to eq 'course_id'
       expect(hash['custom_canvas_api_domain']).to eq 'root_account_domain'
-      expect(hash['lis_course_offering_sourcedid']).to eq 'course_sis_source_id'
+      expect(hash['lis_course_offering_sourcedid']).to eq '$CourseSection.sourcedId'
       expect(hash['lis_person_contact_email_primary']).to eq 'nobody@example.com'
       expect(hash['lis_person_name_full']).to eq 'user_name'
       expect(hash['lis_person_name_family']).to eq 'last_name'
       expect(hash['lis_person_name_given']).to eq 'first_name'
-      expect(hash['lis_person_sourcedid']).to eq 'sis_user_id'
+      expect(hash['lis_person_sourcedid']).to eq '$Person.sourcedId'
       expect(hash['launch_presentation_locale']).to eq 'en' #was I18n.default_locale.to_s
       expect(hash['launch_presentation_document_target']).to eq 'iframe'
       expect(hash['launch_presentation_return_url']).to eq 'http://www.google.com'
@@ -208,7 +208,7 @@ describe LtiOutbound::ToolLaunch do
                                          :variable_substitutor => @variable_substitutor).generate
       expect(hash['custom_canvas_account_id']).to eq 'root_account_id'
       expect(hash['custom_canvas_account_sis_id']).to eq 'root_account_sis_source_id'
-      expect(hash['lis_person_sourcedid']).to eq 'sis_user_id'
+      expect(hash['lis_person_sourcedid']).to eq '$Person.sourcedId'
       expect(hash['custom_canvas_user_id']).to eq 'user_id'
       expect(hash['tool_consumer_instance_guid']).to eq 'root_account_lti_guid' #was hash['tool_consumer_instance_guid']).to eq sub_account.root_account.lti_guid
     end
@@ -317,7 +317,7 @@ describe LtiOutbound::ToolLaunch do
 
   describe '#for_assignment!' do
     it 'includes assignment outcome service params for student' do
-      student_role = LtiOutbound::LTIRole::LEARNER
+      student_role = LtiOutbound::LTIRoles::ContextNotNamespaced::LEARNER
       @user.current_roles = [student_role]
       @tool_launch.for_assignment!(@assignment, '/my/test/url', '/my/other/test/url')
 

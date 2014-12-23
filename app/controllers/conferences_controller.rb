@@ -143,7 +143,7 @@ class ConferencesController < ApplicationController
   # This API returns a JSON object containing the list of conferences,
   # the key for the list of conferences is "conferences"
   #
-  #  Examples:
+  # @example_request
   #     curl 'https://<canvas>/api/v1/courses/<course_id>/conferences' \
   #         -H "Authorization: Bearer <token>"
   #
@@ -331,7 +331,7 @@ class ConferencesController < ApplicationController
       params[:user].each do |id, val|
         ids << id.to_i if val == '1'
       end
-      members += @context.users.find_all_by_id(ids).to_a
+      members += @context.users.where(id: ids)
     else
       members += @context.users.to_a
     end

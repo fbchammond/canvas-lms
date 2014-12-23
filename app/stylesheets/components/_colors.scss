@@ -1,0 +1,149 @@
+/*
+@styleguide Canvas Colors
+
+## How to use our color variables...
+
+### **...when implementing new ui**
+
+While integrating new UI, it's best to use what we call a *functional variable* to pull in our main canvas variables.
+
+For example, if our code looks like this:
+
+    <p class="i-need-a-specific-color">Hello, Pando!</p>
+
+
+Then we would write our scss it like:
+
+
+    $myCustomColor: $canvas-primary;
+    p.customColor {
+      color: $myCustomColor;
+    }
+
+
+### **...when changing old code**
+
+When you're in Canvas and changing old code and see a color that doesn't have a variable attached, be sure to change it and give it a functional variable or one of our primary canvas colors
+
+The Bad Way
+
+    .class-name {
+      color: #123456;
+    }
+
+The Best Way
+
+    $my-functional-variable: $canvas-primary;
+
+    .class-name {
+      color: $my-functional-variable;
+    }
+
+
+### **...with accessibility in mind**
+
+We have specific flags that denote when a user has on High-Contrast mode. Most of our color variables have a high-contrast equivalent already built into Canvas, however, for the occasion where some tweaking needs to happen, be sure to make use of sass functions (such as ```lighten()``` and ```darken()```) to help change our primary palette.
+
+The Bad Way
+
+    .class-name {
+      color: #123456;
+      @if use_high_contrast {
+        color: #345678;
+      }
+    }
+
+
+The Better Way
+
+    $my-functional-variable: $canvas-primary;
+
+    .class-name {
+      color: $canvas-primary; // this variable automatically switches when high contrast is on, yay!
+    }
+
+
+The Best Way
+
+    $my-functional-variable: $canvas-primary;
+
+    .class-name {
+      color: $my-functional-variable;
+    }
+
+
+### **Canvas Color Variables**
+
+Note: There is only one set of variables, high-contrast mode changes color automagically when on
+
+<div class="Colorguide-container">
+  <div class="Colorguide-container--primary-theme">
+    <strong>Normal</strong>
+    <div class="Colorguide-color Colorguide-color--primary">
+      <span class="Colorguide-var">$canvas-primary</span>
+    </div>
+    <div class="Colorguide-color Colorguide-color--secondary">
+      <span class="Colorguide-var">$canvas-secondary</span>
+    </div>
+    <div class="Colorguide-color Colorguide-color--success">
+      <span class="Colorguide-var ">$canvas-success</span>
+    </div>
+
+    <div class="Colorguide-color Colorguide-color--neutral">
+      <span class="Colorguide-var">$canvas-neutral</span>
+    </div>  
+    <div class="Colorguide-color Colorguide-color--action">
+      <span class="Colorguide-var">$canvas-action</span>
+    </div>
+    <div class="Colorguide-color Colorguide-color--danger">
+      <span class="Colorguide-var">$canvas-danger</span>
+    </div>
+
+    <div class="Colorguide-color Colorguide-color--alert">
+      <span class="Colorguide-var">$canvas-alert</span>
+    </div>  
+    <div class="Colorguide-color Colorguide-color--light">
+      <span class="Colorguide-var">$canvas-light</span>
+    </div>    
+    <div class="Colorguide-color Colorguide-color--dark">
+      <span class="Colorguide-var">$canvas-dark</span>
+    </div>
+  </div>
+  <div class="Colorguide-container--hc-theme">
+    <strong>High Contrast</strong>    
+    <div class="Colorguide-color Colorguide-color--primary">
+    </div>
+    <div class="Colorguide-color Colorguide-color--secondary">
+    </div>
+    <div class="Colorguide-color Colorguide-color--success">
+    </div>
+    <div class="Colorguide-color Colorguide-color--neutral">
+    </div>  
+    <div class="Colorguide-color Colorguide-color--action">
+    </div>
+    <div class="Colorguide-color Colorguide-color--danger">
+    </div>
+    <div class="Colorguide-color Colorguide-color--alert">
+    </div>
+    <div class="Colorguide-color Colorguide-color--light">
+    </div>  
+    <div class="Colorguide-color Colorguide-color--dark">
+    </div> 
+  </div>
+</div>
+
+
+
+
+
+
+
+<div class="styleguide-section__component-notes">
+  <h4 class="codeBlock__note-title">tl;dr</h4>
+  <p class="codeBlock__note-description">Use color variables when adding colors to your elements.</p>
+  <p class="codeBlock__note-description">Do not use hex codes in .scss or .sass files.</p>
+  <p class="codeBlock__note-description">If that color needs to be tweaked, use the scss functions for <pre><code>lighten($my-color, 10%)</code></pre> and <pre><code>darken($my-color, 10%)</code></pre></p>
+  <p class="codeBlock__note-description">High Contrast colors are automatically pulled in based on the canvas color variables.</p>
+</div>
+
+*/

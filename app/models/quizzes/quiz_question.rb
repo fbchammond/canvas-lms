@@ -17,7 +17,7 @@
 #
 
 class Quizzes::QuizQuestion < ActiveRecord::Base
-  self.table_name = 'quiz_questions' unless CANVAS_RAILS2
+  self.table_name = 'quiz_questions'
 
   include Workflow
 
@@ -29,7 +29,9 @@ class Quizzes::QuizQuestion < ActiveRecord::Base
 
   EXPORTABLE_ATTRIBUTES = [:id, :quiz_id, :quiz_group_id, :assessment_question_id, :question_data, :assessment_question_version, :position, :created_at, :updated_at, :workflow_state]
   EXPORTABLE_ASSOCIATIONS = [:quiz, :assessment_question, :quiz_group]
+  TEXT_ONLY = 'text_only_question'
 
+  before_save :validate_blank_questions
   before_save :infer_defaults
   before_save :create_assessment_question
   before_destroy :delete_assessment_question
@@ -61,25 +63,42 @@ class Quizzes::QuizQuestion < ActiveRecord::Base
     Quizzes::Quiz.mark_quiz_edited(self.quiz_id)
   end
 
-  def question_data=(data)
+  # @param [Hash] data
+  # @param [String] data[:regrade_option]
+  #  If present, the question will be regraded.
+  #  You must also pass in data[:regrade_user] if you pass this option.
+  #
+  #  See Quizzes::QuizRegrader::Answer::REGRADE_OPTIONS for a rundown of the
+  #  possible values for this parameter.
+  #
+  # @param [User] data[:regrade_user]
+  #  The user/teacher who's performing the regrade (e.g, updating the question).
+  #  Note that this is NOT an id, but an actual instance of a User model.
+  def question_data=(in_data)
+    data = if in_data.is_a?(String)
+      ActiveSupport::JSON.decode(in_data)
+    elsif in_data.is_a?(Hash)
+      in_data.with_indifferent_access
+    else
+      in_data
+    end
+
     if data[:regrade_option].present?
       update_question_regrade(data[:regrade_option], data[:regrade_user])
     end
 
-    if data.is_a?(String)
-      data = ActiveSupport::JSON.decode(data) rescue nil
-    elsif data.class == Hash
-      data = data.with_indifferent_access
-    end
     return if data == self.question_data
+
     data = AssessmentQuestion.parse_question(data, self.assessment_question)
     data[:name] = data[:question_name]
+
     write_attribute(:question_data, data.to_hash)
   end
 
   def question_data
     if data = read_attribute(:question_data)
       if data.class == Hash
+        # TODO: a reader shouldn't write ?????????????????????
         data = write_attribute(:question_data, data.with_indifferent_access)
       end
     end
@@ -111,6 +130,15 @@ class Quizzes::QuizQuestion < ActiveRecord::Base
       self.assessment_question_id = self.assessment_question.id
       self.assessment_question_version = self.assessment_question.version_number rescue nil
     end
+    true
+  end
+
+  def validate_blank_questions
+    return if self.question_data && !(self.question_data.is_type?(:fill_in_multiple_blanks) || self.question_data.is_type?(:short_answer))
+    qd = self.question_data
+    qd.answers = qd.answers.select { |answer| !answer['text'].empty? }
+    self.question_data = qd
+    self.question_data_will_change!
     true
   end
 
@@ -201,11 +229,14 @@ class Quizzes::QuizQuestion < ActiveRecord::Base
   private
 
   def update_question_regrade(regrade_option, regrade_user)
-    regrade = Quizzes::QuizRegrade.find_or_create_by_quiz_id_and_quiz_version(quiz.id, quiz.version_number) do |qr|
-      qr.user_id = regrade_user.id
+    regrade = Quizzes::QuizRegrade.where(quiz_id: quiz.id, quiz_version: quiz.version_number).first_or_initialize
+    if regrade.new_record?
+      regrade.user = regrade_user
+      regrade.save!
     end
 
-    question_regrade = Quizzes::QuizQuestionRegrade.find_or_initialize_by_quiz_question_id_and_quiz_regrade_id(id, regrade.id)
+    question_regrade = Quizzes::QuizQuestionRegrade.where(quiz_question_id: id, quiz_regrade_id: regrade.id).first_or_initialize
+    question_regrade.quiz_regrade = regrade
     question_regrade.regrade_option = regrade_option
     question_regrade.save!
   end

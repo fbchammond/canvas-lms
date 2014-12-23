@@ -14,6 +14,7 @@ define [
   'compiled/views/assignments/AssignmentGroupSelector'
   'compiled/views/assignments/GroupCategorySelector'
   'compiled/jquery/toggleAccessibly'
+  'compiled/views/editor/KeyboardShortcuts'
   'compiled/tinymce'
   'tinymce.editor_box'
   'jqueryui/dialog'
@@ -21,7 +22,7 @@ define [
   'compiled/jquery.rails_flash_notifications'
 ], (INST, I18n, ValidatedFormView, _, $, wikiSidebar, template,
 userSettings, TurnitinSettings, TurnitinSettingsDialog, preventDefault, MissingDateDialog,
-AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
+AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly, RCEKeyboardShortcuts) ->
 
   class EditView extends ValidatedFormView
 
@@ -46,6 +47,8 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
     GROUP_CATEGORY_SELECTOR = '#group_category_selector'
     PEER_REVIEWS_FIELDS = '#assignment_peer_reviews_fields'
     EXTERNAL_TOOLS_URL = '#assignment_external_tool_tag_attributes_url'
+    EXTERNAL_TOOLS_CONTENT_TYPE = '#assignment_external_tool_tag_attributes_content_type'
+    EXTERNAL_TOOLS_CONTENT_ID = '#assignment_external_tool_tag_attributes_content_id'
     EXTERNAL_TOOLS_NEW_TAB = '#assignment_external_tool_tag_attributes_new_tab'
 
     els: _.extend({}, @::els, do ->
@@ -68,6 +71,8 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
       els["#{PEER_REVIEWS_FIELDS}"] = '$peerReviewsFields'
       els["#{EXTERNAL_TOOLS_URL}"] = '$externalToolsUrl'
       els["#{EXTERNAL_TOOLS_NEW_TAB}"] = '$externalToolsNewTab'
+      els["#{EXTERNAL_TOOLS_CONTENT_TYPE}"] = '$externalToolsContentType'
+      els["#{EXTERNAL_TOOLS_CONTENT_ID}"] = '$externalToolsContentId'
       els
     )
 
@@ -139,6 +144,8 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
         select_button_text: I18n.t('buttons.select_url', 'Select'),
         no_name_input: true,
         submit: (data) =>
+          @$externalToolsContentType.val(data['item[type]'])
+          @$externalToolsContentId.val(data['item[id]'])
           @$externalToolsUrl.val(data['item[url]'])
           @$externalToolsNewTab.prop('checked', data['item[new_tab]'] == '1')
 
@@ -166,6 +173,7 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
     afterRender: =>
       @_attachEditorToDescription()
       $ @_initializeWikiSidebar
+      @addTinyMCEKeyboardShortcuts()
       this
 
     toJSON: =>
@@ -174,8 +182,8 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
         kalturaEnabled: ENV?.KALTURA_ENABLED or false
         postToSISEnabled: ENV?.POST_TO_SIS or false
         isLargeRoster: ENV?.IS_LARGE_ROSTER or false
-        differentiatedAssignmnetsEnabled: ENV?.DIFFERENTIATED_ASSIGNMENTS_ENABLED or false
         submissionTypesFrozen: _.include(data.frozenAttributes, 'submission_types')
+        differentiatedAssignmentsEnabled: @assignment.differentiatedAssignmentsEnabled()
 
     _attachEditorToDescription: =>
       @$description.editorBox()
@@ -191,6 +199,10 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
         wikiSidebar.init()
         $.scrollSidebar()
       wikiSidebar.attachToEditor(@$description).show()
+
+    addTinyMCEKeyboardShortcuts: =>
+      keyboardShortcutsView = new RCEKeyboardShortcuts()
+      keyboardShortcutsView.render().$el.insertBefore($(".rte_switch_views_link:first"))
 
     # -- Data for Submitting --
     getFormData: =>
@@ -224,6 +236,7 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
         missingDateDialog = new MissingDateDialog
           validationFn: -> sections
           labelFn: (section) -> section.get 'name'
+          da_enabled: ENV?.DIFFERENTIATED_ASSIGNMENTS_ENABLED
           success: =>
             ValidatedFormView::submit.call(this)
         missingDateDialog.cancel = (e) ->
@@ -278,7 +291,7 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
       unless ENV?.IS_LARGE_ROSTER
         errors = @groupCategorySelector.validateBeforeSave(data, errors)
       errors = @_validatePointsPossible(data, errors)
-      errors = @_validatePercentagePoints(data, errors)
+      errors = @_validatePointsRequired(data, errors)
       data2 =
         assignment_overrides: @dueDateOverrideView.getAllDates(data)
       errors = @dueDateOverrideView.validateBeforeSave(data2,errors)
@@ -317,10 +330,12 @@ AssignmentGroupSelector, GroupCategorySelector, toggleAccessibly) ->
       errors
 
     # Require points possible > 0
-    # if grading type === percent
-    _validatePercentagePoints: (data, errors) =>
-      if data.grading_type == 'percent' and (data.points_possible == "0" or isNaN(parseFloat(data.points_possible)))
+    # if grading type === percent || letter_grade || gpa_scale
+    _validatePointsRequired: (data, errors) =>
+      return errors unless _.include ['percent','letter_grade','gpa_scale'], data.grading_type
+
+      if data.points_possible == "0" or isNaN(parseFloat(data.points_possible))
         errors["points_possible"] = [
-          message: I18n.t 'percentage_points_possible', 'Points possible must be more than 0 for percentage grading'
+          message: I18n.t('points_possible_not_zero', "Points possible must be more than 0 for selected grading type")
         ]
       errors

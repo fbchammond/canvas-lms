@@ -60,10 +60,16 @@
 #           }
 #         },
 #         "roles": {
-#           "description": "The roles to send the notification to.  If roles is not passed it defaults to all roles",
+#           "description": "(Deprecated) The roles to send the notification to.  If roles is not passed it defaults to all roles",
 #           "example": "[\"StudentEnrollment\"]",
 #           "type": "array",
 #           "items": {"type": "string"}
+#         },
+#         "role_ids": {
+#           "description": "The roles to send the notification to.  If roles is not passed it defaults to all roles",
+#           "example": "[1]",
+#           "type": "array",
+#           "items": {"type": "integer"}
 #         }
 #       }
 #     }
@@ -74,25 +80,25 @@ class AccountNotificationsController < ApplicationController
   # @API Create a global notification
   # Create and return a new global notification for an account.
   #
-  # @argument account_notification[subject] [String]
+  # @argument account_notification[subject] [Required, String]
   #  The subject of the notification.
   #
-  # @argument account_notification[message] [String]
+  # @argument account_notification[message] [Required, String]
   #  The message body of the notification.
   #
-  # @argument account_notification[start_at] [DateTime]
+  # @argument account_notification[start_at] [Required, DateTime]
   #   The start date and time of the notification in ISO8601 format.
   #   e.g. 2014-01-01T01:00Z
   #
-  # @argument account_notification[end_at] [DateTime]
+  # @argument account_notification[end_at] [Required, DateTime]
   #   The end date and time of the notification in ISO8601 format.
   #   e.g. 2014-01-01T01:00Z
   #
-  # @argument account_notification[icon] [Optional, "warning"|"information"|"question"|"error"|"calendar"]
+  # @argument account_notification[icon] ["warning"|"information"|"question"|"error"|"calendar"]
   #   The icon to display with the notification.
   #   Note: Defaults to warning.
   #
-  # @argument account_notification_roles[] [Optional, String]
+  # @argument account_notification_roles[] [String]
   #   The role(s) to send global notification to.  Note:  ommitting this field will send to everyone
   #   Example:
   #     account_notification_roles: ["StudentEnrollment", "TeacherEnrollment"]
@@ -117,10 +123,19 @@ class AccountNotificationsController < ApplicationController
     @notification.account = @account
     @notification.user = @current_user
     unless params[:account_notification_roles].nil?
-      roles = params[:account_notification_roles].select do |r|
-        !r.nil? && ( r.to_s == "NilEnrollment" || RoleOverride.enrollment_types.any?{ |rt| rt[:name] == r.to_s } || @account.available_account_roles.include?(r.to_s))
-      end.map { |r| { :role_type => r.to_s } }
-      @notification.account_notification_roles.build(roles)
+      roles = []
+
+      params[:account_notification_roles].each do |role_param|
+        if (role = @account.get_role_by_id(role_param))
+          roles << role
+        elsif role = @account.get_role_by_name(role_param)
+          roles << role
+        elsif role_param.nil? || role_param.to_s == "NilEnrollment"
+          roles << nil
+        end
+      end
+
+      @notification.account_notification_roles.build(roles.map{|role| {:role => role}})
     end
     respond_to do |format|
       if @notification.save

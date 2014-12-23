@@ -126,7 +126,7 @@ define([
             .find(".progression_complete").showIf(data.progression_complete_count > 0).end()
             .find(".progression_started").showIf(data.progression_started_count > 0);
         });
-        
+
         $(".context_module .progression_complete").showIf($(".context_module .prerequisites_footer:visible,.context_module_item .criterion img.not_blank").length > 0);
         if(show_links) {
           $(".loading_module_progressions_link").remove();
@@ -176,7 +176,7 @@ define([
             var progression = data.context_module_progression;
             if(progression.user_id == current_user_id) {
               var $user_progression = $user_progression_list.find(".progression_" + progression.context_module_id)
-  
+
               if($user_progression.length === 0 && $user_progression_list.length > 0) {
                 $user_progression = $user_progression_list.find(".progression_blank").clone(true);
                 $user_progression.removeClass('progression_blank').addClass('progression_' + progression.context_module_id);
@@ -248,6 +248,124 @@ define([
           $this.attr('title', content_tag.title);
         });
       },
+      showMoveModuleItem: function ($item) {
+        var $currentModule = $item.closest(".context_module");
+        var $form = $('#move_module_item_form');
+        $form.data('current_module', $currentModule);
+        $form.data('current_item', $item);
+
+        // Set the name of the item being moved.
+        $('#move_module_item_name').text($item.children().find('span.title').text());
+
+        // Get all the modules
+        var moduleSelectOptions = [];
+        $("#context_modules .context_module").each(function() {
+          var id = $(this).attr('id').substring('context_module_'.length);
+          var name = $(this).children('.header').children('.collapse_module_link').children('.name').text();
+          moduleSelectOptions.push('<option value="' + id + '">' + name + '</option>');
+        });
+        $('#move_module_item_module_select').empty();
+        $('#move_module_item_module_select').append(moduleSelectOptions.join(''));
+
+        // Trigger the change to make sure the list is initally populated.
+        $('#move_module_item_module_select').trigger('change');
+
+        // Make sure these fields are shown because they may be hidden from a previous use of the modal.
+        $('#move_module_item_form .move-module-before-after-container').show();
+        $('#move_module_item_select').show();
+
+        $form.dialog({
+          autoOpen: false,
+          modal: true,
+          width: 600,
+          height: 300,
+          close: function () {
+            modules.hideMoveModule(true);
+          }
+        }).dialog('open');
+
+
+      },
+      showMoveModule: function ($module) {
+        var $form = $('#move_context_module_form');
+        $form.data('current_module', $module);
+        // Set the module name
+        $('#move_module_name').text($module.children('.header').children('.collapse_module_link').children('.name').text());
+
+        // Get current module ordering
+        var selectOptions = [];
+
+        $("#context_modules .context_module").each(function() {
+          if ($module.attr('id') === $(this).attr('id')) {
+            return;
+          }
+          var id = $(this).attr('id').substring('context_module_'.length);
+          var name = $(this).children('.header').children('.collapse_module_link').children('.name').text();
+          selectOptions.push('<option value="' + id + '">' + name + '</option>');
+        });
+
+        var data = $module.getTemplateData({textValues: ['name', 'unlock_at', 'require_sequential_progress', 'publish_final_grade']});
+        $('#move_context_module_select').empty();
+        $('#move_context_module_select').append(selectOptions.join(''));
+        //$form.fillFormData(data, {object_name: 'context_module'});
+        $form.dialog({
+          autoOpen: false,
+          modal: true,
+          width: 600,
+          height: 300,
+          close: function () {
+            modules.hideMoveModule(true);
+          }
+        }).dialog('open');
+        $module.removeClass('dont_remove');
+        // $form.find('.ui-dialog-titlebar-close').focus();
+
+      },
+      hideMoveModuleItem: function (remove) {
+        $('#move_module_item_form:visible').dialog('close');
+      },
+      hideMoveModule: function (remove) {
+        $('#move_context_module_form:visible').dialog('close');
+      },
+      submitMoveModuleItem: function () {
+        var beforeOrAfterVal = $('[name="item_move_location"]:checked').val();
+        var currentItem = $('#move_module_item_form').data('current_item');
+        var relativeToId = $('#move_module_item_select').val();
+        var selectedModuleId = $('#move_module_item_module_select').val();
+
+
+        if (beforeOrAfterVal === 'before') {
+          $('#context_module_item_' + relativeToId).before(currentItem);
+        }
+        if (beforeOrAfterVal === 'after') {
+          $('#context_module_item_' + relativeToId).after(currentItem);
+        }
+        if ($('#move_module_item_select').children().length === 0) {
+          // In this case, we are moving it into a currently empty module.
+          $('#context_module_content_' + selectedModuleId + ' .context_module_items').append(currentItem);
+        }
+
+        modules.hideMoveModuleItem();
+        modules.updateModuleItemPositions(null, {item: currentItem});
+
+
+      },
+      submitMoveModule: function () {
+        var beforeOrAfterVal = $('[name="move_location"]:checked').val();
+        var currentModule = $('#move_context_module_form').data('current_module');
+        var relativeToId = $('#move_context_module_select').val();
+
+        if (beforeOrAfterVal === 'before') {
+          $('#context_module_' + relativeToId).before(currentModule);
+        }
+        if (beforeOrAfterVal === 'after') {
+          $('#context_module_' + relativeToId).after(currentModule);
+        }
+        modules.hideMoveModule();
+        modules.updateModulePositions();
+
+      },
+
       editModule: function($module) {
         var $form = $("#add_context_module_form");
         $form.data('current_module', $module);
@@ -310,10 +428,12 @@ define([
           width: 600,
           close: function() {
             modules.hideEditModule(true);
+          },
+          open: function(){
+            $(this).find('input[type=text],textarea,select').first().focus();
           }
         }).fixDialogButtons().dialog('option', {title: (isNew ? I18n.t('titles.add', "Add Module") : I18n.t('titles.edit', "Edit Module Settings")), width: (isNew ? 'auto' : 600)}).dialog('open'); //show();
         $module.removeClass('dont_remove');
-        $form.find(":text:visible:first").focus().select();
       },
       hideEditModule: function(remove) {
         var $module = $("#add_context_module_form").data('current_module'); //.parents(".context_module");
@@ -420,7 +540,7 @@ define([
             }
           });
         });
-        
+
         for (var val in result.to_visit) {
           if (result.to_visit.hasOwnProperty(val)) {
             var ids = val.split("_");
@@ -480,10 +600,10 @@ define([
       }
     };
   })();
-  
+
 
   modules.initModuleManagement = function() {
-    // Create the context modules backbone view to manage the publish button. 
+    // Create the context modules backbone view to manage the publish button.
     var context_modules_view = new ContextModulesView({
       el: $("#content"),
       modules: modules
@@ -508,7 +628,7 @@ define([
 
     // -------- BINDING THE UPDATE EVENT -----------------
     $(".context_module").bind('update', function(event, data) {
-      data.context_module.unlock_at = $.datetimeString(data.context_module.unlock_at);
+      data.context_module.displayed_unlock_at = $.datetimeString(data.context_module.unlock_at);
       var $module = $("#context_module_" + data.context_module.id);
       $module.attr('aria-label', data.context_module.name);
       $module.find(".header").fillTemplateData({
@@ -559,6 +679,7 @@ define([
 
     $("#add_context_module_form").formSubmit({
       object_name: 'context_module',
+      required: ['name'],
       processData: function(data) {
         var prereqs = [];
         $(this).find(".prerequisites_list .criteria_list .criterion").each(function() {
@@ -610,8 +731,8 @@ define([
               el = $module.find(locator);
               el.attr(attribute, el.attr(attribute).replace('{{ id }}', data.context_module.id));
           }
-          fixLink('h2.collapse_module_link', 'href');
-          fixLink('h2.expand_module_link', 'href');
+          fixLink('span.collapse_module_link', 'href');
+          fixLink('span.expand_module_link', 'href');
           fixLink('.reorder_items_url', 'href');
           fixLink('.add_module_item_link', 'rel');
           var publishData = {
@@ -731,6 +852,8 @@ define([
         $(this).remove();
       });
     });
+
+
     $(".delete_module_link").live('click', function(event) {
       event.preventDefault();
       $(this).parents(".context_module").confirmDelete({
@@ -776,7 +899,11 @@ define([
       $("#edit_item_form").attr('action', $(this).attr('href'));
       $("#edit_item_form").fillFormData(data, {object_name: 'content_tag'});
       $("#edit_item_form").dialog({
-        title: I18n.t('titles.edit_item', "Edit Item Details")
+        title: I18n.t('titles.edit_item', "Edit Item Details"),
+        open: function(){
+          $(this).find('input[type=text],textarea,select').first().focus();
+        },
+        minWidth: 320
       }).fixDialogButtons();
     });
     $("#edit_item_form .cancel_button").click(function(event) {
@@ -816,6 +943,66 @@ define([
       });
     });
 
+    $('#move_module_item_module_select').on('change', function (event) {
+      // Remove all existing items
+      $('#move_module_item_select').empty();
+      var moduleId = $(event.currentTarget.selectedOptions).val();
+      // Get the current item id, so it can be skipped when adding options.
+      var selectedItemId = $(this).parents('#move_module_item_form').data('current_item').attr('id');
+      // Get all the items for the selected module.
+      var selectItemOptions = [];
+      $('#context_module_' + moduleId).children().find('.context_module_item').each(function (index, item) {
+        if ($(item).attr('id') === selectedItemId) {
+          return;
+        }
+        var id = $(item).attr('id').substring('context_module_item_'.length);
+        var name = $(item).children().find('span.title').text();
+        selectItemOptions.push('<option value="' + id + '">' + name + '</option>');
+      });
+      $('#move_module_item_select').append(selectItemOptions.join(''));
+
+      // The case where the module has no items.
+      if ($('#move_module_item_select').children().length === 0) {
+        $('#move_module_item_form .move-module-before-after-container').hide();
+        $('#move_module_item_select').hide();
+      }
+    });
+
+    $('.move_module_item_link').on('click keyclick', function (event) {
+      event.preventDefault();
+      modules.showMoveModuleItem($(this).parents(".context_module_item"));
+    });
+
+    $('#move_module_item_form').on('submit', function (event) {
+      event.preventDefault();
+      modules.submitMoveModuleItem();
+    })
+
+    $('.move_module_link').on('click keyclick', function (event) {
+      event.preventDefault();
+      modules.showMoveModule($(this).parents('.context_module'));
+    });
+
+    $('#move_context_module_form').on('submit', function (event) {
+      event.preventDefault();
+      modules.submitMoveModule();
+    });
+
+    $('#move_module_cancel_btn').on('click keyclick', function (event) {
+      modules.hideMoveModule();
+    });
+
+    $('#move_module_item_cancel_btn').on('click keyclick', function (event) {
+      modules.hideMoveModuleItem();
+    });
+
+    $('.icon-drag-handle').on('focus', function (event) {
+      $(event.currentTarget).siblings('.drag_and_drop_warning').show();
+    });
+    $('.icon-drag-handle').on('blur', function (event) {
+      $(event.currentTarget).siblings('.drag_and_drop_warning').hide();
+    });
+
     $(".edit_module_link").live('click', function(event) {
       event.preventDefault();
       modules.editModule($(this).parents(".context_module"));
@@ -838,7 +1025,8 @@ define([
 
     $(".add_module_item_link").on('click', function(event) {
       event.preventDefault();
-      $(event.currentTarget).blur();
+      var $trigger = $(event.currentTarget);
+      $trigger.blur();
       var $module = $(this).closest(".context_module");
       if($module.hasClass('collapsed_module')) {
         $module.find(".expand_module_link").triggerHandler('click', function() {
@@ -854,6 +1042,9 @@ define([
         options.height = 550;
         options.width = 770;
         options.dialog_title = I18n.t('titles.add_item', "Add Item to %{module}", {'module': module.name});
+        options.close = function () {
+          $trigger.focus();
+        };
         options.submit = function(item_data) {
           var $module = $("#context_module_" + module.id);
           var $item = modules.addItemToModule($module, item_data);
@@ -1202,12 +1393,12 @@ define([
     if($("#context_modules").hasClass('editable')) {
       setTimeout(modules.initModuleManagement, 1000);
     }
-    
+
     modules.updateProgressions();
     modules.refreshProgressions();
     modules.updateAssignmentData();
-    
-    $(".context_module").find(".expand_module_link,.collapse_module_link").bind('click', function(event, goSlow) {
+
+    $(".context_module").find(".expand_module_link,.collapse_module_link").bind('click keyclick', function(event, goSlow) {
       event.preventDefault();
       var expandCallback = null;
       if(goSlow && $.isFunction(goSlow)) {
@@ -1224,9 +1415,14 @@ define([
           if($module.find(".content:visible").length > 0) {
             $module.find(".footer .manage_module").css('display', '');
             $module.toggleClass('collapsed_module', false);
+            // Makes sure the resulting item has focus.
+            $module.find(".collapse_module_link").focus();
+
           } else {
             $module.find(".footer .manage_module").css('display', ''); //'none');
             $module.toggleClass('collapsed_module', true);
+            // Makes sure the resulting item has focus.
+            $module.find(".expand_module_link").focus();
           }
           if(expandCallback && $.isFunction(expandCallback)) {
             expandCallback();
@@ -1238,6 +1434,7 @@ define([
         } else {
           $module.find(".content").slideToggle(callback);
         }
+
       }
       if(reload_entries || goSlow) {
         $module.loadingImage();
@@ -1280,6 +1477,7 @@ define([
       if(collapse == '1' || !reload_entries) {
         toggle();
       }
+
     });
     $(".refresh_progressions_link").click(function(event) {
       event.preventDefault();
@@ -1304,7 +1502,7 @@ define([
         var $module = $(this);
         var moduleData = $module.find(".header").getTemplateData({textValues: ['id', 'name']});
         var $row = $("#student_progression_dialog .module_" + moduleData.id);
-        
+
         moduleData.progress = $studentWithProgressions.find(".progression_" + moduleData.id + ":first").getTemplateData({textValues: ['workflow_state']}).workflow_state;
         moduleData.progress = moduleData.progress || "no information";
         var type = "nothing";
@@ -1387,12 +1585,12 @@ define([
         var $module = $(this);
         var moduleData = $module.find(".header").getTemplateData({textValues: ['id', 'name']});
         var $template = $dialog.find(".module.blank:first").clone(true).removeClass('blank');
-        
+
         $template.addClass('module_' + moduleData.id);
         $template.fillTemplateData({data: moduleData});
         $dialog.find(".side_tabs_content tbody").append($template.show());
       });
-  
+
       $("#student_progression_dialog").dialog({
         width: 800,
         open: function() {

@@ -19,6 +19,10 @@
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
 describe AnnouncementsController do
+  before :once do
+    course_with_student(:active_all => true)
+  end
+
   def course_announcement
     @announcement = @course.announcements.create!(
       :title => "some announcement", 
@@ -28,46 +32,44 @@ describe AnnouncementsController do
 
   describe "GET 'index'" do
     it "should return unauthorized without a valid session" do
-      course_with_student(:active_all => true)
       get 'index', :course_id => @course.id
       assert_unauthorized
     end
     
     it "should redirect 'disabled', if disabled by the teacher" do
-      course_with_student_logged_in(:active_all => true)
+      user_session(@user)
       @course.update_attribute(:tab_configuration, [{'id'=>14,'hidden'=>true}])
       get 'index', :course_id => @course.id
-      response.should be_redirect
-      flash[:notice].should match(/That page has been disabled/)
+      expect(response).to be_redirect
+      expect(flash[:notice]).to match(/That page has been disabled/)
     end
   end
 
   describe "GET 'public_feed.atom'" do
-    before(:each) do
-      course_with_student(:active_all => true)
+    before :once do
       @context = @course
       announcement_model
     end
 
     it "should require authorization" do
       get 'public_feed', :format => 'atom', :feed_code => @enrollment.feed_code + 'x'
-      assigns[:problem].should match /The verification code does not match/
+      expect(assigns[:problem]).to match /The verification code does not match/
     end
 
     it "should include absolute path for rel='self' link" do
       get 'public_feed', :format => 'atom', :feed_code => @enrollment.feed_code
       feed = Atom::Feed.load_feed(response.body) rescue nil
-      feed.should_not be_nil
-      feed.links.first.rel.should match(/self/)
-      feed.links.first.href.should match(/http:\/\//)
+      expect(feed).not_to be_nil
+      expect(feed.links.first.rel).to match(/self/)
+      expect(feed.links.first.href).to match(/http:\/\//)
     end
 
     it "should include an author for each entry" do
       get 'public_feed', :format => 'atom', :feed_code => @enrollment.feed_code
       feed = Atom::Feed.load_feed(response.body) rescue nil
-      feed.should_not be_nil
-      feed.entries.should_not be_empty
-      feed.entries.all?{|e| e.authors.present?}.should be_true
+      expect(feed).not_to be_nil
+      expect(feed.entries).not_to be_empty
+      expect(feed.entries.all?{|e| e.authors.present?}).to be_truthy
     end
   end
 end

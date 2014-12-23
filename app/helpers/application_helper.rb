@@ -114,7 +114,7 @@ module ApplicationHelper
   end
 
   def url_helper_context_from_object(context)
-    (context ? context.class.base_ar_class : context.class).name.underscore
+    (context ? context.class.base_class : context.class).name.underscore
   end
 
   def message_user_path(user, context = nil)
@@ -138,27 +138,10 @@ module ApplicationHelper
   end
 
   # Helper for easily checking vender/plugins/adheres_to_policy.rb
-  # policies from within a view.  Caches the response, but basically
-  # user calls object.grants_right?(user, action)
+  # policies from within a view.
   def can_do(object, user, *actions)
     return false unless object
-    if object.is_a?(OpenObject) && object.type
-      obj = object.temporary_instance
-      if !obj
-        obj = object.type.classify.constantize.new
-        obj.instance_variable_set("@attributes", object.instance_variable_get("@table").with_indifferent_access)
-        obj.instance_variable_set("@new_record", false)
-        object.temporary_instance = obj
-      end
-      return can_do(obj, user, actions)
-    end
-    actions = Array(actions).flatten
-    begin
-      return object.grants_any_right?(user, session, *actions)
-    rescue => e
-      logger.warn "#{object.inspect} raised an error while granting rights.  #{e.inspect}" if logger
-    end
-    false
+    object.grants_any_right?(user, session, *actions)
   end
 
   # Loads up the lists of files needed for the wiki_sidebar.  Called from
@@ -277,9 +260,15 @@ module ApplicationHelper
   end
 
   def variant_name_for(bundle_name)
-    use_new_styles = @domain_root_account.feature_enabled?(:new_styles)
+    if k12?
+      variant = '_k12'
+    elsif use_new_styles?
+      variant = '_new_styles'
+    else
+      variant = '_legacy'
+    end
+
     use_high_contrast = @current_user && @current_user.prefers_high_contrast?
-    variant = use_new_styles ? '_new_styles' : '_legacy'
     variant += use_high_contrast ? '_high_contrast' : '_normal_contrast'
     "#{bundle_name}#{variant}"
   end
@@ -292,7 +281,7 @@ module ApplicationHelper
     @section_tabs ||= begin
       if @context
         html = []
-        tabs = Rails.cache.fetch([@context, @current_user, @domain_root_account, Lti::NavigationCache.new(@domain_root_account),  "section_tabs_hash", I18n.locale].cache_key) do
+        tabs = Rails.cache.fetch([@context, @current_user, @domain_root_account, Lti::NavigationCache.new(@domain_root_account),  "section_tabs_hash", I18n.locale].cache_key, expires_in: 1.hour) do
           if @context.respond_to?(:tabs_available) && !(tabs = @context.tabs_available(@current_user, :session => session, :root_account => @domain_root_account)).empty?
             tabs.select do |tab|
               if (tab[:id] == @context.class::TAB_COLLABORATIONS rescue false)
@@ -312,7 +301,7 @@ module ApplicationHelper
         tabs.each do |tab|
           path = nil
           if tab[:args]
-            path = send(tab[:href], *tab[:args])
+            path = tab[:args].instance_of?(Array) ? send(tab[:href], *tab[:args]) : send(tab[:href], tab[:args])
           elsif tab[:no_args]
             path = send(tab[:href])
           else
@@ -384,15 +373,15 @@ module ApplicationHelper
 
   def active_external_tool_by_id(tool_id)
     # don't use for groups. they don't have account_chain_ids
-    tool = @context.context_external_tools.active.find_by_tool_id(tool_id)
+    tool = @context.context_external_tools.active.where(tool_id: tool_id).first
     return tool if tool
 
     # account_chain_ids is in the order we need to search for tools
     # unfortunately, the db will return an arbitrary one first.
     # so, we pull all the tools (probably will only have one anyway) and look through them here
-    tools = ContextExternalTool.active.where(:context_type => 'Account', :context_id => @context.account_chain_ids, :tool_id => tool_id).all
-    @context.account_chain_ids.each do |account_id|
-      tool = tools.find {|t| t.context_id == account_id}
+    tools = ContextExternalTool.active.where(:context_type => 'Account', :context_id => @context.account_chain, :tool_id => tool_id).all
+    @context.account_chain.each do |account|
+      tool = tools.find {|t| t.context_id == account.id}
       return tool if tool
     end
     nil
@@ -471,6 +460,7 @@ module ApplicationHelper
       :logPageViews             => !@body_class_no_headers,
       :maxVisibleEditorButtons  => 3,
       :editorButtons            => editor_buttons,
+      :pandaPubSettings        => CanvasPandaPub::Client.config.try(:slice, 'push_url', 'application_id'),
     }.each do |key,value|
       # dont worry about keys that are nil or false because in javascript: if (INST.featureThatIsUndefined ) { //won't happen }
       global_inst_object[key] = value if value
@@ -578,12 +568,6 @@ module ApplicationHelper
     concat(t(*args))
   end
 
-  def jt(key, default, js_options='{}')
-    full_key = key =~ /\A#/ ? key.sub(/\A#/, '') : i18n_scope + '.' + key
-    translated_default = I18n.backend.send(:lookup, I18n.locale, full_key) || default # string or hash
-    raw "I18n.scoped(#{i18n_scope.to_json}).t(#{key.to_json}, #{translated_default.to_json}, #{js_options})"
-  end
-
   def join_title(*parts)
     parts.join(t('#title_separator', ': '))
   end
@@ -599,10 +583,11 @@ module ApplicationHelper
   def map_courses_for_menu(courses)
     mapped = courses.map do |course|
       term = course.enrollment_term.name if !course.enrollment_term.default_term?
+      role = Role.get_role_by_id(course.primary_enrollment_role_id) || Enrollment.get_built_in_role_for_type(course.primary_enrollment_type)
       subtitle = (course.primary_enrollment_state == 'invited' ?
                   before_label('#shared.menu_enrollment.labels.invited_as', 'Invited as') :
                   before_label('#shared.menu_enrollment.labels.enrolled_as', "Enrolled as")
-                 ) + " " + Enrollment.readable_type(course.primary_enrollment)
+                 ) + " " + role.label
       {
         :longName => "#{course.name} - #{course.short_name}",
         :shortName => course.name,
@@ -625,7 +610,7 @@ module ApplicationHelper
       :collection_size        => all_courses_count,
       :more_link_for_over_max => courses_path,
       :title                  => t('#menu.my_courses', "My Courses"),
-      :link_text              => t('#layouts.menu.view_all_enrollments', 'View all courses'),
+      :link_text              => t('#layouts.menu.view_all_or_customize', 'View All or Customize'),
       :edit                   => t("#menu.customize", "Customize")
     }
   end
@@ -744,7 +729,7 @@ module ApplicationHelper
   end
 
   def include_account_css
-    return if params[:global_includes] == '0'
+    return if params[:global_includes] == '0' || @domain_root_account.try(:feature_enabled?, :k12) || @domain_root_account.try(:feature_enabled?, :use_new_styles)
     includes = get_global_includes.inject([]) do |css_includes, global_include|
       css_includes << global_include[:css] if global_include[:css].present?
       css_includes
@@ -765,20 +750,15 @@ module ApplicationHelper
       attributes['data-tooltip'] ||= 'top'
     end
 
-    if CANVAS_RAILS2 # see config/initializers/rails2.rb
-      content_tag_without_nil_return(tag_type, attributes) do
-        datetime_string(datetime)
-      end
-    else
-      content_tag(tag_type, attributes) do
-        datetime_string(datetime)
-      end
+    content_tag(tag_type, attributes) do
+      datetime_string(datetime)
     end
   end
 
   def context_sensitive_datetime_title(datetime, context, options={})
     just_text = options.fetch(:just_text, false)
-    return "" unless datetime.present?
+    default_text = options.fetch(:default_text, "")
+    return default_text unless datetime.present?
     local_time = datetime_string(datetime)
     text = local_time
     if context.present?
@@ -845,12 +825,12 @@ module ApplicationHelper
   end
 
   def dashboard_url(opts={})
-    return super(opts) if opts[:login_success]
+    return super(opts) if opts[:login_success] || opts[:become_user_id]
     custom_dashboard_url || super(opts)
   end
 
   def dashboard_path(opts={})
-    return super(opts) if opts[:login_success]
+    return super(opts) if opts[:login_success] || opts[:become_user_id]
     custom_dashboard_url || super(opts)
   end
 

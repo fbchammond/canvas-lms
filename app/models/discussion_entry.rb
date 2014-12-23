@@ -86,6 +86,12 @@ class DiscussionEntry < ActiveRecord::Base
     p.whenever { |record|
       record.just_created && record.active?
     }
+
+    p.dispatch :announcement_reply
+    p.to { discussion_topic.user }
+    p.whenever { |record|
+      record.discussion_topic.is_announcement && record.just_created && record.active?
+    }
   end
 
   on_create_send_to_streams do
@@ -95,7 +101,7 @@ class DiscussionEntry < ActiveRecord::Base
       if self.created_at > self.discussion_topic.created_at + 2.weeks
         DiscussionEntry.active.
             where('discussion_topic_id=? AND created_at > ?', self.discussion_topic_id, 2.weeks.ago).
-            select(:user_id).uniq.map(&:user_id)
+            uniq.pluck(:user_id)
       else
         self.discussion_topic.active_participants
       end
@@ -269,25 +275,25 @@ class DiscussionEntry < ActiveRecord::Base
     given { |user| self.user && self.user == user && self.discussion_topic.available_for?(user) && context.user_can_manage_own_discussion_posts?(user) }
     can :update and can :delete
 
-    given { |user, session| self.context.grants_right?(user, session, :read_forum) }
+    given { |user, session| self.context.grants_right?(user, session, :read_forum) && self.discussion_topic.visible_for?(user) }
     can :read
 
-    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) && self.discussion_topic.available_for?(user) }
+    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) && !self.discussion_topic.closed_for_comment_for?(user) && self.discussion_topic.visible_for?(user) }
     can :reply and can :create and can :read
 
-    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) }
+    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) && self.discussion_topic.visible_for?(user)}
     can :read
 
     given { |user, session| context.respond_to?(:allow_student_forum_attachments) && context.allow_student_forum_attachments && context.grants_right?(user, session, :post_to_forum) && discussion_topic.available_for?(user) }
     can :attach
 
-    given { |user, session| !self.discussion_topic.root_topic_id && self.context.grants_right?(user, session, :moderate_forum) && self.discussion_topic.available_for?(user) }
+    given { |user, session| !self.discussion_topic.root_topic_id && self.context.grants_right?(user, session, :moderate_forum) && !self.discussion_topic.closed_for_comment_for?(user, :check_policies => true) }
     can :update and can :delete and can :reply and can :create and can :read and can :attach
 
     given { |user, session| !self.discussion_topic.root_topic_id && self.context.grants_right?(user, session, :moderate_forum) }
     can :update and can :delete and can :read
 
-    given { |user, session| self.discussion_topic.root_topic && self.discussion_topic.root_topic.context.grants_right?(user, session, :moderate_forum) && self.discussion_topic.available_for?(user) }
+    given { |user, session| self.discussion_topic.root_topic && self.discussion_topic.root_topic.context.grants_right?(user, session, :moderate_forum) && !self.discussion_topic.closed_for_comment_for?(user, :check_policies => true) }
     can :update and can :delete and can :reply and can :create and can :read and can :attach
 
     given { |user, session| self.discussion_topic.root_topic && self.discussion_topic.root_topic.context.grants_right?(user, session, :moderate_forum) }
@@ -355,6 +361,7 @@ class DiscussionEntry < ActiveRecord::Base
   end
 
   def create_participants
+    subscription_hold = self.discussion_topic.subscription_hold(self.user, nil, nil)
     transaction do
       scope = DiscussionTopicParticipant.where(:discussion_topic_id => self.discussion_topic_id)
       scope = scope.where("user_id<>?", self.user) if self.user
@@ -363,15 +370,15 @@ class DiscussionEntry < ActiveRecord::Base
       if self.user
         my_entry_participant = self.discussion_entry_participants.create(:user => self.user, :workflow_state => "read")
 
-        topic_participant = self.discussion_topic.discussion_topic_participants.find_by_user_id(self.user.id)
+        topic_participant = self.discussion_topic.discussion_topic_participants.where(user_id: self.user).first
         if topic_participant.blank?
-          new_count = self.discussion_topic.unread_count(self.user) - 1
+          new_count = self.discussion_topic.default_unread_count - 1
           topic_participant = self.discussion_topic.discussion_topic_participants.create(:user => self.user,
                                                                                          :unread_entry_count => new_count,
                                                                                          :workflow_state => "unread",
                                                                                          :subscribed => self.discussion_topic.subscribed?(self.user))
         end
-        self.discussion_topic.subscribe(self.user) unless self.discussion_topic.subscription_hold(self.user, nil, nil)
+        self.discussion_topic.subscribe(self.user) unless subscription_hold
       end
     end
   end

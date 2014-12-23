@@ -54,11 +54,18 @@ define([
     for(var idx in params) {
       txt = txt + 'error[' + idx + "]=" + encodeURIComponent(params[idx]) + "&";
     }
+    txt = txt.substring(0, 2000);
+    // make sure we don't leave hanging broken %-encodings on the end
+    if (txt.length >= 1 && txt[txt.length - 1] === '%') {
+      txt = txt.substring(0, txt.length - 1);
+    } else if (txt.length >= 2 && txt[txt.length - 2] === '%') {
+      txt = txt.substring(0, txt.length - 2);
+    }
     INST.errorCount += 1;
-    
+
     // doing this old-school in case something happend where jquery is not loaded.
     var img = document.createElement('img');
-    img.src = INST.errorURL + txt.substring(0, 2000);
+    img.src = INST.errorURL + txt;
     img.style.position = 'absolute';
     img.style.left = '-10000px';
     img.style.top= 0;
@@ -95,15 +102,15 @@ define([
       if (error === 'abort') return;
       var status = "0";
       var text = I18n.t('no_text', "No text");
-      var json_data = {};
       try {
         status = request.status;
         text = request.responseText;
-        json_data = $.parseJSON(text);
       } catch(e) {}
       $.ajaxJSON(location.protocol + '//' + location.host + "/simple_response.json?rnd=" + Math.round(Math.random() * 9999999), 'GET', {}, function() {
-        if(json_data && json_data.status == 'AUT') {
-          ajaxErrorFlash(I18n.t('errors.timeout', "There was a problem with your request, possibly due to a long period of inactivity.  Please reload the page and try again."), request);
+        if ($.ajaxJSON.isUnauthenticated(request)) {
+          var message = I18n.t('errors.logged_out', "You are not currently logged in, possibly due to a long period of inactivity.")
+          message += "<br\/><a href='/login' target='_new'>" + I18n.t('links.login', 'Login') + "<\/a>";
+          $.flashError({ html: message }, 30000);
         } else {
           ajaxErrorFlash(I18n.t('errors.unhandled', "Oops! The last request didn't work out."), request);
         }
@@ -115,20 +122,21 @@ define([
         var i = $obj[0];
         if(!i) { return; }
         var d = i.contentDocument || 
-                (i.contentWindow && i.contentWindow.document) || 
+                (i.contentWindow && i.contentWindow.document) ||
                 window.frames[$obj.attr('id')].document;
         var $body = $(d).find("body");
         $body.html($("<h1 />").text(I18n.t('error_heading', 'Ajax Error: %{status_code}', {status_code: status})));
         $body.append(text);
         $("#instructure_ajax_error_box").hide();
         var pre = "";
+        message = htmlEscape(message);
         if(debugOnly) {
           message = message + "<br\/><span style='font-size: 0.7em;'>(Development Only)<\/span>";
         }
         if(debugOnly || INST.environment != "production") {
           message += "<br\/><a href='#' class='last_error_details_link'>" + htmlEscape(I18n.t('links.details', 'details...')) + "<\/a>";
         }
-        $.flashError(message);
+        $.flashError({ html: message });
       };
       window.ajaxErrorFlash = ajaxErrorFlash;
       var data = $.ajaxJSON.findRequest(request);
@@ -149,8 +157,8 @@ define([
                   "&URL="        + escape(data.url || "unknown") +
                   "&Page="       + escape(location.href) +
                   "&Method="     + escape(data.submit_type || "unknown") +
-                  "&UserName="   + escape(username) + 
-                  "&Platform="   + escape(navigator.platform) + 
+                  "&UserName="   + escape(username) +
+                  "&Platform="   + escape(navigator.platform) +
                   "&UserAgent="  + escape(navigator.userAgent) +
                   "&Params="     + escape(data.params || "unknown");
         $("body").append("<img style='position: absolute; left: -1000px; top: 0;' src='" + INST.ajaxErrorURL + txt.substring(0, 2000) + "' />");

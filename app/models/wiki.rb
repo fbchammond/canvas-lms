@@ -86,7 +86,7 @@ class Wiki < ActiveRecord::Base
     # TODO i18n
     t :front_page_name, "Front Page"
     # attempt to find the page and store it's url (if it is found)
-    page = self.wiki_pages.not_deleted.find_by_url(url)
+    page = self.wiki_pages.not_deleted.where(url: url).first
     self.set_front_page_url!(url) if self.has_no_front_page && page
 
     # return an implicitly created page if a page could not be found
@@ -128,7 +128,7 @@ class Wiki < ActiveRecord::Base
 
   def context
     shard.activate do
-      @context ||= Course.find_by_wiki_id(self.id) || Group.find_by_wiki_id(self.id)
+      @context ||= Course.where(wiki_id: self).first || Group.where(wiki_id: self).first
     end
   end
 
@@ -187,5 +187,17 @@ class Wiki < ActiveRecord::Base
     page.wiki = self
     page.initialize_wiki_page(user)
     page
+  end
+
+  def find_page(param)
+    self.wiki_pages.not_deleted.where(url: param.to_s).first ||
+      self.wiki_pages.not_deleted.where(url: param.to_url).first ||
+      self.wiki_pages.not_deleted.where(id: param.to_i).first
+  end
+
+  def path
+    if self.context.respond_to?(:feature_enabled?)
+      self.context.feature_enabled?(:draft_state) ? 'pages' : 'wiki'
+    end
   end
 end

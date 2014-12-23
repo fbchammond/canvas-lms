@@ -58,7 +58,21 @@ class Folder < ActiveRecord::Base
   before_save :infer_hidden_state
   validates_presence_of :context_id, :context_type
   validates_length_of :name, :maximum => maximum_string_length
+  validate :protect_root_folder_name, :if => :name_changed?
   validate :reject_recursive_folder_structures, on: :update
+
+  def protect_root_folder_name
+    if self.parent_folder_id.blank? && self.name != Folder.root_folder_name_for_context(context)
+      if self.new_record?
+        root_folder = Folder.root_folders(context).first
+        self.parent_folder_id = root_folder.id
+        return true
+      else
+        errors.add(:name, t("errors.invalid_root_folder_name", "Root folder name cannot be changed"))
+        return false
+      end
+    end
+  end
 
   def reject_recursive_folder_structures
     return true if !self.parent_folder_id_changed?
@@ -121,11 +135,6 @@ class Folder < ActiveRecord::Base
   def default_values
     self.last_unlock_at = self.unlock_at if self.unlock_at
     self.last_lock_at = self.lock_at if self.lock_at
-
-    if self.parent_folder_id.blank? && ![ROOT_FOLDER_NAME, MY_FILES_FOLDER_NAME, 'files'].include?(self.name)
-      root_folder = Folder.root_folders(context).first
-      self.parent_folder_id = root_folder.id
-    end
   end
 
   def infer_hidden_state
@@ -135,13 +144,14 @@ class Folder < ActiveRecord::Base
 
   def infer_full_name
     # TODO i18n
-    t :default_folder_name, 'folder'
-    self.name ||= "folder"
+    t :default_folder_name, 'New Folder'
+    self.name = 'New Folder' if self.name.blank?
     self.name = self.name.gsub(/\//, "_")
     folder = self
     @update_sub_folders = false
     self.parent_folder_id = nil if !self.parent_folder || self.parent_folder.context != self.context || self.parent_folder_id == self.id
     self.context = self.parent_folder.context if self.parent_folder
+    self.prevent_duplicate_name
     self.full_name = self.full_name(true)
     if self.parent_folder_id_changed? || !self.parent_folder_id || self.full_name_changed? || self.name_changed?
       @update_sub_folders = true
@@ -149,6 +159,34 @@ class Folder < ActiveRecord::Base
     @folder_id = self.id
   end
   protected :infer_full_name
+
+  def prevent_duplicate_name
+    return unless self.parent_folder
+
+    existing_folders = self.parent_folder.active_sub_folders.where('name ~* ? AND id <> ?', "^#{Regexp.quote(self.name)}(\\s\\d)?$", self.id.to_i).pluck(:name)
+
+    return unless existing_folders.include?(self.name)
+
+    iterations, usable_iterator, candidate = [], nil, 2
+
+    existing_folders.each do |folder_name|
+      iterator = folder_name.split.last.to_i
+      iterations.push(iterator) if iterator > 1
+    end
+
+    iterations.sort.each do |i|
+      if candidate < i
+        usable_iterator = candidate
+        break
+      else
+        candidate = i + 1
+      end
+    end
+
+    usable_iterator ||= existing_folders.size + 1
+    self.name = "#{self.name} #{usable_iterator}"
+  end
+  protected :prevent_duplicate_name
 
   def update_sub_folders
     return unless @update_sub_folders
@@ -160,7 +198,7 @@ class Folder < ActiveRecord::Base
   end
 
   def clean_up_children
-    Attachment.find_all_by_folder_id(@folder_id).each do |a|
+    Attachment.where(folder_id: @folder_id).each do |a|
       a.destroy
     end
   end
@@ -220,8 +258,8 @@ class Folder < ActiveRecord::Base
       self.cloned_item ||= ClonedItem.create(:original_item => self)
       self.save!
     end
-    existing = context.folders.active.find_by_id(self.id)
-    existing ||= context.folders.active.find_by_cloned_item_id(self.cloned_item_id || 0)
+    existing = context.folders.active.where(id: self).first
+    existing ||= context.folders.active.where(cloned_item_id: self.cloned_item_id || 0).first
     return existing if existing && !options[:overwrite] && !options[:force_copy]
     dup ||= Folder.new
     dup = existing if existing && options[:overwrite]
@@ -255,22 +293,25 @@ class Folder < ActiveRecord::Base
     !self.parent_folder_id
   end
 
-  def self.root_folders(context)
+  def self.root_folder_name_for_context(context)
     if context.is_a? Course
-      name = ROOT_FOLDER_NAME
+      ROOT_FOLDER_NAME
     elsif context.is_a? User
-      name = MY_FILES_FOLDER_NAME
+      MY_FILES_FOLDER_NAME
     else
-      name = "files"
+      "files"
     end
+  end
 
+  def self.root_folders(context)
+    name = root_folder_name_for_context(context)
     root_folders = []
     # something that doesn't have folders?!
     return root_folders unless context.respond_to?(:folders)
 
     context.shard.activate do
       Folder.unique_constraint_retry do
-        root_folder = context.folders.active.find_by_parent_folder_id_and_name(nil, name)
+        root_folder = context.folders.active.where(parent_folder_id: nil, name: name).first
         root_folder ||= context.folders.create!(:name => name, :full_name => name, :workflow_state => "visible")
         root_folders = [root_folder]
       end
@@ -297,7 +338,7 @@ class Folder < ActiveRecord::Base
     end
     folders.each do |name|
       sub_folder = @@path_lookups[[context.global_asset_string, current_folder.full_name + '/' + name].join('//')]
-      sub_folder ||= current_folder.sub_folders.active.find_or_initialize_by_name(name)
+      sub_folder ||= current_folder.sub_folders.active.where(name: name).first_or_initialize
       current_folder = sub_folder
       if current_folder.new_record?
         current_folder.context = context
@@ -309,8 +350,13 @@ class Folder < ActiveRecord::Base
     @@path_lookups[key] = current_folder
   end
 
+  def self.reset_path_lookups!
+    @@root_folders = {}
+    @@path_lookups = {}
+  end
+
   def self.unfiled_folder(context)
-    folder = context.folders.find_by_parent_folder_id_and_workflow_state_and_name(Folder.root_folders(context).first.id, 'visible', 'unfiled')
+    folder = context.folders.where(parent_folder_id: Folder.root_folders(context).first, workflow_state: 'visible', name: 'unfiled').first
     unless folder
       folder = context.folders.build(:parent_folder => Folder.root_folders(context).first, :name => 'unfiled')
       folder.workflow_state = 'visible'
@@ -326,9 +372,9 @@ class Folder < ActiveRecord::Base
       # TODO i18n
       if context.is_a? Course
         t :course_content_folder_name, 'course content'
-        current_folder = context.folders.active.find_by_full_name("course content")
+        current_folder = context.folders.active.where(full_name: "course content").first
       elsif @context.is_a? User
-        current_folder = context.folders.active.find_by_full_name(MY_FILES_FOLDER_NAME)
+        current_folder = context.folders.active.where(full_name: MY_FILES_FOLDER_NAME).first
       end
     end
   end
@@ -336,7 +382,7 @@ class Folder < ActiveRecord::Base
   def self.find_attachment_in_context_with_path(context, path)
     components = path.split('/')
     component = components.shift
-    context.folders.active.find_all_by_parent_folder_id(nil).each do |folder|
+    context.folders.active.where(parent_folder_id: nil).each do |folder|
       if folder.name == component
         attachment = folder.find_attachment_with_components(components.dup)
         return attachment if attachment
@@ -352,7 +398,7 @@ class Folder < ActiveRecord::Base
       return visible_file_attachments.to_a.find {|a| a.matches_filename?(component) }
     else
       # find a subfolder and recurse (yes, we can have multiple sub-folders w/ the same name)
-      active_sub_folders.find_all_by_name(component).each do |folder|
+      active_sub_folders.where(name: component).each do |folder|
         a = folder.find_attachment_with_components(components.dup)
         return a if a
       end

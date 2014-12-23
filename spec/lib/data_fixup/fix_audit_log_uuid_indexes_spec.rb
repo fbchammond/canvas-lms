@@ -16,10 +16,12 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require 'spec_helper'
+require 'cassandra_spec_helper'
 require File.expand_path(File.dirname(__FILE__) + '/../../../lib/data_fixup/fix_audit_log_uuid_indexes')
 
 describe DataFixup::FixAuditLogUuidIndexes do
+
+  include_examples "cassandra audit logs"
 
   subject do
     DataFixup::FixAuditLogUuidIndexes
@@ -49,6 +51,8 @@ describe DataFixup::FixAuditLogUuidIndexes do
     # Truncate the mapping and last batch tables.
     @database.execute("TRUNCATE #{DataFixup::FixAuditLogUuidIndexes::MAPPING_TABLE}")
     @database.execute("TRUNCATE #{DataFixup::FixAuditLogUuidIndexes::LAST_BATCH_TABLE}")
+
+    DataFixup::FixAuditLogUuidIndexes::IndexCleaner.any_instance.stubs(:end_time).returns(Time.now + 1.month)
   end
 
   def check_event_stream(event_id, stream_table, expected_total)
@@ -56,12 +60,12 @@ describe DataFixup::FixAuditLogUuidIndexes do
     # Along with the right count of corrupted events.
     corrupted_total = 0
     rows = @database.execute("SELECT id, event_type FROM #{stream_table}")
-    rows.count.should == expected_total
+    expect(rows.count).to eq expected_total
     rows.fetch do |row|
       row = row.to_hash
       corrupted_total += 1 if row['event_type'] == 'corrupted'
     end
-    corrupted_total.should == expected_total - 1
+    expect(corrupted_total).to eq expected_total - 1
 
     # Check each Index table and make sure there is only one
     # with the specified event_id remaining.  Others should
@@ -70,12 +74,12 @@ describe DataFixup::FixAuditLogUuidIndexes do
     @stream_tables[stream_table].each do |index_table|
       count = 0
       rows = @database.execute("SELECT id FROM #{index_table}")
-      rows.count.should == expected_total
+      expect(rows.count).to eq expected_total
       rows.fetch do |row|
         row = row.to_hash
         count += 1 if row['id'] == event_id
       end
-      count.should == 1
+      expect(count).to eq 1
     end
   end
 
@@ -107,6 +111,7 @@ describe DataFixup::FixAuditLogUuidIndexes do
 
   def corrupt_course_changes
     event_id = CanvasSlug.generate
+    courses = []
     CanvasUUID.stubs(:generate).returns(event_id)
 
     (1..3).each do |i|
@@ -114,13 +119,14 @@ describe DataFixup::FixAuditLogUuidIndexes do
 
       Timecop.freeze(time) do
         course_with_teacher
-        Auditors::Course.record_created(@course, @teacher, source: :manual)
+        Auditors::Course.record_created(@course, @teacher, { name: @course.name }, source: :manual)
+        courses << @course
       end
     end
 
     CanvasUUID.unstub(:generate)
 
-    { event_id: event_id, count: 3 }
+    { event_id: event_id, count: 3, courses: courses }
   end
 
   def corrupt_authentications
@@ -166,10 +172,96 @@ describe DataFixup::FixAuditLogUuidIndexes do
     migration.fix_index(index)
 
     last_batch = migration.get_last_batch(index)
-    last_batch.size.should == 3
-    last_batch.should_not == ['', '', 0]
+    expect(last_batch.size).to eq 3
+    expect(last_batch).not_to eq ['', '', 0]
 
     migration.expects(:update_index_batch).never
     migration.fix_index(index)
+  end
+
+  it "fixes index rows as they are queried for different keys" do
+    check = corrupt_course_changes
+
+    check[:courses].each do |course|
+      expect(Auditors::Course.for_course(course).paginate(per_page: 5).size).to eq 1
+    end
+
+    check_event_stream(check[:event_id], 'courses', check[:count])
+  end
+
+  it "fixes index rows as they are queried for the same key" do
+    event_id = CanvasSlug.generate
+    course_with_teacher
+    CanvasUUID.stubs(:generate).returns(event_id)
+    Auditors::Course.record_created(@course, @teacher, { name: @course.name }, source: :manual)
+    Timecop.freeze(Time.now + 1.hour) do
+      Auditors::Course.record_updated(@course, @teacher, { name: @course.name }, source: :manual)
+    end
+    CanvasUUID.unstub(:generate)
+
+    expect(Auditors::Course.for_course(@course).paginate(per_page: 5).size).to eq 2
+  end
+
+  it "fixes index rows as they are queried for events that have multiple indexes" do
+    users = []
+    pseudonyms = []
+    event_id = CanvasSlug.generate
+    CanvasUUID.stubs(:generate).returns(event_id)
+    (1..3).each do |i|
+      time = Time.now - i.days
+
+      Timecop.freeze(time) do
+        user_with_pseudonym(account: Account.site_admin)
+        site_admin_user(user: @user)
+        users << @user
+        pseudonyms << @pseudonym
+        Auditors::Authentication.record(@pseudonym, 'login')
+        Timecop.freeze(time + 10.minutes) do
+          Auditors::Authentication.record(@pseudonym, 'logout')
+        end
+      end
+    end
+    CanvasUUID.unstub(:generate)
+
+    users.each do |user|
+      expect(Auditors::Authentication.for_user(user).paginate(per_page: 5).size).to eq 2
+    end
+
+    pseudonyms.each do |pseudonym|
+      expect(Auditors::Authentication.for_pseudonym(pseudonym).paginate(per_page: 5).size).to eq 2
+    end
+  end
+
+  it "should return records within the default bucket range" do
+    user_with_pseudonym(account: Account.site_admin)
+
+    event = Auditors::Authentication.record(@pseudonym, 'login')
+    first_event_at = event.created_at.to_i
+    record = Auditors::Authentication::Record.generate(@pseudonym, event.event_type)
+    record.attributes['id'] = event.id
+    record.attributes['created_at'] = Time.now + 100.days
+    Auditors::Authentication::Stream.insert(record)
+
+    events = Auditors::Authentication.for_user(@user).paginate(per_page: 5)
+    expect(events.size).to eq 1
+
+    expect(events.first.attributes['created_at'].to_i).to eq first_event_at
+  end
+
+  it "should skip records after the bug fix was released" do
+    # Create bad data
+    stream_checks = {}
+    stream_checks['grade_changes'] = corrupt_grade_changes
+    stream_checks['courses'] = corrupt_course_changes
+    stream_checks['authentications'] = corrupt_authentications
+
+    DataFixup::FixAuditLogUuidIndexes::IndexCleaner.any_instance.stubs(:end_time).returns(Time.now - 1.month)
+
+    DataFixup::FixAuditLogUuidIndexes::IndexCleaner.any_instance.expects(:create_tombstone).never
+    DataFixup::FixAuditLogUuidIndexes::IndexCleaner.any_instance.expects(:create_index_entry).never
+    DataFixup::FixAuditLogUuidIndexes::IndexCleaner.any_instance.expects(:delete_index_entry).never
+
+    # Run Fix
+    DataFixup::FixAuditLogUuidIndexes::Migration.run
   end
 end

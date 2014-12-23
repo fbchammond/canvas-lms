@@ -72,7 +72,7 @@ class CrocodocDocument < ActiveRecord::Base
       opts[:editable] = false
     end
 
-    Canvas.timeout_protection("crocodoc") do
+    Canvas.timeout_protection("crocodoc", raise_on_timeout: true) do
       response = crocodoc_api.session(uuid, opts)
       session = response['session']
       crocodoc_api.view(session)
@@ -158,15 +158,10 @@ class CrocodocDocument < ActiveRecord::Base
             error_docs = CrocodocDocument.where(:uuid => error_uuids)
             attachment_ids = error_docs.pluck(:attachment_id)
             if Canvadocs.enabled?
-              method = :submit_to_canvadocs
-              strand = "canvadocs"
-            else
-              method = :submit_to_scribd
-              strand = "scribd"
+              Attachment.send_later_enqueue_args :submit_to_canvadocs,
+                {:n_strand => "canvadocs", :max_attempts => 1},
+                attachment_ids
             end
-            Attachment.send_later_enqueue_args method,
-              {:n_strand => strand, :max_attempts => 1},
-              attachment_ids
           end
         end
       end

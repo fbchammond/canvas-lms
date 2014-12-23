@@ -118,17 +118,12 @@ class WebConference < ActiveRecord::Base
     user_setting_fields[name] = options
   end
 
-  if CANVAS_RAILS2
-    def self.user_setting_fields
-      read_inheritable_attribute(:user_setting_fields) || write_inheritable_attribute(:user_setting_fields, {})
-    end
-  else
-    def self.user_setting_fields
-      @user_setting_fields ||= {}
-    end
-    def self.user_setting_fields=(val)
-      @user_setting_fields = val
-    end
+  def self.user_setting_fields
+    @user_setting_fields ||= {}
+  end
+
+  def self.user_setting_fields=(val)
+    @user_setting_fields = val
   end
 
   def self.user_setting_field_name(key)
@@ -153,17 +148,11 @@ class WebConference < ActiveRecord::Base
     send("#{key}_external_url", user, url_id) || []
   end
 
-  if CANVAS_RAILS2
-    def self.external_urls
-      read_inheritable_attribute(:external_urls) || write_inheritable_attribute(:external_urls, {})
-    end
-  else
-    def self.external_urls
-      @external_urls ||= {}
-    end
-    def self.external_urls=(val)
-      @external_urls = val
-    end
+  def self.external_urls
+    @external_urls ||= {}
+  end
+  def self.external_urls=(val)
+    @external_urls = val
   end
 
   def self.external_url(name, options)
@@ -189,8 +178,8 @@ class WebConference < ActiveRecord::Base
 
   def add_user(user, type)
     return unless user
-    p = self.web_conference_participants.find_by_web_conference_id_and_user_id(self.id, user.id)
-    p ||= self.web_conference_participants.build(:web_conference => self, :user => user)
+    p = self.web_conference_participants.where(user_id: user).first
+    p ||= self.web_conference_participants.build(user: user)
     p.participation_type = type unless type == 'attendee' && p.participation_type == 'initiator'
     (@new_participants ||= []) << user if p.new_record?
     # Once anyone starts attending the conference, mark it as started.
@@ -438,7 +427,7 @@ class WebConference < ActiveRecord::Base
     plugins.map{ |plugin|
       next unless plugin.enabled? &&
           (klass = (plugin.base || "#{plugin.id.classify}Conference").constantize rescue nil) &&
-          klass < self.base_ar_class
+          klass < self.base_class
       plugin.settings.merge(
         :conference_type => plugin.id.classify,
         :class_name => (plugin.base || "#{plugin.id.classify}Conference"),

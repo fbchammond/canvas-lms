@@ -133,8 +133,11 @@ class ContextModuleProgression < ActiveRecord::Base
     tags_hash = nil
     calc = CompletedRequirementCalculator.new(self.requirements_met || [])
     completion_requirements.each do |req|
+      # for an observer/student user we don't want to filter based on the normal observer logic,
+      # instead return vis for student enrollment only -> hence ignore_observer_logic below
+
       # create the hash inside the loop in case the completion_requirements is empty (performance)
-      tags_hash ||= context_module.cached_active_tags.index_by(&:id)
+      tags_hash ||= context_module.content_tags_visible_to(self.user, is_teacher: false, ignore_observer_logic: true).index_by(&:id)
 
       tag = tags_hash[req[:id]]
       next unless tag
@@ -160,13 +163,13 @@ class ContextModuleProgression < ActiveRecord::Base
 
   def get_submission_or_quiz_submission(tag)
     if tag.content_type_quiz?
-      Quizzes::QuizSubmission.find_by_quiz_id_and_user_id(tag.content_id, user.id)
+      Quizzes::QuizSubmission.where(quiz_id: tag.content_id, user_id: user).first
     elsif tag.content_type_discussion?
       if tag.content
-        Submission.find_by_assignment_id_and_user_id(tag.content.assignment_id, user.id)
+        Submission.where(assignment_id: tag.content.assignment_id, user_id: user).first
       end
     else
-      Submission.find_by_assignment_id_and_user_id(tag.content_id, user.id)
+      Submission.where(assignment_id: tag.content_id, user_id: user).first
     end
   end
   private :get_submission_or_quiz_submission
@@ -221,6 +224,8 @@ class ContextModuleProgression < ActiveRecord::Base
 
   def outdated?
     if self.current && evaluated_at.present?
+      return true if evaluated_at < context_module.updated_at
+
       # context module not locked or still to be unlocked
       return false if context_module.unlock_at.blank? || context_module.to_be_unlocked
 
@@ -264,7 +269,9 @@ class ContextModuleProgression < ActiveRecord::Base
     completion_requirements = context_module.completion_requirements || []
     requirements_met = self.requirements_met || []
 
-    context_module.cached_active_tags.each do |tag|
+    # for an observer/student combo user we don't want to filter based on the
+    # normal observer logic, instead return vis for student enrollment only
+    context_module.content_tags_visible_to(self.user, is_teacher: false, ignore_observer_logic: true).each do |tag|
       self.current_position = tag.position if tag.position
       all_met = completion_requirements.select{|r| r[:id] == tag.id }.all? do |req|
         requirements_met.any?{|r| r[:id] == req[:id] && r[:type] == req[:type] }

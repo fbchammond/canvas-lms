@@ -25,8 +25,7 @@ class AppointmentGroup < ActiveRecord::Base
   # has_many :through on the same table does not alias columns in condition
   # strings, just hashes. we create this helper association to ensure
   # appointments_participants conditions have the correct table alias
-  has_many :_appointments, opts.merge(:conditions => opts[:conditions].gsub(/calendar_events\./,
-      CANVAS_RAILS2 ? 'calendar_events_join.' : '_appointments_appointments_participants_join.'))
+  has_many :_appointments, opts.merge(:conditions => opts[:conditions].gsub(/calendar_events\./, '_appointments_appointments_participants_join.'))
   has_many :appointments_participants, :through => :_appointments, :source => :child_events, :conditions => "calendar_events.workflow_state <> 'deleted'", :order => :start_at
   has_many :appointment_group_contexts
   has_many :appointment_group_sub_contexts, :include => :sub_context
@@ -132,7 +131,7 @@ class AppointmentGroup < ActiveRecord::Base
           @new_sub_context_codes.first =~ /\Agroup_category_(.*)/
         # a group category can only be assigned at creation time to
         # appointment groups with one course
-        gc = GroupCategory.find_by_id($1)
+        gc = GroupCategory.where(id: $1).first
         code = @new_sub_context_codes.first
         self.appointment_group_sub_contexts = [
           AppointmentGroupSubContext.new(:appointment_group => self,
@@ -148,7 +147,7 @@ class AppointmentGroup < ActiveRecord::Base
 
         new_sub_contexts = @new_sub_context_codes.map { |code|
           next unless code =~ /\Acourse_section_(.*)/
-          cs = CourseSection.find_by_id($1)
+          cs = CourseSection.where(id: $1).first
           AppointmentGroupSubContext.new(:appointment_group => self,
                                          :sub_context => cs,
                                          :sub_context_code => code)
@@ -326,7 +325,7 @@ class AppointmentGroup < ActiveRecord::Base
   end
 
   def eligible_participant?(participant)
-    return false unless participant && participant.class.base_ar_class.name == participant_type
+    return false unless participant && participant.class.base_class.name == participant_type
     codes = participant.appointment_context_codes
     return false unless (codes[:primary] & appointment_group_contexts.map(&:context_code)).present?
     return false unless sub_context_codes.empty? || (codes[:secondary] & sub_context_codes).present?

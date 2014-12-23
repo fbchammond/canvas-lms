@@ -127,6 +127,18 @@ define [
     equal @srgb.get('weightingScheme'), 'whoa', 'weightingScheme was updated'
     equal @srgb.get('assignment_groups.length'), 1, 'assignment_groups was updated'
 
+  test 'updates assignment_visibility on an assignment', ->
+    assignments = @srgb.get('assignments')
+    assgn = assignments.objectAt(2)
+    @srgb.updateAssignmentVisibilities(assgn, '3')
+    ok !assgn.assignment_visibility.contains('3')
+
+  test 'studentsThatCanSeeAssignment doesnt return all students', ->
+    assgn = @srgb.get('assignments.firstObject')
+    students = @srgb.studentsThatCanSeeAssignment(assgn)
+    ids = Object.keys(students)
+    equal ids.length, 1
+    equal ids[0], '1'
 
   # Hacky setup and teardown (thanks, local storage). I invite you to make this better.
   module 'screenreader_gradebook_controller: sorting alpha',
@@ -186,7 +198,7 @@ define [
     ad = @srgb.get('assignmentDetails')
     selectedAssignment = @srgb.get('selectedAssignment')
     strictEqual ad.assignment, selectedAssignment
-    strictEqual ad.cnt, 3
+    strictEqual ad.cnt, 1
 
   test 'outcomeDetails is computed properly', ->
     od = @srgb.get('outcomeDetails')
@@ -436,3 +448,30 @@ define [
       equal @srgb.get('showInvalidGroupWarning'), false
       @srgb.set('weightingScheme', "percent")
       equal @srgb.get('showInvalidGroupWarning'), true
+
+
+  module 'screenreader_gradebook_controller: differentiated assignments',
+    setup: ->
+      setup.call this, true
+    teardown: ->
+      teardown.call this
+
+  test 'selectedSubmissionHidden is false when students have visibility', ->
+    student = @srgb.get('students.firstObject')
+    assignment = @srgb.get('assignments.firstObject')
+
+    Ember.run =>
+      @srgb.set('selectedAssignment', assignment)
+      @srgb.set('selectedStudent', student)
+      equal @srgb.get('selectedSubmissionHidden'), false
+
+  test 'selectedSubmissionHidden is true when students dont have visibility', ->
+    student = @srgb.get('students').objectAt(2)
+    assignment = @srgb.get('assignments.firstObject')
+
+    Ember.run =>
+      @srgb.set('selectedAssignment', assignment)
+      @srgb.set('selectedStudent', student)
+      equal @srgb.get('selectedSubmissionHidden'), true
+
+

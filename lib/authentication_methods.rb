@@ -48,8 +48,11 @@ module AuthenticationMethods
   class AccessTokenError < Exception
   end
 
+  class LoggedOutError < Exception
+  end
+
   def self.access_token(request, params_method = :params)
-    auth_header = CANVAS_RAILS2 ? ActionController::HttpAuthentication::Basic.authorization(request) : request.authorization
+    auth_header = request.authorization
     if auth_header.present? && (header_parts = auth_header.split(' ', 2)) && header_parts[0] == 'Bearer'
       header_parts[1]
     else
@@ -80,14 +83,24 @@ module AuthenticationMethods
     end
   end
 
+  def masked_authenticity_token
+    session_options = CanvasRails::Application.config.session_options
+    options = session_options.slice(:domain, :secure)
+    options[:httponly] = HostUrl.is_file_host?(request.host_with_port)
+    CanvasBreachMitigation::MaskingSecrets.masked_authenticity_token(cookies, options)
+  end
+  private :masked_authenticity_token
+
   def load_user
     @current_user = @current_pseudonym = nil
+
+    masked_authenticity_token # ensure that the cookie is set
 
     load_pseudonym_from_access_token
 
     if !@current_pseudonym
       if @policy_pseudonym_id
-        @current_pseudonym = Pseudonym.find_by_id(@policy_pseudonym_id)
+        @current_pseudonym = Pseudonym.where(id: @policy_pseudonym_id).first
       elsif @pseudonym_session = PseudonymSession.find
         @current_pseudonym = @pseudonym_session.record
 
@@ -102,10 +115,29 @@ module AuthenticationMethods
           (session_refreshed_at = request.env['encrypted_cookie_store.session_refreshed_at']) &&
           session_refreshed_at < invalid_before
 
+          logger.info "Invalidating session: Session created before user logged out."
           destroy_session
           @current_pseudonym = nil
+          if api_request? || request.format.json?
+            raise LoggedOutError
+          end
         end
       end
+
+      if @current_pseudonym &&
+         session[:cas_session] &&
+         @current_pseudonym.cas_ticket_expired?(session[:cas_session]) &&
+         @domain_root_account.cas_authentication?
+
+        logger.info "Invalidating session: CAS ticket expired - #{session[:cas_session]}."
+        destroy_session
+        @current_pseudonym = nil
+
+        raise LoggedOutError if api_request? || request.format.json?
+
+        redirect_to_login
+      end
+
       if params[:login_success] == '1' && !@current_pseudonym
         # they just logged in successfully, but we can't find the pseudonym now?
         # sounds like somebody hates cookies.
@@ -118,13 +150,13 @@ module AuthenticationMethods
         # just using an app session
         # this basic auth support is deprecated and marked for removal in 2012
         if @pseudonym_session.try(:used_basic_auth?) && params[:api_key].present?
-          Shard.birth.activate { @developer_key = DeveloperKey.find_by_api_key(params[:api_key]) }
+          Shard.birth.activate { @developer_key = DeveloperKey.where(api_key: params[:api_key]).first }
         end
         @developer_key ||
           request.get? ||
           !allow_forgery_protection ||
-          CanvasBreachMitigation::MaskingSecrets.valid_authenticity_token?(session, form_authenticity_param) ||
-          CanvasBreachMitigation::MaskingSecrets.valid_authenticity_token?(session, request.headers['X-CSRF-Token']) ||
+          CanvasBreachMitigation::MaskingSecrets.valid_authenticity_token?(session, cookies, form_authenticity_param) ||
+          CanvasBreachMitigation::MaskingSecrets.valid_authenticity_token?(session, cookies, request.headers['X-CSRF-Token']) ||
           raise(AccessTokenError)
       end
     end
@@ -140,7 +172,7 @@ module AuthenticationMethods
     if @current_user && %w(become_user_id me become_teacher become_student).any? { |k| params.key?(k) }
       request_become_user = nil
       if params[:become_user_id]
-        request_become_user = User.find_by_id(params[:become_user_id])
+        request_become_user = User.where(id: params[:become_user_id]).first
       elsif params.keys.include?('me')
         request_become_user = @current_user
       elsif params.keys.include?('become_teacher')
@@ -311,11 +343,17 @@ module AuthenticationMethods
     false
   end
 
-  def initiate_cas_login(cas_client = nil)
+  def cas_client(account = @domain_root_account)
+    @cas_client ||= CASClient::Client.new(
+      cas_base_url: account.account_authorization_config.auth_base,
+      encode_extra_attributes_as: :raw
+    )
+  end
+
+  def initiate_cas_login(client = nil)
     reset_session_for_login
-    config = { :cas_base_url => @domain_root_account.account_authorization_config.auth_base }
-    cas_client ||= CASClient::Client.new(config)
-    delegated_auth_redirect(cas_client.add_service_to_login_url(cas_login_url))
+    client ||= cas_client
+    delegated_auth_redirect(client.add_service_to_login_url(cas_login_url))
   end
 
   def initiate_saml_login(current_host=nil, aac=nil)

@@ -14,13 +14,13 @@
 #
 # You should have received a copy of the GNU Affero General Public License along
 # with this program. If not, see <http://www.gnu.org/licenses/>.
-#
+
 # @API Discussion Topics
 #
 # @model FileAttachment
 #     {
 #       "id": "FileAttachment",
-#       "description": "",
+#       "description": "A file attachment",
 #       "properties": {
 #         "content-type": {
 #           "example": "unknown/unknown",
@@ -43,8 +43,8 @@
 #
 # @model DiscussionTopic
 #     {
-#       "id": "",
-#       "description": "",
+#       "id": "DiscussionTopic",
+#       "description": "A discussion topic",
 #       "properties": {
 #         "id": {
 #           "description": "The ID of this topic.",
@@ -228,29 +228,29 @@ class DiscussionTopicsController < ApplicationController
   #
   # Returns the paginated list of discussion topics for this course or group.
   #
-  # @argument order_by [Optional, String, "position"|"recent_activity"]
+  # @argument order_by [String, "position"|"recent_activity"]
   #   Determines the order of the discussion topic list. Defaults to "position".
   #
-  # @argument scope [Optional, String, "locked"|"unlocked"|"pinned"|"unpinned"]
+  # @argument scope [String, "locked"|"unlocked"|"pinned"|"unpinned"]
   #   Only return discussion topics in the given state(s). Defaults to including
   #   all topics. Filtering is done after pagination, so pages
   #   may be smaller than requested if topics are filtered.
   #   Can pass multiple states as comma separated string.
   #
-  # @argument only_announcements [Optional, Boolean]
+  # @argument only_announcements [Boolean]
   #   Return announcements instead of discussion topics. Defaults to false
   #
-  # @argument search_term [Optional, String]
+  # @argument search_term [String]
   #   The partial title of the discussion topics to match and return.
   #
   # @example_request
-  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics \ 
+  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics \
   #          -H 'Authorization: Bearer <token>'
+  #
+  # @returns [DiscussionTopic]
   def index
     return unless authorized_action(@context.discussion_topics.scoped.new, @current_user, :read)
     return child_topic if is_child_topic?
-
-    log_asset_access("topics:#{@context.asset_string}", 'topics', 'other')
 
     scope = if params[:only_announcements]
               @context.active_announcements
@@ -277,6 +277,10 @@ class DiscussionTopicsController < ApplicationController
       end
     end
 
+    if @context.feature_enabled?(:differentiated_assignments)
+      scope = DifferentiableAssignment.scope_filter(scope, @current_user, @context)
+    end
+
     @topics = Api.paginate(scope, self, topic_pagination_url)
 
     if states.present?
@@ -287,6 +291,8 @@ class DiscussionTopicsController < ApplicationController
 
     respond_to do |format|
       format.html do
+        log_asset_access("topics:#{@context.asset_string}", 'topics', 'other')
+
         @active_tab = 'discussions'
         add_crumb(t('#crumbs.discussions', 'Discussions'),
                   named_context_url(@context, :context_discussion_topics_url))
@@ -302,19 +308,25 @@ class DiscussionTopicsController < ApplicationController
                     create: @context.discussion_topics.scoped.new.grants_right?(@current_user, session, :create),
                     moderate: user_can_moderate,
                     change_settings: user_can_edit_course_settings?,
+                    manage_content: @context.grants_right?(@current_user, session, :manage_content),
                     publish: user_can_moderate && @context.feature_enabled?(:draft_state)
-                }}
+                },
+                :discussion_topic_menu_tools => external_tools_display_hashes(:discussion_topic_menu)
+        }
         append_sis_data(hash)
 
-        js_env(hash)
-        js_env(DRAFT_STATE: @context.feature_enabled?(:draft_state))
+        js_env(hash.merge(
+          DRAFT_STATE: @context.feature_enabled?(:draft_state),
+          POST_GRADES: @context.feature_enabled?(:post_grades)
+        ))
         if user_can_edit_course_settings?
           js_env(SETTINGS_URL: named_context_url(@context, :api_v1_context_settings_url))
         end
       end
-
       format.json do
-        render json: discussion_topics_api_json(@topics, @context, @current_user, session)
+        student_ids = user_can_moderate ? @context.all_real_students.pluck(:id) : nil
+        render json: discussion_topics_api_json(@topics, @context, @current_user, session,
+                                                :student_ids => student_ids, :can_moderate => user_can_moderate)
       end
     end
   end
@@ -363,6 +375,7 @@ class DiscussionTopicsController < ApplicationController
         hash[:ATTRIBUTES][:assignment][:has_student_submissions] = @topic.assignment.has_student_submissions?
       end
 
+
       categories = @context.respond_to?(:group_categories) ? @context.group_categories : []
       sections = @context.respond_to?(:course_sections) ? @context.course_sections.active : []
       js_hash = {DISCUSSION_TOPIC: hash,
@@ -372,7 +385,9 @@ class DiscussionTopicsController < ApplicationController
                      map { |category| { id: category.id, name: category.name } },
                  CONTEXT_ID: @context.id,
                  CONTEXT_ACTION_SOURCE: :discussion_topic,
-                 DRAFT_STATE: @topic.draft_state_enabled?}
+                 DRAFT_STATE: @topic.draft_state_enabled?,
+                 POST_GRADES: @context.feature_enabled?(:post_grades),
+                 DIFFERENTIATED_ASSIGNMENTS_ENABLED: @context.feature_enabled?(:differentiated_assignments)}
       append_sis_data(js_hash)
       js_env(js_hash)
       render :action => "edit"
@@ -388,7 +403,7 @@ class DiscussionTopicsController < ApplicationController
     else
       nil
     end
-    @context.assert_assignment_group rescue nil
+    @context.require_assignment_group rescue nil
     add_discussion_or_announcement_crumb
     add_crumb(@topic.title, named_context_url(@context, :context_discussion_topic_url, @topic.id))
     if @topic.deleted?
@@ -398,6 +413,13 @@ class DiscussionTopicsController < ApplicationController
     end
 
     if authorized_action(@topic, @current_user, :read)
+      if @current_user && @topic.for_assignment? && !@topic.assignment.visible_to_user?(@current_user)
+        respond_to do |format|
+          flash[:error] = t 'notices.discussion_not_availible', "You do not have access to the requested discussion."
+          format.html { redirect_to named_context_url(@context, :context_discussion_topics_url) }
+        end
+        return
+      end
       @headers = !params[:headless]
       @locked = @topic.locked_for?(@current_user, :check_policies => true, :deep_check_if_needed => true) || @topic.locked?
       @unlock_at = @topic.available_from_for(@current_user)
@@ -425,6 +447,7 @@ class DiscussionTopicsController < ApplicationController
         else
           format.html do
 
+            @discussion_topic_menu_tools = external_tools_display_hashes(:discussion_topic_menu)
             @context_module_tag = ContextModuleItem.find_tag_with_preferred([@topic, @topic.root_topic, @topic.assignment], params[:module_item_id])
             @sequence_asset = @context_module_tag.try(:content)
             env_hash = {
@@ -437,8 +460,8 @@ class DiscussionTopicsController < ApplicationController
 
               },
               :PERMISSIONS => {
-                :CAN_REPLY      => @locked ? false : @topic.grants_right?(@current_user, session, :reply),     # Can reply
-                :CAN_ATTACH     => @locked ? false : @topic.grants_right?(@current_user, session, :attach), # Can attach files on replies
+                :CAN_REPLY      => @topic.grants_right?(@current_user, session, :reply),     # Can reply
+                :CAN_ATTACH     => @topic.grants_right?(@current_user, session, :attach), # Can attach files on replies
                 :CAN_MANAGE_OWN => @context.user_can_manage_own_discussion_posts?(@current_user),           # Can moderate their own topics
                 :MODERATE       => user_can_moderate                                                        # Can moderate any topic
               },
@@ -458,8 +481,13 @@ class DiscussionTopicsController < ApplicationController
               :INITIAL_POST_REQUIRED => @initial_post_required,
               :THREADED => @topic.threaded?
             }
+            if params[:hide_student_names]
+              env_hash[:HIDE_STUDENT_NAMES] = true
+              env_hash[:STUDENT_ID] = params[:student_id]
+            end
             if @sequence_asset
               env_hash[:SEQUENCE] = {
+                :ASSET_TYPE => @sequence_asset.is_a?(Assignment) ? 'Assignment' : 'Discussion',
                 :ASSET_ID => @sequence_asset.id,
                 :COURSE_ID => @sequence_asset.context.id,
               }
@@ -491,25 +519,25 @@ class DiscussionTopicsController < ApplicationController
   #
   # @argument message [String]
   #
-  # @argument discussion_type [Optional, String, "side_comment"|"threaded"]
+  # @argument discussion_type [String, "side_comment"|"threaded"]
   #   The type of discussion. Defaults to side_comment if not value is given. Accepted values are 'side_comment', for discussions that only allow one level of nested comments, and 'threaded' for fully threaded discussions.
   #
-  # @argument published [Optional, Boolean]
+  # @argument published [Boolean]
   #   Whether this topic is published (true) or draft state (false). Only
   #   teachers and TAs have the ability to create draft state topics.
   #
-  # @argument delayed_post_at [Optional, DateTime]
+  # @argument delayed_post_at [DateTime]
   #   If a timestamp is given, the topic will not be published until that time.
   #
-  # @argument lock_at [Optional, DateTime]
+  # @argument lock_at [DateTime]
   #   If a timestamp is given, the topic will be scheduled to lock at the
   #   provided timestamp. If the timestamp is in the past, the topic will be
   #   locked.
   #
-  # @argument podcast_enabled [Optional, Boolean]
+  # @argument podcast_enabled [Boolean]
   #   If true, the topic will have an associated podcast feed.
   #
-  # @argument podcast_has_student_posts [Optional, Boolean]
+  # @argument podcast_has_student_posts [Boolean]
   #   If true, the podcast will include posts from students as well. Implies
   #   podcast_enabled.
   #
@@ -517,7 +545,7 @@ class DiscussionTopicsController < ApplicationController
   #   If true then a user may not respond to other replies until that user has
   #   made an initial reply. Defaults to false.
   #
-  # @argument assignment [Optional, Assignment]
+  # @argument assignment [Assignment]
   #   To create an assignment discussion, pass the assignment parameters as a
   #   sub-object. See the {api:AssignmentsApiController#create Create an Assignment API}
   #   for the available parameters. The name parameter will be ignored, as it's
@@ -525,32 +553,32 @@ class DiscussionTopicsController < ApplicationController
   #   an assignment NOT an assignment, pass set_assignment = false as part of
   #   the assignment object
   #
-  # @argument is_announcement [Optional, Boolean]
+  # @argument is_announcement [Boolean]
   #   If true, this topic is an announcement. It will appear in the
   #   announcement's section rather than the discussions section. This requires
   #   announcment-posting permissions.
   #
-  # @argument position_after [Optional, String]
+  # @argument position_after [String]
   #   By default, discussions are sorted chronologically by creation date, you
   #   can pass the id of another topic to have this one show up after the other
   #   when they are listed.
   #
-  # @argument group_category_id [Optional, Integer]
+  # @argument group_category_id [Integer]
   #   If present, the topic will become a group discussion assigned
   #   to the group.
   #
   # @example_request
-  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics \ 
-  #         -F title='my topic' \ 
-  #         -F message='initial message' \ 
-  #         -F podcast_enabled=1 \ 
+  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics \
+  #         -F title='my topic' \
+  #         -F message='initial message' \
+  #         -F podcast_enabled=1 \
   #         -H 'Authorization: Bearer <token>'
   #
   # @example_request
-  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics \ 
-  #         -F title='my assignment topic' \ 
-  #         -F message='initial message' \ 
-  #         -F assignment[points_possible]=15 \ 
+  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics \
+  #         -F title='my assignment topic' \
+  #         -F message='initial message' \
+  #         -F assignment[points_possible]=15 \
   #         -H 'Authorization: Bearer <token>'
   #
   def create
@@ -559,12 +587,64 @@ class DiscussionTopicsController < ApplicationController
 
   # @API Update a topic
   #
-  # Accepts the same parameters as create
+  # Update an existing discussion topic for the course or group.
+  #
+  # @argument title [String]
+  #
+  # @argument message [String]
+  #
+  # @argument discussion_type [String, "side_comment"|"threaded"]
+  #   The type of discussion. Defaults to side_comment if not value is given. Accepted values are 'side_comment', for discussions that only allow one level of nested comments, and 'threaded' for fully threaded discussions.
+  #
+  # @argument published [Boolean]
+  #   Whether this topic is published (true) or draft state (false). Only
+  #   teachers and TAs have the ability to create draft state topics.
+  #
+  # @argument delayed_post_at [DateTime]
+  #   If a timestamp is given, the topic will not be published until that time.
+  #
+  # @argument lock_at [DateTime]
+  #   If a timestamp is given, the topic will be scheduled to lock at the
+  #   provided timestamp. If the timestamp is in the past, the topic will be
+  #   locked.
+  #
+  # @argument podcast_enabled [Boolean]
+  #   If true, the topic will have an associated podcast feed.
+  #
+  # @argument podcast_has_student_posts [Boolean]
+  #   If true, the podcast will include posts from students as well. Implies
+  #   podcast_enabled.
+  #
+  # @argument require_initial_post [Boolean]
+  #   If true then a user may not respond to other replies until that user has
+  #   made an initial reply. Defaults to false.
+  #
+  # @argument assignment [Assignment]
+  #   To create an assignment discussion, pass the assignment parameters as a
+  #   sub-object. See the {api:AssignmentsApiController#create Create an Assignment API}
+  #   for the available parameters. The name parameter will be ignored, as it's
+  #   taken from the discussion title. If you want to make a discussion that was
+  #   an assignment NOT an assignment, pass set_assignment = false as part of
+  #   the assignment object
+  #
+  # @argument is_announcement [Boolean]
+  #   If true, this topic is an announcement. It will appear in the
+  #   announcement's section rather than the discussions section. This requires
+  #   announcment-posting permissions.
+  #
+  # @argument position_after [String]
+  #   By default, discussions are sorted chronologically by creation date, you
+  #   can pass the id of another topic to have this one show up after the other
+  #   when they are listed.
+  #
+  # @argument group_category_id [Integer]
+  #   If present, the topic will become a group discussion assigned
+  #   to the group.
   #
   # @example_request
-  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id> \ 
-  #         -F title='This will be positioned after Topic #1234' \ 
-  #         -F position_after=1234 \ 
+  #     curl https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id> \
+  #         -F title='This will be positioned after Topic #1234' \
+  #         -F position_after=1234 \
   #         -H 'Authorization: Bearer <token>'
   #
   def update
@@ -577,7 +657,7 @@ class DiscussionTopicsController < ApplicationController
   # an assignment discussion.
   #
   # @example_request
-  #     curl -X DELETE https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id> \ 
+  #     curl -X DELETE https://<canvas>/api/v1/courses/<course_id>/discussion_topics/<topic_id> \
   #          -H 'Authorization: Bearer <token>'
   def destroy
     @topic = @context.all_discussion_topics.find(params[:id] || params[:topic_id])
@@ -621,7 +701,7 @@ class DiscussionTopicsController < ApplicationController
   # Puts the pinned discussion topics in the specified order.
   # All pinned topics should be included.
   #
-  # @argument order[] [Optional, Integer]
+  # @argument order[] [Required, Integer]
   #   The ids of the pinned discussion topics in the desired order.
   #   (For example, "order=104,102,103".)
   #
@@ -785,13 +865,20 @@ class DiscussionTopicsController < ApplicationController
       id = params[:assignment].delete(:group_category_id)
       discussion_topic_hash[:group_category_id] ||= id
     end
-    return unless discussion_topic_hash[:group_category_id].to_s != @topic.group_category.try(:id).to_s
+    return unless discussion_topic_hash.has_key?(:group_category_id)
+    return if discussion_topic_hash[:group_category_id].nil? && @topic.group_category_id.nil?
+    return if discussion_topic_hash[:group_category_id].to_i == @topic.group_category_id
     if @topic.is_announcement
       @errors[:group] = t(:error_group_announcement, "You cannot use grouped discussion on an announcement.")
       return
     end
     if !@topic.can_group?
       @errors[:group] = t(:error_group_change, "You cannot change grouping on a discussion with replies.")
+    end
+    if discussion_topic_hash[:group_category_id]
+      discussion_topic_hash[:group_category] = @context.group_categories.find(discussion_topic_hash[:group_category_id])
+    else
+      discussion_topic_hash[:group_category] = nil
     end
   end
 
@@ -867,9 +954,15 @@ class DiscussionTopicsController < ApplicationController
   end
 
   def child_topic
-    extra_params = {:headless => 1} if params[:headless]
+    if params[:headless]
+      extra_params = {
+        :headless => 1,
+        :hide_student_names => params[:hide_student_names],
+        student_id => params[:student_id]
+      }
+    end
     @root_topic = @context.context.discussion_topics.find(params[:root_discussion_topic_id])
-    @topic = @context.discussion_topics.find_or_initialize_by_root_topic_id(params[:root_discussion_topic_id])
+    @topic = @context.discussion_topics.where(root_topic_id: params[:root_discussion_topic_id]).first_or_initialize
     @topic.message = @root_topic.message
     @topic.title = @root_topic.title
     @topic.assignment_id = @root_topic.assignment_id

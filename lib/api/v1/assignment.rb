@@ -61,7 +61,8 @@ module Api::V1::Assignment
     opts.reverse_merge!(
       include_discussion_topic: true,
       include_all_dates: false,
-      override_dates: true
+      override_dates: true,
+      needs_grading_count_by_section: false
     )
 
     if opts[:override_dates] && !assignment.new_record?
@@ -71,9 +72,12 @@ module Api::V1::Assignment
     hash = api_json(assignment, user, session, fields)
     hash['course_id'] = assignment.context_id
     hash['name'] = assignment.title
-    hash['post_to_sis'] = assignment.post_to_sis
     hash['submission_types'] = assignment.submission_types_array
     hash['has_submitted_submissions'] = assignment.has_submitted_submissions?
+
+    if !assignment.user_submitted.nil?
+      hash['user_submitted'] = assignment.user_submitted
+    end
 
     if assignment.context && assignment.context.turnitin_enabled?
       hash['turnitin_enabled'] = assignment.turnitin_enabled
@@ -115,7 +119,11 @@ module Api::V1::Assignment
     end
 
     if assignment.grants_right?(user, :grade)
-      hash['needs_grading_count'] = assignment.needs_grading_count_for_user user
+      query = Assignments::NeedsGradingCountQuery.new(assignment, user)
+      if opts[:needs_grading_count_by_section]
+        hash['needs_grading_count_by_section'] = query.count_by_section
+      end
+      hash['needs_grading_count'] = query.count
     end
 
     if assignment.context.grants_any_right?(user, :read_sis, :manage_sis)
@@ -125,6 +133,7 @@ module Api::V1::Assignment
 
     if assignment.quiz
       hash['quiz_id'] = assignment.quiz.id
+      hash['hide_download_submissions_button'] = !assignment.quiz.has_file_upload_question?
       hash['anonymous_submissions'] = !!(assignment.quiz.anonymous_submissions)
     end
 
@@ -146,7 +155,7 @@ module Api::V1::Assignment
         row_hash["ratings"] = row[:ratings].map do |c|
           c.slice(:id, :points, :description)
         end
-        if row[:learning_outcome_id] && outcome = LearningOutcome.find_by_id(row[:learning_outcome_id])
+        if row[:learning_outcome_id] && outcome = LearningOutcome.where(id: row[:learning_outcome_id]).first
           row_hash["outcome_id"] = outcome.id
           row_hash["vendor_guid"] = outcome.vendor_guid
         end
@@ -180,8 +189,7 @@ module Api::V1::Assignment
                         when "discussion_topic" then assignment.discussion_topic
                         else assignment
                         end
-      module_ids = thing_in_module.context_module_tags.map &:context_module_id
-      hash['module_ids'] = module_ids
+      hash['module_ids'] = thing_in_module.context_module_tags.map(&:context_module_id) if thing_in_module
     end
 
     if assignment.context.feature_enabled?(:draft_state)
@@ -189,8 +197,12 @@ module Api::V1::Assignment
       hash['unpublishable'] = assignment.can_unpublish?
     end
 
-    if assignment.context.feature_enabled?(:differentiated_assignments)
+    if opts[:differentiated_assignments_enabled] || (opts[:differentiated_assignments_enabled] != false && assignment.context.feature_enabled?(:differentiated_assignments))
       hash['only_visible_to_overrides'] = value_to_boolean(assignment.only_visible_to_overrides)
+
+      if opts[:include_visibility]
+        hash['assignment_visibility'] = (opts[:assignment_visibilities] || assignment.students_with_visibility.pluck(:id).uniq).map(&:to_s)
+      end
     end
 
     if submission = opts[:submission]
@@ -204,7 +216,7 @@ module Api::V1::Assignment
 
   def turnitin_settings_json(assignment)
     settings = assignment.turnitin_settings.with_indifferent_access
-    [:s_paper_check, :internet_check, :journal_check, :exclude_biblio, :exclude_quoted].each do |key|
+    [:s_paper_check, :internet_check, :journal_check, :exclude_biblio, :exclude_quoted, :submit_papers_to].each do |key|
       settings[key] = value_to_boolean(settings[key])
     end
 
@@ -258,6 +270,7 @@ module Api::V1::Assignment
     exclude_quoted
     exclude_small_matches_type
     exclude_small_matches_value
+    submit_papers_to
   )
 
   def update_api_assignment(assignment, assignment_params, user)
@@ -273,6 +286,7 @@ module Api::V1::Assignment
     return if overrides && !overrides.is_a?(Array)
     return false unless valid_assignment_group_id?(assignment, assignment_params)
     return false unless valid_assignment_dates?(assignment, assignment_params)
+    return false unless valid_submission_types?(assignment, assignment_params)
 
     assignment = update_from_params(assignment, assignment_params, user)
 
@@ -289,6 +303,22 @@ module Api::V1::Assignment
     return true
   rescue ActiveRecord::RecordInvalid
     return false
+  end
+
+  API_ALLOWED_SUBMISSION_TYPES = ["online_quiz", "none", "on_paper", "discussion_topic", "external_tool", "online_upload", "online_text_entry", "online_url", "media_recording", "not_graded", ""]
+
+  def valid_submission_types?(assignment, assignment_params)
+    return true if assignment_params['submission_types'].nil?
+    assignment_params['submission_types'] = Array(assignment_params['submission_types'])
+
+    if assignment_params['submission_types'].present? &&
+      !assignment_params['submission_types'].all? { |s| API_ALLOWED_SUBMISSION_TYPES.include?(s) }
+        assignment.errors.add('assignment[submission_types]',
+          I18n.t('assignments_api.invalid_submission_types',
+            'Invalid submission types'))
+        return false
+    end
+    true
   end
 
   # validate that date and times are iso8601
@@ -334,18 +364,18 @@ module Api::V1::Assignment
 
     if update_params.has_key?("assignment_group_id")
       ag_id = update_params.delete("assignment_group_id").presence
-      assignment.assignment_group = assignment.context.assignment_groups.find_by_id(ag_id)
+      assignment.assignment_group = assignment.context.assignment_groups.where(id: ag_id).first
     end
 
     if update_params.has_key?("group_category_id")
       gc_id = update_params.delete("group_category_id").presence
-      assignment.group_category = assignment.context.group_categories.find_by_id(gc_id)
+      assignment.group_category = assignment.context.group_categories.where(id: gc_id).first
     end
 
     if update_params.has_key?("grading_standard_id")
       standard_id = update_params.delete("grading_standard_id")
       if standard_id.present?
-        grading_standard = GradingStandard.standards_for(context).find_by_id(standard_id)
+        grading_standard = GradingStandard.standards_for(context).where(id: standard_id).first
         assignment.grading_standard = grading_standard if grading_standard
       else
         assignment.grading_standard = nil
@@ -357,9 +387,8 @@ module Api::V1::Assignment
     end
 
     if assignment.context.grants_right?(user, :manage_sis)
-      if update_params['integration_data']
-        update_params['integration_data'] = JSON.parse(update_params['integration_data'])
-      end
+      data = update_params['integration_data']
+      update_params['integration_data'] = JSON.parse(data) if data.is_a?(String)
     else
       update_params.delete('integration_id')
       update_params.delete('integration_data')

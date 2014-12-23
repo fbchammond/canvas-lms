@@ -105,33 +105,50 @@ namespace :canvas do
   end
 
   desc "Compile javascript and css assets."
-  task :compile_assets, :generate_documentation, :use_sass_cache, :check_syntax do |t, args|
-    args.with_defaults(:generate_documentation => true, :use_sass_cache => false, :check_syntax => false)
+  task :compile_assets, :generate_documentation, :check_syntax, :compile_css, :build_js do |t, args|
+    args.with_defaults(:generate_documentation => true, :check_syntax => false, :compile_css => true, :build_js => true)
     truthy_values = [true, 'true', '1']
     generate_documentation = truthy_values.include?(args[:generate_documentation])
-    use_sass_cache = !truthy_values.include?(args[:use_sass_cache])
     check_syntax = truthy_values.include?(args[:check_syntax])
+    compile_css = truthy_values.include?(args[:compile_css])
+    build_js = truthy_values.include?(args[:build_js])
 
-    tasks = {
-      "Compile sass and make jammit css bundles" => -> {
-        log_time('css:generate') do
-          Rake::Task['css:generate'].invoke(use_sass_cache, !!:quiet, :production)
+    require 'parallel'
+    processes = (ENV['CANVAS_BUILD_CONCURRENCY'] || Parallel.processor_count).to_i
+    puts "working in #{processes} processes"
+
+    tasks = Hash.new
+
+    if compile_css
+      tasks["Compile sass and make jammit css bundles"] = -> {
+        log_time('npm run compile-sass') do
+          half_of_avilable_cores = (processes / 2).ceil.to_s
+          raise unless system({"CANVAS_SASS_STYLE" => "compressed", "CANVAS_BUILD_CONCURRENCY" => half_of_avilable_cores}, "npm run compile-sass")
         end
 
         log_time("Jammit") do
           require 'jammit'
           Jammit.package!
         end
-      },
-      "css:styleguide" => -> {
+      }
+      tasks["css:styleguide"] = -> {
         Rake::Task['css:styleguide'].invoke
-      },
-      "compile coffee, js 18n, and run r.js optimizer" => -> {
+      }
+    end
+
+    if build_js
+      tasks["compile coffee, js 18n, and run r.js optimizer"] = -> {
         ['js:generate', 'i18n:generate_js', 'js:build'].each do |name|
           log_time(name) { Rake::Task[name].invoke }
         end
       }
-    }
+    else
+      tasks["compile coffee"] = -> {
+        ['js:generate'].each do |name|
+          log_time(name) { Rake::Task[name].invoke }
+        end
+      }
+    end
 
     if check_syntax
       tasks["check JavaScript syntax"] = -> {
@@ -145,11 +162,6 @@ namespace :canvas do
       }
     end
 
-
-
-    require 'parallel'
-    processes = ENV['CANVAS_BUILD_CONCURRENCY'] || Parallel.processor_count
-    puts "working in #{processes} processes"
     times = nil
     real_time = Benchmark.realtime do
       times = Parallel.map(tasks, :in_processes => processes.to_i) do |name, lamduh|
@@ -196,6 +208,20 @@ namespace :lint do
       raise "lint:render_json test failed"
     else
       puts "lint:render_json test succeeded"
+    end
+  end
+end
+
+if Rails.version < '4.1'
+  old_task = Rake::Task['db:_dump']
+  old_actions = old_task.actions.dup
+  old_task.actions.clear
+
+  old_task.enhance do
+    if ActiveRecord::Base.dump_schema_after_migration == false
+      # do nothing
+    else
+      old_actions.each(&:call)
     end
   end
 end
@@ -251,17 +277,13 @@ namespace :db do
       end
       create_database(queue) if queue
       create_database(config)
-      unless CANVAS_RAILS2
-        ::ActiveRecord::Base.connection.schema_cache.clear!
-        ::ActiveRecord::Base.descendants.each(&:reset_column_information)
-      end
+      ::ActiveRecord::Base.connection.schema_cache.clear!
+      ::ActiveRecord::Base.descendants.each(&:reset_column_information)
       Rake::Task['db:migrate'].invoke
     end
   end
 end
 
-if CANVAS_RAILS3
-  %w{db:pending_migrations db:migrate:predeploy db:migrate:postdeploy}.each { |task_name| Switchman.shardify_task(task_name) }
-end
+%w{db:pending_migrations db:migrate:predeploy db:migrate:postdeploy}.each { |task_name| Switchman.shardify_task(task_name) }
 
 end

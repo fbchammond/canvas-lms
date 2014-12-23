@@ -48,7 +48,7 @@ class GroupCategory < ActiveRecord::Base
       record.errors.add attr, t(:name_required, "Name is required")
     elsif GroupCategory.protected_name_for_context?(value, record.context)
       record.errors.add attr, t(:name_reserved, "%{name} is a reserved name.", name: value)
-    elsif record.context && record.context.group_categories.other_than(record).find_by_name(value)
+    elsif record.context && record.context.group_categories.other_than(record).where(name: value).exists?
       record.errors.add attr, t(:name_unavailable, "%{name} is already in use.", name: value)
     elsif value.length > max_len
       record.errors.add attr, t(:name_too_long, "Enter a shorter category name")
@@ -80,8 +80,10 @@ class GroupCategory < ActiveRecord::Base
     end
   end
 
+  Bookmarker = BookmarkedCollection::SimpleBookmarker.new(GroupCategory, :name, :id)
+  
+  scope :by_name, -> { order(Bookmarker.order_by) }
   scope :active, -> { where(:deleted_at => nil) }
-
   scope :other_than, lambda { |cat| where("group_categories.id<>?", cat.id || 0) }
 
   class << self
@@ -133,9 +135,9 @@ class GroupCategory < ActiveRecord::Base
 
     def role_category_for_context(role, context)
       return unless context and protected_role_for_context?(role, context)
-      category = context.group_categories.find_by_role(role) ||
+      category = context.group_categories.where(role: role).first ||
                  context.group_categories.build(:name => name_for_role(role), :role => role)
-      category.save(CANVAS_RAILS2 ? false : {:validate => false}) if category.new_record?
+      category.save({:validate => false}) if category.new_record?
       category
     end
   end
@@ -149,7 +151,7 @@ class GroupCategory < ActiveRecord::Base
   end
 
   def protected?
-    self.role.present?
+    self.role.present? && self.role != 'imported'
   end
 
   # Group categories generally restrict students to only be in one group per
@@ -167,11 +169,6 @@ class GroupCategory < ActiveRecord::Base
     args = {enable_self_signup: enabled, restrict_self_signup: restricted}
     self.self_signup = GroupCategories::Params.new(args).self_signup
     self.save!
-  end
-
-  def configure_auto_leader(enabled, auto_leader_type)
-    args = {enable_auto_leader: enabled, auto_leader_type: auto_leader_type}
-    self.auto_leader = GroupCategories::Params.new(args).auto_leader
   end
 
   def self_signup?
@@ -197,6 +194,10 @@ class GroupCategory < ActiveRecord::Base
 
   def group_for(user)
     groups.active.where("EXISTS (?)", GroupMembership.active.where("group_id=groups.id").where(user_id: user)).first
+  end
+
+  def is_member?(user)
+    groups.active.where("EXISTS (?)", GroupMembership.active.where("group_id=groups.id").where(user_id: user)).any?
   end
 
   alias_method :destroy!, :destroy
